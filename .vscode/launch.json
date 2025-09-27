@@ -1,0 +1,33 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "運行 JavaScript 調試腳本",
+            "type": "node",
+            "request": "launch",
+            "program": "${workspaceFolder}/debug-test.js",
+            "console": "integratedTerminal",
+            "internalConsoleOptions": "neverOpen",
+            "skipFiles": [
+                "<node_internals>/**"
+            ]
+        },
+        {
+            "name": "在瀏覽器中調試 HTML",
+            "type": "chrome",
+            "request": "launch",
+            "url": "file://${workspaceFolder}/index.html",
+            "webRoot": "${workspaceFolder}",
+            "sourceMaps": true
+        },
+        {
+            "name": "附加到 Node.js",
+            "type": "node",
+            "request": "attach",
+            "port": 9229,
+            "restart": true,
+            "localRoot": "${workspaceFolder}",
+            "remoteRoot": null
+        }
+    ]
+}

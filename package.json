@@ -1,0 +1,39 @@
+{
+  "name": "jssolver-pe",
+  "version": "0.1.0",
+  "description": "JavaScript Solver for Power Electronics - A high-performance circuit simulator for power electronic circuits",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "test": "node test/run-tests.js",
+    "test:watch": "node --watch test/run-tests.js",
+    "example": "node examples/simple-rc.js",
+    "lint": "echo 'ESLint not configured yet'",
+    "build": "echo 'Build process not configured yet'"
+  },
+  "keywords": [
+    "circuit-simulation",
+    "power-electronics",
+    "spice",
+    "solver",
+    "javascript",
+    "electronics",
+    "simulation"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "chalk": "^5.3.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourname/jssolver-pe.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourname/jssolver-pe/issues"
+  },
+  "homepage": "https://github.com/yourname/jssolver-pe#readme"
+}
