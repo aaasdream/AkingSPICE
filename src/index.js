@@ -14,10 +14,13 @@ export { NetlistParser };
 export { BaseComponent } from './components/base.js';
 export { Resistor } from './components/resistor.js';
 export { Capacitor } from './components/capacitor.js';
-export { Inductor } from './components/inductor.js';
-export { VoltageSource, CurrentSource } from './components/sources.js';
+export { Inductor, CoupledInductor } from './components/inductor.js';
+export { VoltageSource, CurrentSource, VCVS, VCCS, CCCS, CCVS } from './components/sources.js';
+export { ThreePhaseSource } from './components/threephase.js';
 export { MOSFET } from './components/mosfet.js';
+export { VoltageControlledMOSFET } from './components/vcmosfet.js';
 export { Diode } from './components/diode.js';
+export { MultiWindingTransformer } from './components/transformer.js';
 
 // 導出分析工具
 export { TransientAnalysis } from './analysis/transient.js';

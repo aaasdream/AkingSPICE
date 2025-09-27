@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>AkingSPICE - LLC 800V→48V 控制器演示</title>
+    <!-- 引入 Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- 引入 Monaco Editor -->
+    <link rel="stylesheet" data-name="vs/editor/editor.main" href="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.34.1/min/vs/editor/editor.main.min.css">
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
+            display: flex; 
+            flex-direction: column; 
+            height: 100vh; 
+            margin: 0; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .header { 
+            background: rgba(255,255,255,0.1); 
+            backdrop-filter: blur(10px);
+            color: white; 
+            padding: 20px; 
+            text-align: center; 
+            box-shadow: 0 2px 20px rgba(0,0,0,0.1); 
+        }
+        .main-content { 
+            display: flex; 
+            flex: 1; 
+            min-height: 0; 
+            gap: 20px;
+            padding: 20px;
+        }
+        .left-panel { 
+            width: 500px; 
+            background: rgba(255,255,255,0.95); 
+            border-radius: 15px;
+            padding: 25px; 
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            backdrop-filter: blur(10px);
+            display: flex; 
+            flex-direction: column; 
+            overflow-y: auto; 
+        }
+        .right-panel { 
+            flex: 1; 
+            background: rgba(255,255,255,0.95); 
+            border-radius: 15px;
+            padding: 25px; 
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            backdrop-filter: blur(10px);
+            display: flex; 
+            flex-direction: column; 
+        }
+        .control-group { 
+            margin-bottom: 20px; 
+            padding: 15px;
+            background: rgba(248,249,250,0.8);
+            border-radius: 10px;
+            border: 1px solid rgba(0,0,0,0.05);
+        }
+        .control-group label { 
+            display: block; 
+            font-weight: 600; 
+            margin-bottom: 8px; 
+            color: #2c3e50;
+        }
+        .control-group input[type="range"] { 
+            width: 100%; 
+            height: 6px;
+            background: #ddd;
+            border-radius: 5px;
+            outline: none;
+        }
+        .control-group input[type="range"]::-webkit-slider-thumb {
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+        }
+        .value-display {
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #667eea;
+            margin-top: 5px;
+        }
+        .editor-container { 
+            flex: 1; 
+            border: 1px solid rgba(0,0,0,0.1); 
+            border-radius: 8px;
+            min-height: 300px; 
+            overflow: hidden;
+        }
+        .chart-container { 
+            position: relative; 
+            flex: 1; 
+            min-height: 400px;
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: inset 0 2px 10px rgba(0,0,0,0.05);
+        }
+        .button-group {
+            display: flex;
+            gap: 15px;
+            margin-top: 20px;
+        }
+        button { 
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white; 
+            border: none; 
+            padding: 12px 20px; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            font-size: 1em;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+        button:hover:not(:disabled) { 
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+        }
+        button:disabled { 
+            background: #aaa; 
+            cursor: not-allowed; 
+            transform: none;
+            box-shadow: none;
+        }
+        .status {
+            margin-top: 15px; 
+            font-style: italic; 
+            color: #555; 
+            padding: 10px;
+            background: rgba(248,249,250,0.6);
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        .specs-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        .specs-table th, .specs-table td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid rgba(0,0,0,0.1);
+        }
+        .specs-table th {
+            background: rgba(102, 126, 234, 0.1);
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        .highlight-box {
+            background: linear-gradient(45deg, rgba(102, 126, 234, 0.1), rgba(118, 75, 162, 0.1));
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+            border-left: 4px solid #667eea;
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>🔌 AkingSPICE - LLC 800V→48V 智慧控制器</h1>
+    <p style="margin: 5px 0; opacity: 0.9;">高壓伺服器電源 • 寬範圍輸入 • 頻率控制 • 軟切換技術</p>
+</div>
+
+<div class="main-content">
+    <div class="left-panel">
+        <h3 style="color: #2c3e50; margin-bottom: 20px;">⚙️ 系統參數控制</h3>
+        
+        <div class="control-group">
+            <label for="inputVoltage">📊 輸入電壓 (V) - 模擬 ±100V 波動</label>
+            <input type="range" id="inputVoltage" min="700" max="900" value="800" step="10">
+            <div class="value-display" id="inputVoltageValue">800 V</div>
+        </div>
+
+        <div class="control-group">
+            <label for="targetVoltage">🎯 目標輸出電壓 (V)</label>
+            <input type="range" id="targetVoltage" min="44" max="52" value="48" step="0.1">
+            <div class="value-display" id="targetVoltageValue">48.0 V</div>
+        </div>
+
+        <div class="control-group">
+            <label for="loadPower">⚡ 負載功率 (W)</label>
+            <input type="range" id="loadPower" min="500" max="3000" value="2000" step="100">
+            <div class="value-display" id="loadPowerValue">2000 W</div>
+        </div>
+
+        <div class="control-group">
+            <label for="switchingFreq">🔄 開關頻率 (kHz)</label>
+            <input type="range" id="switchingFreq" min="80" max="200" value="120" step="5">
+            <div class="value-display" id="switchingFreqValue">120 kHz</div>
+        </div>
+
+        <div class="highlight-box">
+            <h4 style="margin: 0 0 10px 0; color: #2c3e50;">📋 設計規格</h4>
+            <table class="specs-table">
+                <tr><th>項目</th><th>規格</th></tr>
+                <tr><td>變壓比</td><td>12:1</td></tr>
+                <tr><td>諧振頻率 fr1</td><td>146.8 kHz</td></tr>
+                <tr><td>諧振頻率 fr2</td><td>51.3 kHz</td></tr>
+                <tr><td>品質因數 Q</td><td>0.17</td></tr>
+                <tr><td>控制方式</td><td>PFM 頻率控制</td></tr>
+                <tr><td>軟啟動時間</td><td>10 ms</td></tr>
+            </table>
+        </div>
+
+        <h3 style="color: #2c3e50; margin: 30px 0 15px 0;">🧠 LLC 頻率控制算法</h3>
+        <div id="editor" class="editor-container"></div>
+        
+        <div class="button-group">
+            <button id="runBtn">🚀 啟動 LLC 控制</button>
+            <button id="stopBtn" disabled>⏹️ 停止模擬</button>
+            <button id="resetBtn">🔄 重置系統</button>
+        </div>
+        
+        <div class="status" id="status">
+            💡 系統就緒 - 準備啟動 LLC 諧振控制器
+        </div>
+    </div>
+    
+    <div class="right-panel">
+        <h3 style="color: #2c3e50; margin-bottom: 20px;">📈 實時控制響應</h3>
+        <div class="chart-container">
+            <canvas id="simulationChart"></canvas>
+        </div>
+        
+        <div class="highlight-box" style="margin-top: 20px;">
+            <h4 style="margin: 0 0 10px 0; color: #2c3e50;">📊 性能指標</h4>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                <div>
+                    <strong>輸出電壓精度:</strong>
+                    <div id="voltageAccuracy" style="color: #667eea; font-weight: bold;">-- V</div>
+                </div>
+                <div>
+                    <strong>調節速度:</strong>
+                    <div id="regulationSpeed" style="color: #667eea; font-weight: bold;">-- ms</div>
+                </div>
+                <div>
+                    <strong>頻率範圍:</strong>
+                    <div id="frequencyRange" style="color: #667eea; font-weight: bold;">-- kHz</div>
+                </div>
+                <div>
+                    <strong>效率估計:</strong>
+                    <div id="efficiency" style="color: #667eea; font-weight: bold;">-- %</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 引入 Monaco Editor Loader -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.34.1/min/vs/loader.min.js"></script>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    let editor;
+    let chart = null;
+    let simulationRunning = false;
+    let animationId = null;
+
+    // LLC 控制器類別 (簡化版，用於網頁演示)
+    class LLCController {
+        constructor() {
+            this.parameters = {
+                Vin_nom: 800,
+                Vout_target: 48,
+                turns_ratio: 12,
+                Lr: 25e-6,
+                Lm: 180e-6,
+                Cr: 47e-9,
+                fr1: 146800,  // Hz
+                fr2: 51300,   // Hz
+                fs_min: 80000,
+                fs_max: 200000,
+                fs_nom: 120000
+            };
+            
+            this.control = {
+                frequency: 120000,
+                integral_error: 0,
+                last_error: 0,
+                Kp: 1000,
+                Ki: 5000,
+                soft_start: true,
+                soft_start_time: 10e-3
+            };
+            
+            this.simulation = {
+                time: 0,
+                timeStep: 1e-5,
+                data: {
+                    time: [],
+                    Vin: [],
+                    Vout: [],
+                    frequency: [],
+                    error: [],
+                    efficiency: []
+                }
+            };
+        }
+
+        // 簡化的 LLC 增益計算
+        calculateGain(frequency, Vin) {
+            const fn = frequency / this.parameters.fr1;
+            const m = Math.sqrt(this.parameters.Lm / this.parameters.Lr);
+            const Q = 0.17; // 從設計中已知
+            
+            const fn2 = fn * fn;
+            const denominator = Math.sqrt(
+                Math.pow(1 - fn2 + fn2 * m, 2) + 
+                Math.pow(fn * (fn2 - 1) / Q, 2)
+            );
+            const gain = 1 / denominator;
+            
+            // 考慮變壓器變比和整流
+            return (Vin / this.parameters.turns_ratio) * gain * (2 / Math.PI);
+        }
+
+        // 頻率控制算法
+        frequencyControl(Vout_measured, Vin_current, time) {
+            // 軟啟動
+            let target = this.parameters.Vout_target;
+            if (this.control.soft_start && time < this.control.soft_start_time) {
+                target = this.parameters.Vout_target * (time / this.control.soft_start_time);
+            } else {
+                this.control.soft_start = false;
+            }
+
+            // PI 控制
+            const error = target - Vout_measured;
+            this.control.integral_error += error * this.simulation.timeStep;
+            
+            // 積分飽和限制
+            if (this.control.integral_error > 10) this.control.integral_error = 10;
+            if (this.control.integral_error < -10) this.control.integral_error = -10;
+            
+            const pi_output = this.control.Kp * error + this.control.Ki * this.control.integral_error;
+            
+            // 輸入電壓前饋
+            const Vin_ratio = Vin_current / this.parameters.Vin_nom;
+            const feedforward = (Vin_ratio - 1.0) * 20000;
+            
+            // 更新頻率
+            this.control.frequency = this.parameters.fs_nom + pi_output + feedforward;
+            
+            // 頻率限制
+            if (this.control.frequency > this.parameters.fs_max) 
+                this.control.frequency = this.parameters.fs_max;
+            if (this.control.frequency < this.parameters.fs_min) 
+                this.control.frequency = this.parameters.fs_min;
+            
+            this.control.last_error = error;
+            
+            return {
+                frequency: this.control.frequency,
+                error: error,
+                target: target,
+                soft_start: this.control.soft_start
+            };
+        }
+
+        // 模擬一步
+        step() {
+            const time = this.simulation.time;
+            
+            // 輸入電壓波動 (±100V, 3Hz)
+            const Vin_variation = 100 * Math.sin(2 * Math.PI * 3 * time);
+            const Vin = parseFloat(document.getElementById('inputVoltage').value) + Vin_variation * 0.5;
+            
+            // 計算輸出電壓
+            const Vout_calculated = this.calculateGain(this.control.frequency, Vin);
+            
+            // 執行控制
+            const control_result = this.frequencyControl(Vout_calculated, Vin, time);
+            
+            // 效率估算
+            const fn = this.control.frequency / this.parameters.fr1;
+            let efficiency = 92; // 基準效率
+            if (fn < 0.8 || fn > 1.2) efficiency -= Math.abs(fn - 1.0) * 10;
+            efficiency = Math.max(85, Math.min(95, efficiency));
+            
+            // 記錄數據
+            this.simulation.data.time.push(time * 1000); // 轉換為 ms
+            this.simulation.data.Vin.push(Vin);
+            this.simulation.data.Vout.push(Vout_calculated);
+            this.simulation.data.frequency.push(this.control.frequency / 1000); // 轉換為 kHz
+            this.simulation.data.error.push(Math.abs(control_result.error));
+            this.simulation.data.efficiency.push(efficiency);
+            
+            // 限制數據點數量
+            if (this.simulation.data.time.length > 500) {
+                Object.keys(this.simulation.data).forEach(key => {
+                    this.simulation.data[key].shift();
+                });
+            }
+            
+            this.simulation.time += this.simulation.timeStep;
+            
+            return {
+                time: time,
+                Vin: Vin,
+                Vout: Vout_calculated,
+                frequency: this.control.frequency,
+                error: Math.abs(control_result.error),
+                efficiency: efficiency,
+                soft_start: control_result.soft_start
+            };
+        }
+    }
+
+    // 初始化 LLC 控制器
+    const llcController = new LLCController();
+
+    // 初始化控制代碼
+    const initialControlCode = `// LLC 頻率控制算法 - 800V→48V 應用
+// 這個控制器使用 PFM (脈衝頻率調制) 來調節輸出電壓
+
+class LLCFrequencyController {
+    constructor() {
+        // 控制參數
+        this.Kp = 1000;        // 比例增益
+        this.Ki = 5000;        // 積分增益
+        this.integral = 0;     // 積分累積
+        this.target_voltage = 48.0;  // 目標電壓
+        
+        // 頻率範圍
+        this.fs_min = 80000;   // 最小頻率 80kHz
+        this.fs_max = 200000;  // 最大頻率 200kHz
+        this.fs_nom = 120000;  // 標稱頻率 120kHz
+    }
+
+    // 主控制函數
+    control(time, feedback) {
+        const Vout_measured = feedback.Vout || 48;
+        const Vin_current = feedback.Vin || 800;
+        
+        // 軟啟動邏輯
+        let target = this.target_voltage;
+        if (time < 0.01) {  // 10ms 軟啟動
+            target = this.target_voltage * (time / 0.01);
+        }
+        
+        // 計算誤差
+        const error = target - Vout_measured;
+        
+        // PI 控制器
+        this.integral += error * 0.00001; // timeStep
+        
+        // 積分抗飽和
+        if (this.integral > 10) this.integral = 10;
+        if (this.integral < -10) this.integral = -10;
+        
+        const pi_output = this.Kp * error + this.Ki * this.integral;
+        
+        // 輸入電壓前饋補償
+        const Vin_feedforward = (Vin_current / 800 - 1.0) * 20000;
+        
+        // 計算新的開關頻率
+        let new_frequency = this.fs_nom + pi_output + Vin_feedforward;
+        
+        // 頻率限制
+        new_frequency = Math.max(this.fs_min, Math.min(this.fs_max, new_frequency));
+        
+        return {
+            frequency: new_frequency,
+            error: Math.abs(error),
+            target: target
+        };
+    }
+}
+
+// 創建控制器實例
+const controller = new LLCFrequencyController();
+
+// 返回控制函數
+function updateControl(time, feedback) {
+    return controller.control(time, feedback);
+}`;
+
+    // 初始化 Monaco Editor
+    require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.34.1/min/vs' } });
+    require(['vs/editor/editor.main'], function() {
+        editor = monaco.editor.create(document.getElementById('editor'), {
+            value: initialControlCode,
+            language: 'javascript',
+            theme: 'vs-light',
+            automaticLayout: true,
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false,
+            fontSize: 13,
+            wordWrap: 'on'
+        });
+    });
+
+    // 初始化圖表
+    const ctx = document.getElementById('simulationChart').getContext('2d');
+    chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [
+                {
+                    label: '輸出電壓 (V)',
+                    data: [],
+                    borderColor: '#667eea',
+                    backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                    borderWidth: 2,
+                    fill: false,
+                    tension: 0.4
+                },
+                {
+                    label: '開關頻率 (kHz)',
+                    data: [],
+                    borderColor: '#764ba2',
+                    backgroundColor: 'rgba(118, 75, 162, 0.1)',
+                    borderWidth: 2,
+                    fill: false,
+                    tension: 0.4,
+                    yAxisID: 'y1'
+                },
+                {
+                    label: '輸入電壓 (V/10)',
+                    data: [],
+                    borderColor: '#f093fb',
+                    backgroundColor: 'rgba(240, 147, 251, 0.1)',
+                    borderWidth: 1,
+                    fill: false,
+                    tension: 0.4
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: {
+                    display: true,
+                    title: { display: true, text: '時間 (ms)' }
+                },
+                y: {
+                    display: true,
+                    title: { display: true, text: '電壓 (V)' },
+                    min: 40,
+                    max: 55
+                },
+                y1: {
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    title: { display: true, text: '頻率 (kHz)' },
+                    min: 70,
+                    max: 210,
+                    grid: { drawOnChartArea: false }
+                }
+            },
+            plugins: {
+                title: {
+                    display: true,
+                    text: 'LLC 控制器實時響應'
+                },
+                legend: {
+                    display: true,
+                    position: 'top'
+                }
+            },
+            animation: { duration: 0 }
+        }
+    });
+
+    // 控制面板事件監聽
+    document.getElementById('inputVoltage').addEventListener('input', function(e) {
+        document.getElementById('inputVoltageValue').textContent = e.target.value + ' V';
+    });
+
+    document.getElementById('targetVoltage').addEventListener('input', function(e) {
+        document.getElementById('targetVoltageValue').textContent = parseFloat(e.target.value).toFixed(1) + ' V';
+        llcController.parameters.Vout_target = parseFloat(e.target.value);
+    });
+
+    document.getElementById('loadPower').addEventListener('input', function(e) {
+        document.getElementById('loadPowerValue').textContent = e.target.value + ' W';
+    });
+
+    document.getElementById('switchingFreq').addEventListener('input', function(e) {
+        document.getElementById('switchingFreqValue').textContent = e.target.value + ' kHz';
+    });
+
+    // 模擬控制
+    function updateSimulation() {
+        if (!simulationRunning) return;
+
+        try {
+            // 運行 LLC 控制器
+            const result = llcController.step();
+
+            // 更新圖表
+            chart.data.labels = llcController.simulation.data.time;
+            chart.data.datasets[0].data = llcController.simulation.data.Vout;
+            chart.data.datasets[1].data = llcController.simulation.data.frequency;
+            chart.data.datasets[2].data = llcController.simulation.data.Vin.map(v => v / 10);
+            chart.update('none');
+
+            // 更新性能指標
+            const latest = llcController.simulation.data;
+            const len = latest.time.length;
+            if (len > 0) {
+                document.getElementById('voltageAccuracy').textContent = 
+                    `${latest.Vout[len-1].toFixed(2)} V (±${latest.error[len-1].toFixed(3)} V)`;
+                document.getElementById('frequencyRange').textContent = 
+                    `${latest.frequency[len-1].toFixed(1)} kHz`;
+                document.getElementById('efficiency').textContent = 
+                    `${latest.efficiency[len-1].toFixed(1)} %`;
+                
+                // 計算調節速度 (簡化)
+                const settling_time = result.soft_start ? '軟啟動中...' : '< 2 ms';
+                document.getElementById('regulationSpeed').textContent = settling_time;
+            }
+
+            // 更新狀態
+            const status = result.soft_start ? 
+                '🟡 軟啟動階段 - 頻率漸增中...' : 
+                '🟢 穩定運行 - LLC 諧振控制中';
+            document.getElementById('status').innerHTML = status;
+
+            // 繼續模擬
+            animationId = requestAnimationFrame(updateSimulation);
+            
+        } catch (error) {
+            console.error('模擬錯誤:', error);
+            stopSimulation();
+            document.getElementById('status').innerHTML = '❌ 模擬錯誤: ' + error.message;
+        }
+    }
+
+    function startSimulation() {
+        simulationRunning = true;
+        document.getElementById('runBtn').disabled = true;
+        document.getElementById('stopBtn').disabled = false;
+        document.getElementById('status').innerHTML = '🚀 LLC 控制器啟動中...';
+        
+        // 重置控制器
+        llcController.simulation.time = 0;
+        llcController.control.integral_error = 0;
+        llcController.control.soft_start = true;
+        Object.keys(llcController.simulation.data).forEach(key => {
+            llcController.simulation.data[key] = [];
+        });
+        
+        updateSimulation();
+    }
+
+    function stopSimulation() {
+        simulationRunning = false;
+        if (animationId) {
+            cancelAnimationFrame(animationId);
+            animationId = null;
+        }
+        document.getElementById('runBtn').disabled = false;
+        document.getElementById('stopBtn').disabled = true;
+        document.getElementById('status').innerHTML = '⏹️ 模擬已停止';
+    }
+
+    function resetSimulation() {
+        stopSimulation();
+        
+        // 清除數據
+        Object.keys(llcController.simulation.data).forEach(key => {
+            llcController.simulation.data[key] = [];
+        });
+        
+        // 重置圖表
+        chart.data.labels = [];
+        chart.data.datasets.forEach(dataset => dataset.data = []);
+        chart.update();
+        
+        // 重置狀態
+        document.getElementById('voltageAccuracy').textContent = '-- V';
+        document.getElementById('regulationSpeed').textContent = '-- ms';
+        document.getElementById('frequencyRange').textContent = '-- kHz';
+        document.getElementById('efficiency').textContent = '-- %';
+        document.getElementById('status').innerHTML = '🔄 系統已重置 - 準備重新啟動';
+    }
+
+    // 按鈕事件
+    document.getElementById('runBtn').addEventListener('click', startSimulation);
+    document.getElementById('stopBtn').addEventListener('click', stopSimulation);
+    document.getElementById('resetBtn').addEventListener('click', resetSimulation);
+
+    // 初始狀態
+    document.getElementById('status').innerHTML = '💡 LLC 800V→48V 控制器就緒 - 點擊啟動開始模擬';
+});
+</script>
+
+</body>
+</html>

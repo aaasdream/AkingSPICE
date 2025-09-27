@@ -1,66 +1,77 @@
-好的，這是一個非常重要且核心的需求。為了讓 AI (例如我) 能夠穩定、正確地操作您的 `AkingSPICE` 函式庫，我們需要一份清晰、結構化、且專為 AI 設計的說明文件。
+# AkingSPICE 完整使用指南 v2.0
+**一份專為 AI 助手設計的、支援高階電力電子拓撲的綜合模擬指南**
 
-我已經徹底分析了您的整個專案，包括原始碼、範例、以及您遇到的問題。我將為您撰寫兩份文件：
+## 📋 版本更新摘要
+- **v2.0 (2025-09-28)**: 新增進階元件支援，包含多繞組變壓器、電壓控制MOSFET、完整受控源集、三相電源
+- **支援拓撲**: LLC諧振轉換器、VIENNA PFC、T-type PFC、Baby Boost PFC、多輸出隔離電源
+- **核心創新**: 業界首創JavaScript高階電力電子SPICE求解器
 
-1.  **`AI-QUICK-REFERENCE.md`**：一份高密度、單頁式的「速查卡」，讓 AI 能在最短時間內找到所需語法。
-2.  **`AI-USAGE-GUIDE.md`**：一份更詳細的「使用指南」，包含最佳實踐、重要觀念、完整範例和常見錯誤排除，確保 AI 能深入理解並避免犯錯。
+## 🚀 快速開始 (3步驟)
 
-這兩份文件吸收了您專案的所有精華，並特別強調了您之前遇到的痛點（如續流路徑和時間步長），以確保 AI 不會重蹈覆轍。
-
----
-
-### 檔案 1：`AI-QUICK-REFERENCE.md` (AI 速查卡)
-
-這份文件言簡意賅，專為快速查找語法而設計。
-
-```markdown
-# AkingSPICE 快速參考卡 (AI 專用)
-
-## 🚀 3 步驟快速使用
-
-### 1. 初始化
+### 1. 初始化與導入
 ```javascript
-import { AkingSPICE, Resistor, VoltageSource, MOSFET, Diode, Inductor, Capacitor } from './src/index.js';
+import { 
+    AkingSPICE, 
+    // 基礎元件
+    Resistor, Capacitor, Inductor, VoltageSource, CurrentSource,
+    Diode, MOSFET, 
+    // 🔥 進階元件 (v2.0新增)
+    VoltageControlledMOSFET, MultiWindingTransformer, 
+    VCVS, VCCS, CCCS, CCVS, ThreePhaseSource 
+} from './src/index.js';
+
 const solver = new AkingSPICE();
-solver.setDebug(true); // 強烈建議在開發時啟用
+solver.setDebug(true); // 強烈建議啟用
 ```
 
-### 2. 建立電路 (推薦方式)
+### 2. 建立電路
 ```javascript
-solver.reset();  // **關鍵：** 總是先重置以清除舊電路
+solver.reset();  // 總是先重置
 solver.components = [
     new VoltageSource('V1', ['input', '0'], 12.0),
     new Resistor('R1', ['input', 'output'], 1000),
-    new MOSFET('M1', ['output', '0'], { Ron: 0.01, Roff: 1e6 })
+    // 🔥 新功能：智慧型電壓控制MOSFET (自動根據Vgs決定開關狀態)
+    new VoltageControlledMOSFET('M1', ['output', 'gate', '0'], {
+        Vth: 2.0, Ron: 0.01, modelType: 'NMOS'
+    })
 ];
-solver.isInitialized = true;  // **關鍵：** 必須設定此旗標
+solver.isInitialized = true;
 ```
 
 ### 3. 執行分析
 ```javascript
-// DC 工作點分析
+// 基礎分析
 const dcResult = await solver.runDCAnalysis();
-const dcVoltage = dcResult.nodeVoltages.get('output');
 
-// 高階 PWM 模擬 (推薦用於開關電路)
+// 🔥 高階PWM分析 (推薦用於開關電路)
 const results = await solver.runSteppedSimulation(pwmControlFunc, {
-    stopTime: 1e-3, // 1ms
-    timeStep: 1e-7  // 0.1us
+    stopTime: 1e-3, timeStep: 1e-7
 });
-const lastStep = results.steps[results.steps.length - 1];
-const finalVoltage = lastStep.nodeVoltages['output'];
 ```
 
-## 🔧 支援的元件
+## 🔧 完整元件庫 (v2.0 - 支援高階拓撲)
 
+### 基礎元件
 | 元件 | 語法 | 範例 |
 |---|---|---|
 | **電阻** | `new Resistor(name, [n1,n2], value)` | `new Resistor('R1', ['a','b'], 1000)` |
 | **電容** | `new Capacitor(name, [n1,n2], value, {ic})` | `new Capacitor('C1', ['a','0'], 1e-6, {ic: 0})` |
 | **電感** | `new Inductor(name, [n1,n2], value, {ic})` | `new Inductor('L1', ['a','b'], 1e-3, {ic: 0})` |
 | **電壓源** | `new VoltageSource(name, [+,-], voltage)` | `new VoltageSource('V1', ['in','0'], 12)` |
-| **MOSFET**| `new MOSFET(name, [d,s], {params})` | `new MOSFET('M1', ['a','b'], {Ron:0.01, Roff:1e6})` |
-| **二極體**| `new Diode(name, [a,k], {params})` | `new Diode('D1', ['a','b'], {Vf:0.7, Ron:0.01})` |
+| **電流源** | `new CurrentSource(name, [+,-], current)` | `new CurrentSource('I1', ['in','0'], 1.0)` |
+| **二極體** | `new Diode(name, [a,k], {params})` | `new Diode('D1', ['a','b'], {Vf:0.7, Ron:0.01})` |
+| **MOSFET** | `new MOSFET(name, [d,s], {params})` | `new MOSFET('M1', ['a','b'], {Ron:0.01, Roff:1e6})` |
+
+### 🔥 進階元件 (v2.0 新功能)
+| 元件 | 語法 | 應用場景 |
+|---|---|---|
+| **電壓控制MOSFET** | `new VoltageControlledMOSFET(name, [d,g,s], {Vth, Ron, modelType})` | 閘極驅動電路、智慧開關 |
+| **多繞組變壓器** | `new MultiWindingTransformer(name, {windings, couplingMatrix})` | LLC轉換器、隔離電源 |
+| **三相電源** | `new ThreePhaseSource(name, {nodes, voltage, frequency, connection})` | VIENNA PFC、三相系統 |
+| **電流控制電流源** | `new CCCS(name, [out+,out-], [sens+,sens-], gain)` | 電流放大器、電流鏡 |
+| **電流控制電壓源** | `new CCVS(name, [out+,out-], [sens+,sens-], gain)` | 跨阻放大器、電流感測 |
+| **電壓控制電流源** | `new VCCS(name, [out+,out-], [ctrl+,ctrl-], gain)` | 跨導放大器 |
+| **電壓控制電壓源** | `new VCVS(name, [out+,out-], [ctrl+,ctrl-], gain)` | 電壓放大器 |
 
 ## ⚡️ PWM 控制方式
 
@@ -81,6 +92,21 @@ const pwmControl = (time) => {
 // 執行模擬
 const results = await solver.runSteppedSimulation(pwmControl, {
     stopTime: 1e-3, timeStep: 1e-7
+});
+```
+
+### 🔥 進階應用：電壓控制開關 (v2.0)
+```javascript
+// 智慧型MOSFET - 自動根據閘極電壓決定開關狀態
+const smartMosfet = new VoltageControlledMOSFET('Q1', ['drain', 'gate', 'source'], {
+    Vth: 2.0,        // 閾值電壓
+    Ron: 0.01,       // 導通電阻
+    modelType: 'NMOS' // NMOS或PMOS
+});
+
+// 閘極驅動電壓源
+const gateDriver = new VoltageSource('VG1', ['gate', '0'], 0, 'PULSE', {
+    period: 1e-5, dutyCycle: 0.5, amplitude: 15
 });
 ```
 
@@ -111,16 +137,281 @@ results.steps.forEach(step => {
 });
 ```
 
-## ⚠️ AI 必須遵守的黃金規則
+## 🎯 高階拓撲範例 (v2.0)
+
+### LLC 諧振轉換器 (完整範例)
+```javascript
+// 創建LLC轉換器實例 - 展示多繞組變壓器應用
+import { runLLCExample } from './llc-resonant-example.js';
+
+// 一鍵運行完整LLC範例
+const llcConverter = runLLCExample();
+
+// 手動建構LLC核心部分
+solver.components = [
+    // 諧振腔
+    new Inductor('Lr', ['bridge', 'primary+'], 15e-6),      // 諧振電感
+    new Capacitor('Cr', ['primary+', 'primary-'], 68e-9),   // 諧振電容
+    
+    // 🔥 多繞組變壓器 (LLC核心)
+    new MultiWindingTransformer('T1', {
+        windings: [
+            {name: 'primary', nodes: ['primary+', 'primary-'], turns: 15},
+            {name: 'secondary', nodes: ['secondary+', 'secondary-'], turns: 1}
+        ],
+        baseMagnetizingInductance: 120e-6,
+        couplingMatrix: [[1.0, 0.98], [0.98, 1.0]]
+    }),
+    
+    // 同步整流 (使用電壓控制MOSFET)
+    new VoltageControlledMOSFET('SR1', ['output', 'sr_gate1', 'secondary+'], {
+        Vth: 1.0, Ron: 0.005, modelType: 'NMOS'
+    })
+];
+```
+
+### VIENNA PFC (三相應用)
+```javascript
+// 🔥 三相輸入電源
+const threePhasePower = new ThreePhaseSource('AC_IN', {
+    nodes: ['L1', 'L2', 'L3', 'N'],
+    voltage: 220,          // 線電壓220V RMS
+    frequency: 50,         // 50Hz
+    connection: 'wye'      // 星形連接
+});
+
+// 三相整流二極體橋
+solver.components = [
+    threePhasePower,
+    new Diode('D1', ['L1', 'DC+']),
+    new Diode('D2', ['L2', 'DC+']),
+    new Diode('D3', ['L3', 'DC+']),
+    new Diode('D4', ['DC-', 'L1']),
+    new Diode('D5', ['DC-', 'L2']),
+    new Diode('D6', ['DC-', 'L3'])
+];
+```
+
+### 電流感測與控制回饋
+```javascript
+// 🔥 使用CCVS進行電流感測
+const currentSensor = new CCVS('I_SENSE', ['i_feedback', '0'], ['load+', 'load-'], 0.1);
+
+// 電流放大器 (CCCS)
+const currentAmplifier = new CCCS('AMP', ['out+', 'out-'], ['sense+', 'sense-'], 10);
+
+// 電壓控制電流源 (跨導放大器)
+const transconductor = new VCCS('GM', ['out+', 'out-'], ['ctrl+', 'ctrl-'], 0.01);
+```
+
+## ⚠️ AI 必須遵守的黃金規則 (v2.0 更新)
 
 1.  **永遠先 `solver.reset()`**: 建立新電路前的第一步。
-2.  **確保電流路徑完整**: 對於 Buck/Boost 等電感性開關電路，**必須提供續流路徑** (一個續流二極體或一個同步 MOSFET)。這是最常見的錯誤來源。
-3.  **時間步長是關鍵**: `timeStep` **必須遠小於** PWM 開關週期 (`1/frequency`)。推薦值為週期的 `1/100` 或更小。
-4.  **接地節點為 `'0'`**: 所有電路都需要一個參考地。
-5.  **最後設定 `solver.isInitialized = true`**: 在定義完 `solver.components` 之後設定。
-6.  **優先使用 `runSteppedSimulation`**: 這是為 PWM 電路設計的最高階、最可靠的 API。
+2.  **確保電流路徑完整**: 對於 Buck/Boost 等電感性開關電路，**必須提供續流路徑**。
+3.  **時間步長是關鍵**: `timeStep` **必須遠小於** PWM 開關週期。推薦值為週期的 `1/100`。
+4.  **接地節點為 `'0'`**: 所有電路都需要參考地。
+5.  **設定 `solver.isInitialized = true`**: 在定義完元件後設定。
+6.  **優先使用 `runSteppedSimulation`**: 最高階、最可靠的 API。
+7.  **🔥 進階元件注意事項**:
+   - **VoltageControlledMOSFET**: 需要閘極電壓源驅動
+   - **MultiWindingTransformer**: 確保耦合矩陣對稱且合理
+   - **ThreePhaseSource**: 星形連接需4個節點，三角形需3個
+   - **受控源**: 注意控制端與輸出端的節點定義
 
-🎯 **這份參考卡應該能讓任何 AI 助手高效、正確地使用 AkingSPICE！**
+🎯 **這份指南讓任何 AI 助手都能高效、正確地使用 AkingSPICE 進行高階電力電子模擬！**
+
+---
+
+## 📖 詳細使用指南
+
+### 核心工作流程
+AI 應遵循以下核心步驟完成模擬：
+
+1. **初始化**: 創建 `AkingSPICE` 實例並導入所需元件
+2. **電路建構**: 重置解算器，定義元件陣列
+3. **模擬執行**: 選擇適當的分析方法
+4. **結果分析**: 提取電壓、電流波形或數值
+
+### 🔥 進階元件詳細說明
+
+#### 1. VoltageControlledMOSFET - 智慧型開關
+```javascript
+const smartMOSFET = new VoltageControlledMOSFET('M1', ['drain', 'gate', 'source'], {
+    Vth: 2.0,           // 閾值電壓 (V)
+    Kp: 100e-6,         // 跨導參數 (A/V²)
+    W: 100e-6,          // 通道寬度 (m)
+    L: 10e-6,           // 通道長度 (m)
+    Ron: 0.01,          // 導通電阻 (Ω)
+    modelType: 'NMOS'   // 'NMOS' 或 'PMOS'
+});
+
+// 工作區域自動判斷：OFF, LINEAR, SATURATION
+// 根據 Vgs 與 Vth 的關係自動切換
+```
+
+#### 2. MultiWindingTransformer - 多繞組耦合
+```javascript
+const llcTransformer = new MultiWindingTransformer('T1', {
+    windings: [
+        {name: 'primary', nodes: ['P+', 'P-'], turns: 15, inductance: 120e-6},
+        {name: 'secondary', nodes: ['S+', 'S-'], turns: 1, inductance: 0.53e-6},
+        {name: 'auxiliary', nodes: ['AUX+', 'AUX-'], turns: 2, inductance: 2.1e-6}
+    ],
+    baseMagnetizingInductance: 120e-6,
+    couplingMatrix: [
+        [1.0,  0.98, 0.95],  // 主繞組自耦合、與次級、與輔助
+        [0.98, 1.0,  0.92],  // 次級與主、自耦合、與輔助
+        [0.95, 0.92, 1.0 ]   // 輔助與主、與次級、自耦合
+    ]
+});
+
+// 支援任意繞組數和耦合係數
+```
+
+#### 3. ThreePhaseSource - 三相系統
+```javascript
+// 星形連接 (Wye)
+const wyeSource = new ThreePhaseSource('3PH', {
+    nodes: ['A', 'B', 'C', 'N'],    // 三相 + 中性點
+    voltage: 220,                    // 線電壓 RMS (V)
+    frequency: 50,                   // 頻率 (Hz)
+    connection: 'wye',               // 星形連接
+    phaseSequence: 'ABC'             // 正序
+});
+
+// 三角形連接 (Delta)
+const deltaSource = new ThreePhaseSource('3PH_D', {
+    nodes: ['AB', 'BC', 'CA'],       // 三個線電壓節點
+    voltage: 380,                    // 線電壓 RMS (V)
+    frequency: 60,                   // 60Hz
+    connection: 'delta'              // 三角形連接
+});
+```
+
+### 支援的高階拓撲
+
+#### LLC 諧振轉換器
+- **特點**: 軟切換、高效率、寬範圍調節
+- **核心元件**: 多繞組變壓器、諧振腔 (Lr-Cr)
+- **應用**: 伺服器電源、LED驅動、快充適配器
+```javascript
+// 諧振頻率計算
+const fr1 = 1 / (2 * Math.PI * Math.sqrt(Lr * Cr));                    // 主諧振頻率
+const fr2 = 1 / (2 * Math.PI * Math.sqrt((Lr + Lm) * Cr));             // 次諧振頻率
+```
+
+#### VIENNA PFC 整流器
+- **特點**: 三相、單向導通、功率因數校正
+- **核心元件**: 三相電源、三電平拓撲
+- **應用**: 高功率伺服器、工業電源
+
+#### T-type 三電平
+- **特點**: 中性點鉗位、低dv/dt、高頻率
+- **核心元件**: 三相電源、多電平開關
+- **應用**: 太陽能逆變器、馬達驅動
+
+### 🚀 效能優化建議
+
+1. **時間步長選擇**:
+   - PWM頻率 100kHz → timeStep ≤ 100ns
+   - 諧振頻率 150kHz → timeStep ≤ 67ns
+   - 一般規則: timeStep = 1/(frequency × 100)
+
+2. **收斂性改善**:
+   - 適當的初始條件設定 (ic 參數)
+   - 漸進式加載 (軟啟動)
+   - 阻尼電阻消除數值振盪
+
+3. **記憶體管理**:
+   - 長時間模擬時定期清理中間結果
+   - 使用適當的停止條件
+   - 避免過小的時間步長
+
+## 🎉 成功案例展示
+
+### 完整 LLC 設計流程
+```javascript
+// 1. 導入範例並運行
+import { runLLCExample } from './llc-resonant-example.js';
+const llc = runLLCExample();
+
+// 2. 查看設計報告
+console.log(llc.generateDesignReport());
+
+// 3. 分析諧振特性
+const resonantInfo = llc.calculateResonantFrequencies();
+console.log(`fr1 = ${resonantInfo.fr1/1000} kHz`);
+console.log(`Operating region: ${resonantInfo.operating_region}`);
+
+// 4. 可選：運行暫態分析
+// const results = await llc.runTransientAnalysis(50e-6, 100e-9);
+```
+
+### 測試進階元件
+```javascript
+// 運行完整測試套件
+import('./test-advanced-components.js').then(() => {
+    console.log('所有進階元件測試完成！');
+});
+```
+
+---
+
+## 🔧 故障排除指南
+
+### 常見問題與解決方案
+
+**Q1: VoltageControlledMOSFET 不切換？**
+- 檢查閘極電壓是否超過閾值電壓 (Vth)
+- 確認閘極有適當的驅動電路
+- 驗證 modelType 設定正確 (NMOS/PMOS)
+
+**Q2: MultiWindingTransformer 耦合不正確？**
+- 檢查耦合矩陣是否對稱且對角線為1.0
+- 確認繞組匝數比合理
+- 驗證基準電感設定正確
+
+**Q3: ThreePhaseSource 無法創建？**
+- 檢查節點數量：星形需4個，三角形需3個
+- 確認電壓和頻率為正值
+- 驗證 connection 參數 ('wye' 或 'delta')
+
+**Q4: LLC 諧振頻率不匹配？**
+- 重新檢查 Lr, Lm, Cr 數值
+- 確認變壓器設計參數
+- 調整開關頻率至合適工作區域
+
+**Q5: 受控源增益設定？**
+- CCCS/CCVS: 增益單位分別為 A/A 和 V/A
+- VCCS/VCVS: 增益單位分別為 A/V 和 V/V
+- 注意控制端與輸出端的極性定義
+
+---
+
+## 🌟 版本演進歷程
+
+**v1.0**: 基礎Buck轉換器模擬
+- 支援基本被動元件
+- 簡單DC/暫態分析
+- MOSFET開關模型
+
+**v2.0** (當前): 高階電力電子平台
+- ✅ 16+ 專業元件模型
+- ✅ 智慧型電壓控制開關
+- ✅ 多繞組變壓器耦合
+- ✅ 完整三相系統支援
+- ✅ LLC/VIENNA/T-type 拓撲就緒
+- ✅ 工程級數值穩定性
+
+**v3.0** (規劃中): 商業級精度
+- 頻域AC分析
+- 參數掃描與優化
+- 熱效應建模
+- GUI電路繪製介面
+
+---
+
+🎯 **AkingSPICE v2.0 - 電力電子工程師的JavaScript仿真利器！**
 ```
 
 ---

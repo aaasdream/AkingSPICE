@@ -437,3 +437,172 @@ export class VCCS extends BaseComponent {
         return `${this.name}: I(${this.outputNodes[0]}→${this.outputNodes[1]}) = ${this.transconductance} * V(${this.controlNodes[0]}-${this.controlNodes[1]})`;
     }
 }
+
+/**
+ * 電流控制電流源 (CCCS)
+ * Current-Controlled Current Source
+ * 輸出電流 = 增益 × 控制電流
+ * 典型應用：電晶體 Beta 特性、電流鏡
+ */
+export class CCCS extends BaseComponent {
+    /**
+     * @param {string} name CCCS名稱 (如 'F1')
+     * @param {string[]} outputNodes 輸出節點 [流出, 流入]
+     * @param {string} controlElement 控制元件名稱（通過其電流來控制）
+     * @param {number} currentGain 電流增益（無單位）
+     * @param {Object} params 額外參數
+     */
+    constructor(name, outputNodes, controlElement, currentGain, params = {}) {
+        super(name, 'CCCS', outputNodes, currentGain, params);
+        
+        if (outputNodes.length !== 2) {
+            throw new Error(`CCCS ${name} must have exactly 2 output nodes`);
+        }
+        
+        this.outputNodes = [...outputNodes];
+        this.controlElement = controlElement; // 控制元件的名稱
+        this.currentGain = currentGain;       // 電流增益 F
+        
+        // CCCS 需要監控控制元件的電流
+        this.controlCurrent = 0;
+    }
+
+    /**
+     * 設定控制電流（由解算器在每個時間步調用）
+     * @param {number} current 控制元件的電流
+     */
+    setControlCurrent(current) {
+        this.controlCurrent = current;
+    }
+
+    /**
+     * 獲取輸出電流
+     * @returns {number} 輸出電流 = F × I_control
+     */
+    getOutputCurrent() {
+        return this.currentGain * this.controlCurrent;
+    }
+
+    /**
+     * 為 MNA 分析提供印花支援
+     * CCCS 需要在控制元件電流確定後才能計算
+     */
+    stamp(matrix, rhs, nodeMap, voltageSourceMap, time) {
+        const outputCurrent = this.getOutputCurrent();
+        
+        // 獲取輸出節點索引
+        const node1 = this.outputNodes[0] === '0' ? -1 : nodeMap.get(this.outputNodes[0]);
+        const node2 = this.outputNodes[1] === '0' ? -1 : nodeMap.get(this.outputNodes[1]);
+        
+        // 印花電流源到 RHS 向量
+        if (node1 >= 0) {
+            rhs.addAt(node1, -outputCurrent); // 流出節點
+        }
+        if (node2 >= 0) {
+            rhs.addAt(node2, outputCurrent);  // 流入節點
+        }
+    }
+
+    needsCurrentVariable() {
+        return false; // CCCS 本身不需要額外的電流變數
+    }
+
+    toString() {
+        return `${this.name}: I(${this.outputNodes[0]}→${this.outputNodes[1]}) = ${this.currentGain} * I(${this.controlElement})`;
+    }
+
+    clone() {
+        return new CCCS(this.name, [...this.outputNodes], this.controlElement, this.currentGain, { ...this.params });
+    }
+}
+
+/**
+ * 電流控制電壓源 (CCVS)
+ * Current-Controlled Voltage Source
+ * 輸出電壓 = 轉移阻抗 × 控制電流
+ * 典型應用：霍爾感測器、變壓器建模
+ */
+export class CCVS extends BaseComponent {
+    /**
+     * @param {string} name CCVS名稱 (如 'H1')
+     * @param {string[]} outputNodes 輸出節點 [正, 負]
+     * @param {string} controlElement 控制元件名稱（通過其電流來控制）
+     * @param {number} transresistance 轉移阻抗 (Ω)
+     * @param {Object} params 額外參數
+     */
+    constructor(name, outputNodes, controlElement, transresistance, params = {}) {
+        super(name, 'CCVS', outputNodes, transresistance, params);
+        
+        if (outputNodes.length !== 2) {
+            throw new Error(`CCVS ${name} must have exactly 2 output nodes`);
+        }
+        
+        this.outputNodes = [...outputNodes];
+        this.controlElement = controlElement; // 控制元件的名稱
+        this.transresistance = transresistance; // 轉移阻抗 H (Ω)
+        
+        // CCVS 需要監控控制元件的電流
+        this.controlCurrent = 0;
+    }
+
+    /**
+     * 設定控制電流（由解算器在每個時間步調用）
+     * @param {number} current 控制元件的電流
+     */
+    setControlCurrent(current) {
+        this.controlCurrent = current;
+    }
+
+    /**
+     * 獲取輸出電壓
+     * @returns {number} 輸出電壓 = H × I_control
+     */
+    getOutputVoltage() {
+        return this.transresistance * this.controlCurrent;
+    }
+
+    /**
+     * 為 MNA 分析提供印花支援
+     * CCVS 作為電壓源需要額外的電流變數
+     */
+    stamp(matrix, rhs, nodeMap, voltageSourceMap, time) {
+        const outputVoltage = this.getOutputVoltage();
+        
+        // 獲取節點索引
+        const node1 = this.outputNodes[0] === '0' ? -1 : nodeMap.get(this.outputNodes[0]);
+        const node2 = this.outputNodes[1] === '0' ? -1 : nodeMap.get(this.outputNodes[1]);
+        
+        // 獲取電壓源的電流變數索引
+        const currentVarIndex = voltageSourceMap.get(this.name);
+        if (currentVarIndex === undefined) {
+            throw new Error(`CCVS ${this.name}: Current variable not found in voltage source map`);
+        }
+        
+        const matrixSize = matrix.rows;
+        
+        // 印花電壓源約束方程：V+ - V- = V_output
+        if (node1 >= 0) {
+            matrix.addAt(currentVarIndex, node1, 1);   // 電流方程中的電壓項
+            matrix.addAt(node1, currentVarIndex, 1);   // 節點方程中的電流項
+        }
+        if (node2 >= 0) {
+            matrix.addAt(currentVarIndex, node2, -1);  // 電流方程中的電壓項
+            matrix.addAt(node2, currentVarIndex, -1);  // 節點方程中的電流項
+        }
+        
+        // 右側向量：電壓約束
+        rhs.setAt(currentVarIndex, outputVoltage);
+    }
+
+    needsCurrentVariable() {
+        return true; // CCVS 需要電流變數（作為電壓源）
+    }
+
+    toString() {
+        return `${this.name}: V(${this.outputNodes[0]}-${this.outputNodes[1]}) = ${this.transresistance} * I(${this.controlElement})`;
+    }
+
+    clone() {
+        return new CCVS(this.name, [...this.outputNodes], this.controlElement, this.transresistance, { ...this.params });
+    }
+}
