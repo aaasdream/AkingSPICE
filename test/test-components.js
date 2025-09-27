@@ -6,6 +6,7 @@ import { Resistor } from '../src/components/resistor.js';
 import { Capacitor } from '../src/components/capacitor.js';
 import { Inductor } from '../src/components/inductor.js';
 import { VoltageSource, CurrentSource } from '../src/components/sources.js';
+import { Diode } from '../src/components/diode.js';
 
 export async function runComponentTests(ctx) {
     
@@ -163,5 +164,85 @@ export async function runComponentTests(ctx) {
         ctx.assert.equal(r2.type, r1.type);
         ctx.assert.equal(r2.value, r1.value);
         ctx.assert.isTrue(r1 !== r2); // 不同的對象實例
+    });
+    
+    await ctx.test('Diode basic properties', () => {
+        const d = new Diode('D1', ['anode', 'cathode'], { Vf: 0.7, Ron: 0.01, Roff: 1e6 });
+        
+        ctx.assert.equal(d.name, 'D1');
+        ctx.assert.equal(d.type, 'D');
+        ctx.assert.equal(d.nodes.length, 2);
+        ctx.assert.equal(d.anode, 'anode');
+        ctx.assert.equal(d.cathode, 'cathode');
+        ctx.assert.equal(d.Vf, 0.7);
+        ctx.assert.equal(d.Ron, 0.01);
+        ctx.assert.equal(d.Roff, 1e6);
+        ctx.assert.isFalse(d.isForwardBiased);
+    });
+    
+    await ctx.test('Diode forward bias behavior', () => {
+        const d = new Diode('D1', ['a', 'k'], { Vf: 0.7, Ron: 0.01 });
+        
+        // 測試順向偏壓 (Va > Vk + Vf)
+        const vak_forward = 1.0; // 1V > 0.7V
+        const r_forward = d.getEquivalentResistance(vak_forward);
+        ctx.assert.equal(r_forward, 0.01); // 應該使用 Ron
+        ctx.assert.isTrue(d.isForwardBiased);
+        ctx.assert.isTrue(d.isOn());
+    });
+    
+    await ctx.test('Diode reverse bias behavior', () => {
+        const d = new Diode('D1', ['a', 'k'], { Vf: 0.7, Ron: 0.01, Roff: 1e6 });
+        
+        // 測試反向偏壓 (Va < Vk + Vf)
+        const vak_reverse = 0.5; // 0.5V < 0.7V
+        const r_reverse = d.getEquivalentResistance(vak_reverse);
+        ctx.assert.equal(r_reverse, 1e6); // 應該使用 Roff
+        ctx.assert.isFalse(d.isForwardBiased);
+        ctx.assert.isFalse(d.isOn());
+    });
+    
+    await ctx.test('Diode voltage drop calculation', () => {
+        const d = new Diode('D1', ['a', 'k'], { Vf: 0.7, Ron: 0.01 });
+        
+        // 設定電流為 1A，順向偏壓
+        d.updateState(1.0, 1.0);  // Vak = 1V, Iak = 1A
+        
+        const voltageDrop = d.getVoltageDrop();
+        const expected = 0.7 + 1.0 * 0.01; // Vf + I * Ron = 0.71V
+        ctx.assert.closeTo(voltageDrop, expected, 1e-10);
+    });
+    
+    await ctx.test('Diode parameter validation', () => {
+        // 測試無效參數
+        ctx.assert.throws(() => {
+            new Diode('D1', ['a', 'k'], { Ron: -0.01 }); // 負的 Ron
+        }, /Ron must be positive/);
+        
+        ctx.assert.throws(() => {
+            new Diode('D2', ['a', 'k'], { Vf: -0.7 }); // 負的 Vf
+        }, /Forward voltage Vf must be non-negative/);
+        
+        ctx.assert.throws(() => {
+            new Diode('D3', ['a', 'k'], { Ron: 1e6, Roff: 0.01 }); // Roff <= Ron
+        }, /Roff must be greater than Ron/);
+    });
+    
+    await ctx.test('Diode toString and status', () => {
+        const d = new Diode('D1', ['anode', 'cathode'], { Vf: 0.7, Ron: 0.01 });
+        d.updateState(1.0, 0.5); // 順向偏壓
+        
+        const str = d.toString();
+        ctx.assert.isTrue(str.includes('D1'));
+        ctx.assert.isTrue(str.includes('Diode'));
+        ctx.assert.isTrue(str.includes('anode'));
+        ctx.assert.isTrue(str.includes('cathode'));
+        ctx.assert.isTrue(str.includes('ON'));
+        
+        const status = d.getOperatingStatus();
+        ctx.assert.equal(status.name, 'D1');
+        ctx.assert.equal(status.type, 'Diode');
+        ctx.assert.equal(status.state, 'ON');
+        ctx.assert.isTrue(status.isForwardBiased);
     });
 }

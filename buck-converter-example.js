@@ -9,12 +9,12 @@
  *                GND                  GND
  */
 
-import { JSSolverPE } from './src/index.js';
+import { AkingSPICE } from './src/index.js';
 
 async function buckConverterExample() {
     console.log('=== Buck 轉換器開迴路控制範例 ===\n');
 
-    const solver = new JSSolverPE();
+    const solver = new AkingSPICE();
     
     // Buck 轉換器電路網表
     const netlist = `

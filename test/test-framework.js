@@ -1,5 +1,5 @@
 /**
- * JSSolver-PE 測試框架
+ * AkingSPICE 測試框架
  * 
  * 提供單元測試和集成測試功能，驗證求解器的正確性
  */
@@ -220,7 +220,7 @@ export class TestRunner {
      * 運行所有測試
      */
     async runAll() {
-        console.log(chalk.blue.bold('\\n🧪 Running JSSolver-PE Tests\\n'));
+        console.log(chalk.blue.bold('\\n🧪 Running AkingSPICE Tests\\n'));
         
         const overallStart = Date.now();
         const allResults = [];

@@ -1,5 +1,5 @@
 /**
- * JSSolver-PE 測試主程序
+ * AkingSPICE 測試主程序
  * 
  * 運行所有測試套件，驗證求解器功能
  */
@@ -24,7 +24,7 @@ async function main() {
     
     // 設置全局初始化和清理
     runner.setGlobalSetup(async () => {
-        console.log('Initializing JSSolver-PE test environment...');
+        console.log('Initializing AkingSPICE test environment...');
         // 可以在這裡設置全局測試環境
     });
     

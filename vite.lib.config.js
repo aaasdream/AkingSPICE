@@ -4,8 +4,8 @@ export default defineConfig({
   build: {
     lib: {
       entry: './src/index.js',
-      name: 'JSSolverPE',
-      fileName: (format) => `jssolver-pe.${format}.js`,
+      name: 'AkingSPICE',
+      fileName: (format) => `AkingSPICE.${format}.js`,
       formats: ['es', 'umd']
     },
     rollupOptions: {

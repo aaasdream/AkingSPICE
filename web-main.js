@@ -1,31 +1,31 @@
-// Web entry point for JSSolver-PE Buck Converter Simulator
+// Web entry point for AkingSPICE Buck Converter Simulator
 import { Chart } from 'chart.js/auto';
 
 // Export Chart globally for the HTML to use
 window.Chart = Chart;
 
-// 動態導入 JSSolver-PE 模組以避免初始化錯誤
-async function loadJSSolverPE() {
+// 動態導入 AkingSPICE 模組以避免初始化錯誤
+async function loadAkingSPICE() {
     try {
-        console.log('開始載入 JSSolver-PE 模組...');
+        console.log('開始載入 AkingSPICE 模組...');
         
-        const { JSSolverPE } = await import('./src/index.js');
+        const { AkingSPICE } = await import('./src/index.js');
         const { Resistor } = await import('./src/components/resistor.js');
         const { Inductor } = await import('./src/components/inductor.js');
         const { Capacitor } = await import('./src/components/capacitor.js');
         const { VoltageSource } = await import('./src/components/sources.js');
         const { MOSFET } = await import('./src/components/mosfet.js');
         
-        console.log('JSSolver-PE 模組載入成功');
+        console.log('AkingSPICE 模組載入成功');
         
-        return { JSSolverPE, Resistor, Inductor, Capacitor, VoltageSource, MOSFET };
+        return { AkingSPICE, Resistor, Inductor, Capacitor, VoltageSource, MOSFET };
     } catch (error) {
-        console.error('載入 JSSolver-PE 模組失敗:', error);
+        console.error('載入 AkingSPICE 模組失敗:', error);
         throw error;
     }
 }
 
-// Browser-compatible Buck Converter simulator using REAL JSSolver-PE
+// Browser-compatible Buck Converter simulator using REAL AkingSPICE
 class ViteBuckSimulator {
     constructor() {
         this.solver = null;
@@ -39,22 +39,22 @@ class ViteBuckSimulator {
     
     async initializeSolver() {
         try {
-            console.log('初始化 JSSolver-PE...');
-            this.components = await loadJSSolverPE();
-            this.solver = new this.components.JSSolverPE();
+            console.log('初始化 AkingSPICE...');
+            this.components = await loadAkingSPICE();
+            this.solver = new this.components.AkingSPICE();
             this.solver.setDebug(true);
-            console.log('✅ JSSolver-PE 初始化成功');
-            console.log('版本信息:', this.components.JSSolverPE.getVersionInfo());
+            console.log('✅ AkingSPICE 初始化成功');
+            console.log('版本信息:', this.components.AkingSPICE.getVersionInfo());
             
             // 更新界面狀態
             document.getElementById('run').disabled = false;
             document.getElementById('run').textContent = 'Run Simulation';
             
         } catch (error) {
-            console.error('❌ JSSolver-PE 初始化失敗:', error);
+            console.error('❌ AkingSPICE 初始化失敗:', error);
             document.getElementById('info').innerHTML = `
                 <div class="info-section" style="color: red;">
-                    <h3>❌ JSSolver-PE 載入失敗</h3>
+                    <h3>❌ AkingSPICE 載入失敗</h3>
                     <p><strong>錯誤:</strong> ${error.message}</p>
                     <p>請檢查瀏覽器控制台以獲取詳細信息</p>
                 </div>
@@ -132,7 +132,7 @@ class ViteBuckSimulator {
         document.getElementById('clear').addEventListener('click', () => this.clearChart());
     }
 
-    // 使用 JSSolver-PE 建立真實的 Buck 轉換器電路
+    // 使用 AkingSPICE 建立真實的 Buck 轉換器電路
     buildBuckCircuit() {
         const Vin = parseFloat(document.getElementById('inputVoltage').value);
         const L = parseFloat(document.getElementById('inductance').value) * 1e-6; // μH to H
@@ -193,7 +193,7 @@ class ViteBuckSimulator {
         const dutyCycle = parseFloat(document.getElementById('dutyCycle').value) / 100;
         const simTime = parseFloat(document.getElementById('simTime').value) / 1000; // ms to s
         
-        console.log(`開始 JSSolver-PE Buck 模擬: f=${frequency/1000}kHz, D=${(dutyCycle*100).toFixed(1)}%, t=${simTime*1000}ms`);
+        console.log(`開始 AkingSPICE Buck 模擬: f=${frequency/1000}kHz, D=${(dutyCycle*100).toFixed(1)}%, t=${simTime*1000}ms`);
         
         // 建立電路
         if (!this.buildBuckCircuit()) {
@@ -230,7 +230,7 @@ class ViteBuckSimulator {
             this.processSimulationResults(results, period, dutyCycle);
             
         } catch (error) {
-            console.error('JSSolver-PE 模擬失敗:', error);
+            console.error('AkingSPICE 模擬失敗:', error);
             alert(`模擬失敗: ${error.message}`);
         }
     }
@@ -280,10 +280,10 @@ class ViteBuckSimulator {
         // 更新圖表
         this.chart.update();
         
-        // 顯示 JSSolver-PE 真實求解結果
+        // 顯示 AkingSPICE 真實求解結果
         document.getElementById('info').innerHTML = `
             <div class="info-section">
-                <h3>🔬 JSSolver-PE 真實 MNA 求解結果</h3>
+                <h3>🔬 AkingSPICE 真實 MNA 求解結果</h3>
                 <p><strong>解算器:</strong> Modified Nodal Analysis (MNA) with LU decomposition</p>
                 <p><strong>平均輸出電壓:</strong> ${avgOutputVoltage.toFixed(3)} V</p>
                 <p><strong>平均輸出電流:</strong> ${avgOutputCurrent.toFixed(3)} A</p>
@@ -303,7 +303,7 @@ class ViteBuckSimulator {
         const theoreticalOutput = Vin * dutyCycle;
         const error = Math.abs(avgOutputVoltage - theoreticalOutput) / theoreticalOutput * 100;
         
-        console.log('=== JSSolver-PE 結果驗證 ===');
+        console.log('=== AkingSPICE 結果驗證 ===');
         console.log(`理論輸出: ${theoreticalOutput.toFixed(3)} V`);
         console.log(`解算器結果: ${avgOutputVoltage.toFixed(3)} V`);
         console.log(`誤差: ${error.toFixed(2)}%`);
@@ -420,6 +420,6 @@ class ViteBuckSimulator {
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
     console.log('Initializing Vite-based Buck Converter Simulator...');
-    console.log('Using dynamic import for JSSolver-PE...');
+    console.log('Using dynamic import for AkingSPICE...');
     window.simulator = new ViteBuckSimulator();
 });

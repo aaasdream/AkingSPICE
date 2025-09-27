@@ -1,13 +1,13 @@
 {
-  "name": "jssolver-pe",
+  "name": "AkingSPICE",
   "version": "0.1.0",
   "description": "JavaScript Solver for Power Electronics - A high-performance circuit simulator for power electronic circuits",
-  "main": "lib-dist/jssolver-pe.umd.js",
-  "module": "lib-dist/jssolver-pe.es.js",
+  "main": "lib-dist/AkingSPICE.umd.js",
+  "module": "lib-dist/AkingSPICE.es.js",
   "exports": {
     ".": {
-      "import": "./lib-dist/jssolver-pe.es.js",
-      "require": "./lib-dist/jssolver-pe.umd.js"
+      "import": "./lib-dist/AkingSPICE.es.js",
+      "require": "./lib-dist/AkingSPICE.umd.js"
     }
   },
   "files": [
@@ -50,10 +50,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourname/jssolver-pe.git"
+    "url": "https://github.com/yourname/AkingSPICE.git"
   },
   "bugs": {
-    "url": "https://github.com/yourname/jssolver-pe/issues"
+    "url": "https://github.com/yourname/AkingSPICE/issues"
   },
-  "homepage": "https://github.com/yourname/jssolver-pe#readme"
+  "homepage": "https://github.com/yourname/AkingSPICE#readme"
 }

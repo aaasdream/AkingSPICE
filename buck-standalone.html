@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>JSSolver-PE Buck 轉換器實戰 (互動圖表版)</title>
+    <title>AkingSPICE Buck 轉換器實戰 (互動圖表版)</title>
     <!-- 引入 Plotly.js 函式庫 -->
     <script src="https://cdn.plot.ly/plotly-2.20.0.min.js"></script>
     <style>
@@ -43,19 +43,19 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔌 JSSolver-PE Buck 轉換器實戰</h1>
+            <h1>🔌 AkingSPICE Buck 轉換器實戰</h1>
             <div class="subtitle">互動式波形分析</div>
         </div>
         <div class="content">
             <div class="controls">
-                <div id="status" class="status loading">🔄 載入 JSSolver-PE Library...</div>
+                <div id="status" class="status loading">🔄 載入 AkingSPICE Library...</div>
                 <div class="control-group"><label for="inputVoltage">輸入電壓 (V)</label><input type="number" id="inputVoltage" value="12" min="1" max="50" step="0.1"></div>
                 <div class="control-group"><label for="dutyCycle">占空比 (%)</label><input type="number" id="dutyCycle" value="50" min="10" max="90" step="1"></div>
                 <div class="control-group"><label for="frequency">開關頻率 (kHz)</label><input type="number" id="frequency" value="100" min="10" max="1000" step="10"></div>
                 <div class="control-group"><label for="inductance">電感值 (μH)</label><input type="number" id="inductance" value="100" min="10" max="1000" step="10"></div>
                 <div class="control-group"><label for="capacitance">電容值 (μF)</label><input type="number" id="capacitance" value="220" min="10" max="1000" step="10"></div>
                 <div class="control-group"><label for="loadResistance">負載電阻 (Ω)</label><input type="number" id="loadResistance" value="5" min="1" max="100" step="0.1"></div>
-                <div class="control-group"><label for="simTime">模擬時間 (ms)</label><input type="number" id="simTime" value="5" min="1" max="50" step="1"></div>
+                <div class="control-group"><label for="simTime">模擬時間 (ms)</label><input type="number" id="simTime" value="50" min="1" max="50" step="1"></div>
                 <button class="btn btn-primary" id="runBtn" disabled>載入中...</button>
                 <button class="btn btn-secondary" id="clearBtn">清除結果</button>
                 <div id="progress-container"><div id="progress-bar">0%</div></div>
@@ -79,7 +79,7 @@
         </div>
     </div>
 
-    <script src="./lib-dist/jssolver-pe.umd.js"></script>
+            <script src="./lib-dist/AkingSPICE.umd.js"></script>
     <script>
         let solver = null;
         let isReady = false;
@@ -122,8 +122,8 @@
             Plotly.react(chartDiv, traces, chartDiv.layout); // 使用 chartDiv.layout 保持縮放狀態
         }
 
-        async function initializeSolver() { try { log('開始初始化 JSSolver-PE...'); updateStatus('🔄 初始化解算器...', 'loading'); if (typeof window.JSSolverPE === 'undefined') throw new Error('JSSolver-PE library 未載入'); solver = new window.JSSolverPE.JSSolverPE(); solver.setDebug(false); log('JSSolver-PE 初始化成功！'); log(`版本: ${window.JSSolverPE.JSSolverPE.getVersionInfo().version}`); updateStatus('✅ 解算器就緒', 'success'); const runBtn = document.getElementById('runBtn'); runBtn.disabled = false; runBtn.textContent = '🚀 開始模擬'; isReady = true; } catch (error) { log(`初始化失敗: ${error.message}`, 'error'); updateStatus('❌ 初始化失敗', 'error'); console.error('JSSolver-PE initialization failed:', error); } }
-        function buildBuckCircuit() { const Vin = parseFloat(document.getElementById('inputVoltage').value); const L = parseFloat(document.getElementById('inductance').value) * 1e-6; const C = parseFloat(document.getElementById('capacitance').value) * 1e-6; const Rload = parseFloat(document.getElementById('loadResistance').value); log(`建立同步 Buck 電路: Vin=${Vin}V, L=${L*1e6}μH, C=${C*1e6}μF, R=${Rload}Ω`); solver.reset(); const { VoltageSource, MOSFET, Inductor, Capacitor, Resistor } = window.JSSolverPE; solver.components = [ new VoltageSource('VIN', ['vin', '0'], Vin), new MOSFET('MSW_H', ['vin', 'sw'], { Ron: 0.01, Roff: 1e6 }), new MOSFET('MSW_L', ['sw', '0'], { Ron: 0.01, Roff: 1e6 }), new Inductor('L1', ['sw', 'out'], L, {ic: 0}), new Capacitor('C1', ['out', '0'], C, {ic: 0}), new Resistor('RLOAD', ['out', '0'], Rload) ]; solver.isInitialized = true; const validation = solver.validateCircuit(); if (!validation.valid) throw new Error(`電路驗證失敗: ${validation.issues.join(', ')}`); log('同步 Buck 電路建立並驗證成功'); }
+        async function initializeSolver() { try { log('開始初始化 AkingSPICE...'); updateStatus('🔄 初始化解算器...', 'loading'); if (typeof window.AkingSPICE === 'undefined') throw new Error('AkingSPICE library 未載入'); solver = new window.AkingSPICE.AkingSPICE(); solver.setDebug(false); log('AkingSPICE 初始化成功！'); log(`版本: ${window.AkingSPICE.AkingSPICE.getVersionInfo().version}`); updateStatus('✅ 解算器就緒', 'success'); const runBtn = document.getElementById('runBtn'); runBtn.disabled = false; runBtn.textContent = '🚀 開始模擬'; isReady = true; } catch (error) { log(`初始化失敗: ${error.message}`, 'error'); updateStatus('❌ 初始化失敗', 'error'); console.error('AkingSPICE initialization failed:', error); } }
+        function buildBuckCircuit() { const Vin = parseFloat(document.getElementById('inputVoltage').value); const L = parseFloat(document.getElementById('inductance').value) * 1e-6; const C = parseFloat(document.getElementById('capacitance').value) * 1e-6; const Rload = parseFloat(document.getElementById('loadResistance').value); log(`建立同步 Buck 電路: Vin=${Vin}V, L=${L*1e6}μH, C=${C*1e6}μF, R=${Rload}Ω`); solver.reset(); const { VoltageSource, MOSFET, Inductor, Capacitor, Resistor } = window.AkingSPICE; solver.components = [ new VoltageSource('VIN', ['vin', '0'], Vin), new MOSFET('MSW_H', ['vin', 'sw'], { Ron: 0.01, Roff: 1e6 }), new MOSFET('MSW_L', ['sw', '0'], { Ron: 0.01, Roff: 1e6 }), new Inductor('L1', ['sw', 'out'], L, {ic: 0}), new Capacitor('C1', ['out', '0'], C, {ic: 0}), new Resistor('RLOAD', ['out', '0'], Rload) ]; solver.isInitialized = true; const validation = solver.validateCircuit(); if (!validation.valid) throw new Error(`電路驗證失敗: ${validation.issues.join(', ')}`); log('同步 Buck 電路建立並驗證成功'); }
         function updateProgress(current, total) { const progressBar = document.getElementById('progress-bar'); const progressContainer = document.getElementById('progress-container'); if (total > 0) { const percentage = Math.min(100, Math.round((current / total) * 100)); progressBar.style.width = `${percentage}%`; progressBar.textContent = `${percentage}%`; progressContainer.style.display = 'block'; } else { progressContainer.style.display = 'none'; } }
         
         async function runSimulation() {

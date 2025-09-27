@@ -63,7 +63,7 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(port, () => {
-    console.log('🌟 JSSolver-PE 網頁模擬器已啟動!');
+    console.log('🌟 AkingSPICE 網頁模擬器已啟動!');
     console.log(`📱 請在瀏覽器中訪問:`);
     console.log(`   🔗 主要模擬器: http://localhost:${port}`);
     console.log(`   🔗 演示版本: http://localhost:${port}/demo`);

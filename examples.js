@@ -1,12 +1,12 @@
 /**
- * JSSolver-PE 使用範例
+ * AkingSPICE 使用範例
  * 
  * 展示基本的電路分析功能
  */
 
-import { JSSolverPE } from './src/index.js';
+import { AkingSPICE } from './src/index.js';
 
-console.log('=== JSSolver-PE v0.1 範例 ===\n');
+console.log('=== AkingSPICE v0.1 範例 ===\n');
 
 // 範例1: 簡單的電阻分壓電路 - DC分析
 console.log('1. 電阻分壓電路 DC分析');
@@ -20,7 +20,7 @@ R2  2 0 5K
 `;
 
 try {
-    const solver1 = new JSSolverPE(dividerNetlist);
+    const solver1 = new AkingSPICE(dividerNetlist);
     console.log('電路資訊:', solver1.getCircuitInfo());
     
     const dcResult = await solver1.runDCAnalysis();
@@ -55,7 +55,7 @@ C1  2 0 1u
 `;
 
 try {
-    const solver2 = new JSSolverPE(rcNetlist);
+    const solver2 = new AkingSPICE(rcNetlist);
     const transResult = await solver2.runAnalysis('.tran 0.1ms 5ms');
     
     const timeVector = transResult.getTimeVector();
@@ -109,7 +109,7 @@ C1  3 0 2.533e-6
 `;
 
 try {
-    const solver3 = new JSSolverPE(rlcNetlist);
+    const solver3 = new AkingSPICE(rlcNetlist);
     
     // 計算理論諧振頻率
     const L = 10e-3;  // 10mH
@@ -161,7 +161,7 @@ R1 1 2 1K
 `;
 
 try {
-    const solver4 = new JSSolverPE(invalidNetlist);
+    const solver4 = new AkingSPICE(invalidNetlist);
     const validation = solver4.validateCircuit();
     
     console.log('電路驗證結果:');

@@ -78,7 +78,7 @@ AkingSpice/
 ### 批次模擬 API
 
 ```javascript
-import JSSolverPE from './src/index.js';
+import AkingSPICE from './src/index.js';
 
 // 簡單 RC 電路網表
 const netlist = `
@@ -90,7 +90,7 @@ C1 2 0 1e-6
 `;
 
 // 建立求解器並執行分析
-const solver = new JSSolverPE(netlist);
+const solver = new AkingSPICE(netlist);
 const result = await solver.runAnalysis('.tran 1us 5ms');
 
 // 獲取結果
@@ -102,7 +102,7 @@ const v_out = result.getVector('V(2)');
 
 ```javascript
 // 初始化求解器
-const solver = new JSSolverPE(netlist);
+const solver = new AkingSPICE(netlist);
 solver.initTransient('1us', '5ms');
 
 // 模擬迴圈
@@ -139,9 +139,7 @@ npm run test:watch         # 監控模式執行測試
 
 歡迎提交 Issue 和 Pull Request！
 
-## 📄 授權
 
-MIT License - 詳見 [LICENSE](LICENSE) 檔案。
 
 ---
 

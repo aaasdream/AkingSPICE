@@ -1,4 +1,4 @@
-class u {
+class d {
   /**
    * @param {string} name 元件名稱 (如 'R1', 'C2')
    * @param {string} type 元件類型 (如 'R', 'C', 'L', 'V', 'I')
@@ -6,12 +6,12 @@ class u {
    * @param {number|string} value 元件值或表達式
    * @param {Object} params 額外參數
    */
-  constructor(t, e, s, i, n = {}) {
-    this.name = t, this.type = e, this.nodes = [...s], this.rawValue = i, this.params = { ...n }, this.value = this.parseValue(i), this.timeStep = null, this.previousValues = /* @__PURE__ */ new Map(), this.historyTerm = 0, this.operatingPoint = {
+  constructor(t, e, s, i, o = {}) {
+    this.name = t, this.type = e, this.nodes = [...s], this.rawValue = i, this.params = { ...o }, this.value = this.parseValue(i), this.timeStep = null, this.previousValues = /* @__PURE__ */ new Map(), this.historyTerm = 0, this.operatingPoint = {
       voltage: 0,
       current: 0,
       power: 0
-    }, this.temperature = n.temp || 27, this.isNonlinear = !1;
+    }, this.temperature = o.temp || 27, this.isNonlinear = !1;
   }
   /**
    * 解析元件值，支援工程記號 (如 1K, 2.2u, 3.3m)
@@ -49,15 +49,15 @@ class u {
         // femto (小寫f)
       };
       if (e.toUpperCase().endsWith("MEG")) {
-        const n = parseFloat(e.slice(0, -3));
-        if (!isNaN(n))
-          return n * 1e6;
+        const o = parseFloat(e.slice(0, -3));
+        if (!isNaN(o))
+          return o * 1e6;
       }
-      for (const [n, o] of Object.entries(s))
-        if (e.endsWith(n)) {
-          const r = parseFloat(e.slice(0, -n.length));
+      for (const [o, n] of Object.entries(s))
+        if (e.endsWith(o)) {
+          const r = parseFloat(e.slice(0, -o.length));
           if (!isNaN(r))
-            return r * o;
+            return r * n;
         }
       const i = parseFloat(e);
       if (!isNaN(i))
@@ -85,8 +85,8 @@ class u {
    * @param {Map<string, number>} branchCurrents 支路電流
    */
   updateHistory(t, e) {
-    const s = t.get(this.nodes[0]) || 0, i = t.get(this.nodes[1]) || 0, n = s - i;
-    this.previousValues.set("voltage", n), this.operatingPoint.voltage = n;
+    const s = t.get(this.nodes[0]) || 0, i = t.get(this.nodes[1]) || 0, o = s - i;
+    this.previousValues.set("voltage", o), this.operatingPoint.voltage = o;
   }
   /**
    * 計算功耗
@@ -136,12 +136,12 @@ class u {
    * @returns {BaseComponent}
    */
   static fromJSON(t) {
-    return new u(t.name, t.type, t.nodes, t.rawValue, t.params);
+    return new d(t.name, t.type, t.nodes, t.rawValue, t.params);
   }
 }
-class S extends u {
-  constructor(t, e, s, i, n = {}) {
-    if (super(t, e, s, i, n), s.length !== 2)
+class S extends d {
+  constructor(t, e, s, i, o = {}) {
+    if (super(t, e, s, i, o), s.length !== 2)
       throw new Error(`${e} ${t} must have exactly 2 nodes`);
   }
   /**
@@ -154,7 +154,7 @@ class S extends u {
     return e - s;
   }
 }
-class y extends S {
+class $ extends S {
   /**
    * @param {string} name 電阻名稱 (如 'R1')
    * @param {string[]} nodes 連接節點 [n1, n2]
@@ -243,7 +243,7 @@ class y extends S {
     return t >= 1e6 ? e = `${(t / 1e6).toFixed(2)}MΩ` : t >= 1e3 ? e = `${(t / 1e3).toFixed(2)}kΩ` : e = `${t.toFixed(2)}Ω`, `${this.name}: ${this.nodes[0]}-${this.nodes[1]} ${e}`;
   }
 }
-class $ extends S {
+class v extends S {
   /**
    * @param {string} name 電容名稱 (如 'C1')
    * @param {string[]} nodes 連接節點 [n1, n2]
@@ -295,8 +295,8 @@ class $ extends S {
     const e = this.getVoltage(t);
     if (!this.timeStep)
       return this.operatingPoint.current = 0, 0;
-    const s = this.previousValues.get("voltage") || 0, n = this.getCapacitance() * (e - s) / this.timeStep;
-    return this.operatingPoint.current = n, n;
+    const s = this.previousValues.get("voltage") || 0, o = this.getCapacitance() * (e - s) / this.timeStep;
+    return this.operatingPoint.current = o, o;
   }
   /**
    * 計算存儲的能量 E = 0.5 * C * V²
@@ -357,7 +357,7 @@ class $ extends S {
     return this.ic !== 0 && (s += ` IC=${this.ic}V`), s;
   }
 }
-class v extends S {
+class x extends S {
   /**
    * @param {string} name 電感名稱 (如 'L1')
    * @param {string[]} nodes 連接節點 [n1, n2]
@@ -415,8 +415,8 @@ class v extends S {
   getVoltageFromCurrent(t) {
     if (!this.timeStep)
       return t * this.resistance;
-    const e = this.previousValues.get("current") || 0, s = this.getInductance(), i = (t - e) / this.timeStep, n = s * i + this.resistance * t;
-    return this.operatingPoint.current = t, this.operatingPoint.voltage = n, n;
+    const e = this.previousValues.get("current") || 0, s = this.getInductance(), i = (t - e) / this.timeStep, o = s * i + this.resistance * t;
+    return this.operatingPoint.current = t, this.operatingPoint.voltage = o, o;
   }
   /**
    * 計算存儲的磁能 E = 0.5 * L * I²
@@ -477,7 +477,7 @@ class v extends S {
     return this.resistance > 0 && (s += ` R=${this.resistance}Ω`), this.ic !== 0 && (s += ` IC=${this.ic}A`), s;
   }
 }
-class f extends u {
+class f extends d {
   /**
    * @param {string} name 電壓源名稱 (如 'VIN', 'V1')
    * @param {string[]} nodes 連接節點 [正, 負]
@@ -519,12 +519,12 @@ class f extends u {
   parseSpiceSource(t) {
     const e = t.trim().toUpperCase(), s = e.match(/^(?:DC\()?(-?[\d.]+(?:[eE][-+]?\d+)?)(?:V)?(?:\))?$/);
     if (s) {
-      const o = parseFloat(s[1]);
+      const n = parseFloat(s[1]);
       return {
         type: "DC",
-        dc: o,
-        amplitude: o,
-        offset: o
+        dc: n,
+        amplitude: n,
+        offset: n
       };
     }
     const i = e.match(/^SINE\(\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*\)$/);
@@ -537,21 +537,21 @@ class f extends u {
         delay: parseFloat(i[4] || "0"),
         damping: parseFloat(i[5] || "0")
       };
-    const n = e.match(/^PULSE\(\s*([-\d.]+(?:[eE][-+]?\d+)?)\s+([-\d.]+(?:[eE][-+]?\d+)?)\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*\)$/);
-    if (n)
+    const o = e.match(/^PULSE\(\s*([-\d.]+(?:[eE][-+]?\d+)?)\s+([-\d.]+(?:[eE][-+]?\d+)?)\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*\)$/);
+    if (o)
       return {
         type: "PULSE",
-        v1: parseFloat(n[1]),
-        v2: parseFloat(n[2]),
-        td: parseFloat(n[3] || "0"),
+        v1: parseFloat(o[1]),
+        v2: parseFloat(o[2]),
+        td: parseFloat(o[3] || "0"),
         // 延遲時間
-        tr: parseFloat(n[4] || "1e-9"),
+        tr: parseFloat(o[4] || "1e-9"),
         // 上升時間
-        tf: parseFloat(n[5] || "1e-9"),
+        tf: parseFloat(o[5] || "1e-9"),
         // 下降時間
-        pw: parseFloat(n[6] || "1e-6"),
+        pw: parseFloat(o[6] || "1e-6"),
         // 脈寬
-        per: parseFloat(n[7] || "2e-6")
+        per: parseFloat(o[7] || "2e-6")
         // 周期
       };
     throw new Error(`Cannot parse voltage source: ${t}`);
@@ -590,27 +590,27 @@ class f extends u {
    * v(t) = offset + amplitude * sin(2π * frequency * (t - delay)) * exp(-damping * (t - delay))
    */
   getSineValue(t, e) {
-    const { offset: s, amplitude: i, frequency: n, delay: o, damping: r } = e;
-    if (t < o)
+    const { offset: s, amplitude: i, frequency: o, delay: n, damping: r } = e;
+    if (t < n)
       return s;
-    const a = t - o, c = 2 * Math.PI * n, l = r > 0 ? Math.exp(-r * a) : 1;
-    return s + i * Math.sin(c * a) * l;
+    const a = t - n, c = 2 * Math.PI * o, h = r > 0 ? Math.exp(-r * a) : 1;
+    return s + i * Math.sin(c * a) * h;
   }
   /**
    * 計算脈衝波值
    */
   getPulseValue(t, e) {
-    const { v1: s, v2: i, td: n, tr: o, tf: r, pw: a, per: c } = e;
-    if (t < n)
+    const { v1: s, v2: i, td: o, tr: n, tf: r, pw: a, per: c } = e;
+    if (t < o)
       return s;
-    const l = (t - n) % c;
-    if (l <= o)
-      return s + (i - s) * (l / o);
-    if (l <= o + a)
+    const h = (t - o) % c;
+    if (h <= n)
+      return s + (i - s) * (h / n);
+    if (h <= n + a)
       return i;
-    if (l <= o + a + r) {
-      const d = l - o - a;
-      return i - (i - s) * (d / r);
+    if (h <= n + a + r) {
+      const u = h - n - a;
+      return i - (i - s) * (u / r);
     } else
       return s;
   }
@@ -618,15 +618,15 @@ class f extends u {
    * 計算指數波值 (用於EXP源)
    */
   getExpValue(t, e) {
-    const { v1: s, v2: i, td1: n, tau1: o, td2: r, tau2: a } = e;
-    if (t < n)
+    const { v1: s, v2: i, td1: o, tau1: n, td2: r, tau2: a } = e;
+    if (t < o)
       return s;
     if (t < r) {
-      const c = t - n;
-      return s + (i - s) * (1 - Math.exp(-c / o));
+      const c = t - o;
+      return s + (i - s) * (1 - Math.exp(-c / n));
     } else {
-      const c = r - n, l = t - r, d = s + (i - s) * (1 - Math.exp(-c / o));
-      return d + (s - d) * (1 - Math.exp(-l / a));
+      const c = r - o, h = t - r, u = s + (i - s) * (1 - Math.exp(-c / n));
+      return u + (s - u) * (1 - Math.exp(-h / a));
     }
   }
   /**
@@ -637,9 +637,9 @@ class f extends u {
     if (!s || s.length === 0)
       return 0;
     for (let i = 0; i < s.length - 1; i++) {
-      const [n, o] = s[i], [r, a] = s[i + 1];
-      if (t >= n && t <= r)
-        return o + (a - o) * (t - n) / (r - n);
+      const [o, n] = s[i], [r, a] = s[i + 1];
+      if (t >= o && t <= r)
+        return n + (a - n) * (t - o) / (r - o);
     }
     return t >= s[s.length - 1][0] ? s[s.length - 1][1] : s[0][1];
   }
@@ -675,7 +675,7 @@ class f extends u {
     return `${this.name}: ${this.nodes[0]}(+) ${this.nodes[1]}(-) ${e}`;
   }
 }
-class x extends u {
+class b extends d {
   /**
    * @param {string} name 電流源名稱 (如 'IIN', 'I1')
    * @param {string[]} nodes 連接節點 [流出, 流入]
@@ -741,7 +741,7 @@ class x extends u {
     return `${this.name}: ${this.nodes[0]}→${this.nodes[1]} ${e}`;
   }
 }
-class b extends u {
+class T extends d {
   /**
    * @param {string} name VCVS名稱 (如 'E1')
    * @param {string[]} outputNodes 輸出節點 [正, 負]
@@ -749,9 +749,9 @@ class b extends u {
    * @param {number} gain 電壓增益
    * @param {Object} params 額外參數
    */
-  constructor(t, e, s, i, n = {}) {
-    const o = [...e, ...s];
-    super(t, "VCVS", o, i, n), this.outputNodes = [...e], this.controlNodes = [...s], this.gain = i;
+  constructor(t, e, s, i, o = {}) {
+    const n = [...e, ...s];
+    super(t, "VCVS", n, i, o), this.outputNodes = [...e], this.controlNodes = [...s], this.gain = i;
   }
   needsCurrentVariable() {
     return !0;
@@ -760,7 +760,7 @@ class b extends u {
     return `${this.name}: ${this.outputNodes[0]}-${this.outputNodes[1]} = ${this.gain} * (${this.controlNodes[0]}-${this.controlNodes[1]})`;
   }
 }
-class T extends u {
+class R extends d {
   /**
    * @param {string} name VCCS名稱 (如 'G1')
    * @param {string[]} outputNodes 輸出節點 [流出, 流入]
@@ -768,9 +768,9 @@ class T extends u {
    * @param {number} transconductance 跨導 (S)
    * @param {Object} params 額外參數
    */
-  constructor(t, e, s, i, n = {}) {
-    const o = [...e, ...s];
-    super(t, "VCCS", o, i, n), this.outputNodes = [...e], this.controlNodes = [...s], this.transconductance = i;
+  constructor(t, e, s, i, o = {}) {
+    const n = [...e, ...s];
+    super(t, "VCCS", n, i, o), this.outputNodes = [...e], this.controlNodes = [...s], this.transconductance = i;
   }
   needsCurrentVariable() {
     return !1;
@@ -779,7 +779,7 @@ class T extends u {
     return `${this.name}: I(${this.outputNodes[0]}→${this.outputNodes[1]}) = ${this.transconductance} * V(${this.controlNodes[0]}-${this.controlNodes[1]})`;
   }
 }
-class C extends u {
+class C extends d {
   /**
    * @param {string} name MOSFET名稱 (如 'M1', 'Q1')
    * @param {string[]} nodes 連接節點 [drain, source, gate] (gate節點在此模型中僅用於標識)
@@ -862,14 +862,14 @@ class C extends u {
    * @param {Map} voltageSourceMap 電壓源映射
    * @param {number} time 當前時間
    */
-  stamp(t, e, s, i, n) {
-    const o = this.drain === "0" || this.drain === "gnd" ? -1 : s.get(this.drain), r = this.source === "0" || this.source === "gnd" ? -1 : s.get(this.source);
-    if (o === void 0 || r === void 0)
+  stamp(t, e, s, i, o) {
+    const n = this.drain === "0" || this.drain === "gnd" ? -1 : s.get(this.drain), r = this.source === "0" || this.source === "gnd" ? -1 : s.get(this.source);
+    if (n === void 0 || r === void 0)
       throw new Error(`MOSFET ${this.name}: Node mapping not found (drain: ${this.drain}, source: ${this.source})`);
     let a = 0;
     this.drainSourceVoltage !== void 0 && (a = this.drainSourceVoltage);
-    const l = 1 / this.getEquivalentResistance(a);
-    o >= 0 && (t.addAt(o, o, l), r >= 0 && t.addAt(o, r, -l)), r >= 0 && (t.addAt(r, r, l), o >= 0 && t.addAt(r, o, -l));
+    const h = 1 / this.getEquivalentResistance(a);
+    n >= 0 && (t.addAt(n, n, h), r >= 0 && t.addAt(n, r, -h)), r >= 0 && (t.addAt(r, r, h), n >= 0 && t.addAt(r, n, -h));
   }
   /**
    * 更新元件狀態 (在每個時間步後調用)
@@ -878,8 +878,8 @@ class C extends u {
    */
   updateState(t, e) {
     this.drainSourceVoltage = t, this.totalCurrent = e;
-    const s = this.getMOSFETResistance(), i = this.getBodyDiodeResistance(t), n = this.getEquivalentResistance(t);
-    this.mosfetCurrent = e * (n / s), this.diodeCurrent = e * (n / i);
+    const s = this.getMOSFETResistance(), i = this.getBodyDiodeResistance(t), o = this.getEquivalentResistance(t);
+    this.mosfetCurrent = e * (o / s), this.diodeCurrent = e * (o / i);
   }
   /**
    * 檢查是否需要電流變數 (對於理想開關，通常不需要)
@@ -964,15 +964,15 @@ class I {
     try {
       const s = this.preprocessLines(e);
       for (let i = 0; i < s.length; i++) {
-        const n = s[i];
-        if (n.length !== 0)
+        const o = s[i];
+        if (o.length !== 0)
           try {
-            this.parseLine(n, i + 1), this.stats.parsedLines++;
-          } catch (o) {
+            this.parseLine(o, i + 1), this.stats.parsedLines++;
+          } catch (n) {
             this.stats.errors.push({
               line: i + 1,
-              content: n,
-              error: o.message
+              content: o,
+              error: n.message
             });
           }
       }
@@ -1010,11 +1010,11 @@ class I {
     for (let i of t) {
       if (i.startsWith("*") || i.startsWith(";"))
         continue;
-      const n = Math.min(
+      const o = Math.min(
         i.indexOf("$") >= 0 ? i.indexOf("$") : i.length,
         i.indexOf(";") >= 0 ? i.indexOf(";") : i.length
       );
-      i = i.substring(0, n).trim(), i.length !== 0 && (i.startsWith("+") ? s += " " + i.substring(1).trim() : (s.length > 0 && e.push(s), s = i));
+      i = i.substring(0, o).trim(), i.length !== 0 && (i.startsWith("+") ? s += " " + i.substring(1).trim() : (s.length > 0 && e.push(s), s = i));
     }
     return s.length > 0 && e.push(s), e;
   }
@@ -1028,32 +1028,32 @@ class I {
     const s = t.split(/\s+/);
     if (s.length === 0) return null;
     const i = s[0][0].toUpperCase();
-    let n = null;
+    let o = null;
     try {
       switch (i) {
         case "R":
-          n = this.parseResistor(s);
+          o = this.parseResistor(s);
           break;
         case "C":
-          n = this.parseCapacitor(s);
+          o = this.parseCapacitor(s);
           break;
         case "L":
-          n = this.parseInductor(s);
+          o = this.parseInductor(s);
           break;
         case "V":
-          n = this.parseVoltageSource(s);
+          o = this.parseVoltageSource(s);
           break;
         case "I":
-          n = this.parseCurrentSource(s);
+          o = this.parseCurrentSource(s);
           break;
         case "E":
-          n = this.parseVCVS(s);
+          o = this.parseVCVS(s);
           break;
         case "G":
-          n = this.parseVCCS(s);
+          o = this.parseVCCS(s);
           break;
         case "M":
-          n = this.parseMOSFET(s);
+          o = this.parseMOSFET(s);
           break;
         case ".":
           this.parseDirective(s);
@@ -1061,10 +1061,10 @@ class I {
         default:
           console.warn(`Unknown component type: ${s[0]} (line ${e})`), this.stats.skippedLines++;
       }
-    } catch (o) {
-      throw new Error(`Line ${e}: ${o.message}`);
+    } catch (n) {
+      throw new Error(`Line ${e}: ${n.message}`);
     }
-    return n;
+    return o;
   }
   /**
    * 解析電阻
@@ -1074,8 +1074,8 @@ class I {
   parseResistor(t) {
     if (t.length < 4)
       throw new Error("Resistor requires at least 4 tokens: R<name> <node1> <node2> <value>");
-    const e = t[0], s = [t[1], t[2]], i = t[3], n = this.parseParameters(t.slice(4)), o = new y(e, s, i, n);
-    return this.components.push(o), o;
+    const e = t[0], s = [t[1], t[2]], i = t[3], o = this.parseParameters(t.slice(4)), n = new $(e, s, i, o);
+    return this.components.push(n), n;
   }
   /**
    * 解析電容
@@ -1085,8 +1085,8 @@ class I {
   parseCapacitor(t) {
     if (t.length < 4)
       throw new Error("Capacitor requires at least 4 tokens: C<name> <node1> <node2> <value>");
-    const e = t[0], s = [t[1], t[2]], i = t[3], n = this.parseParameters(t.slice(4)), o = new $(e, s, i, n);
-    return this.components.push(o), o;
+    const e = t[0], s = [t[1], t[2]], i = t[3], o = this.parseParameters(t.slice(4)), n = new v(e, s, i, o);
+    return this.components.push(n), n;
   }
   /**
    * 解析電感
@@ -1096,8 +1096,8 @@ class I {
   parseInductor(t) {
     if (t.length < 4)
       throw new Error("Inductor requires at least 4 tokens: L<name> <node1> <node2> <value>");
-    const e = t[0], s = [t[1], t[2]], i = t[3], n = this.parseParameters(t.slice(4)), o = new v(e, s, i, n);
-    return this.components.push(o), o;
+    const e = t[0], s = [t[1], t[2]], i = t[3], o = this.parseParameters(t.slice(4)), n = new x(e, s, i, o);
+    return this.components.push(n), n;
   }
   /**
    * 解析 MOSFET
@@ -1107,7 +1107,7 @@ class I {
   parseMOSFET(t) {
     if (t.length < 4)
       throw new Error("MOSFET requires at least 4 tokens: M<name> <drain> <source> <gate>");
-    const e = t[0], s = t[1], i = t[2], n = t[3], o = [s, i, n], r = this.parseParameters(t.slice(4)), a = {
+    const e = t[0], s = t[1], i = t[2], o = t[3], n = [s, i, o], r = this.parseParameters(t.slice(4)), a = {
       Ron: r.Ron || r.ron || "1m",
       // 默認 1mΩ
       Roff: r.Roff || r.roff || "1M",
@@ -1115,7 +1115,7 @@ class I {
       Vf_diode: r.Vf || r.vf || r.Vf_diode || "0.7",
       Von_diode: r.Von_diode || r.von_diode || "1m",
       Roff_diode: r.Roff_diode || r.roff_diode || "1M"
-    }, c = new C(e, o, a);
+    }, c = new C(e, n, a);
     return this.components.push(c), c;
   }
   /**
@@ -1128,8 +1128,8 @@ class I {
       throw new Error("Voltage source requires at least 4 tokens: V<name> <node+> <node-> <source>");
     const e = t[0], s = [t[1], t[2]];
     let i = t.slice(3).join(" ");
-    const n = {}, o = new f(e, s, i, n);
-    return this.components.push(o), o;
+    const o = {}, n = new f(e, s, i, o);
+    return this.components.push(n), n;
   }
   /**
    * 解析電流源
@@ -1141,8 +1141,8 @@ class I {
       throw new Error("Current source requires at least 4 tokens: I<name> <node+> <node-> <source>");
     const e = t[0], s = [t[1], t[2]];
     let i = t.slice(3).join(" ");
-    const n = {}, o = new x(e, s, i, n);
-    return this.components.push(o), o;
+    const o = {}, n = new b(e, s, i, o);
+    return this.components.push(n), n;
   }
   /**
    * 解析壓控電壓源 (VCVS)
@@ -1151,8 +1151,8 @@ class I {
   parseVCVS(t) {
     if (t.length < 6)
       throw new Error("VCVS requires 6 tokens: E<name> <out+> <out-> <in+> <in-> <gain>");
-    const e = t[0], s = [t[1], t[2]], i = [t[3], t[4]], n = parseFloat(t[5]), o = new b(e, s, i, n);
-    this.components.push(o);
+    const e = t[0], s = [t[1], t[2]], i = [t[3], t[4]], o = parseFloat(t[5]), n = new T(e, s, i, o);
+    this.components.push(n);
   }
   /**
    * 解析壓控電流源 (VCCS)
@@ -1161,8 +1161,8 @@ class I {
   parseVCCS(t) {
     if (t.length < 6)
       throw new Error("VCCS requires 6 tokens: G<name> <out+> <out-> <in+> <in-> <gm>");
-    const e = t[0], s = [t[1], t[2]], i = [t[3], t[4]], n = parseFloat(t[5]), o = new T(e, s, i, n);
-    this.components.push(o);
+    const e = t[0], s = [t[1], t[2]], i = [t[3], t[4]], o = parseFloat(t[5]), n = new R(e, s, i, o);
+    this.components.push(n);
   }
   /**
    * 解析指令 (以 . 開頭的行)
@@ -1227,8 +1227,8 @@ class I {
     for (let e = 1; e < t.length; e++) {
       const s = t[e], i = s.indexOf("=");
       if (i > 0) {
-        const n = s.substring(0, i), o = s.substring(i + 1);
-        this.parameters.set(n, o);
+        const o = s.substring(0, i), n = s.substring(i + 1);
+        this.parameters.set(o, n);
       }
     }
   }
@@ -1251,8 +1251,8 @@ class I {
     for (let e = 1; e < t.length; e++) {
       const s = t[e], i = s.indexOf("=");
       if (i > 0) {
-        const n = s.substring(0, i), o = s.substring(i + 1);
-        this.options.set(n.toLowerCase(), o);
+        const o = s.substring(0, i), n = s.substring(i + 1);
+        this.options.set(o.toLowerCase(), n);
       } else
         this.options.set(s.toLowerCase(), !0);
     }
@@ -1267,12 +1267,12 @@ class I {
     for (const s of t) {
       const i = s.indexOf("=");
       if (i > 0) {
-        const n = s.substring(0, i).toLowerCase(), o = s.substring(i + 1), r = o.trim();
+        const o = s.substring(0, i).toLowerCase(), n = s.substring(i + 1), r = n.trim();
         if (/^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$/.test(r)) {
           const a = parseFloat(r);
-          e[n] = isNaN(a) ? o : a;
+          e[o] = isNaN(a) ? n : a;
         } else
-          e[n] = o;
+          e[o] = n;
       }
     }
     return e;
@@ -1525,23 +1525,23 @@ class g {
    * @returns {number[]} 置換向量
    */
   static luDecomposition(t) {
-    const e = t.rows, s = Array.from({ length: e }, (i, n) => n);
+    const e = t.rows, s = Array.from({ length: e }, (i, o) => o);
     for (let i = 0; i < e - 1; i++) {
-      let n = i, o = Math.abs(t.get(i, i));
+      let o = i, n = Math.abs(t.get(i, i));
       for (let a = i + 1; a < e; a++) {
         const c = Math.abs(t.get(a, i));
-        c > o && (o = c, n = a);
+        c > n && (n = c, o = a);
       }
-      if (o < 1e-14)
+      if (n < 1e-14)
         throw new Error(`Matrix is singular or nearly singular at column ${i}`);
-      n !== i && (this.swapRows(t, i, n), [s[i], s[n]] = [s[n], s[i]]);
+      o !== i && (this.swapRows(t, i, o), [s[i], s[o]] = [s[o], s[i]]);
       const r = t.get(i, i);
       for (let a = i + 1; a < e; a++) {
         const c = t.get(a, i) / r;
         t.set(a, i, c);
-        for (let l = i + 1; l < e; l++) {
-          const d = t.get(a, l) - c * t.get(i, l);
-          t.set(a, l, d);
+        for (let h = i + 1; h < e; h++) {
+          const u = t.get(a, h) - c * t.get(i, h);
+          t.set(a, h, u);
         }
       }
     }
@@ -1558,8 +1558,8 @@ class g {
   static swapRows(t, e, s) {
     if (e !== s)
       for (let i = 0; i < t.cols; i++) {
-        const n = t.get(e, i);
-        t.set(e, i, t.get(s, i)), t.set(s, i, n);
+        const o = t.get(e, i);
+        t.set(e, i, t.get(s, i)), t.set(s, i, o);
       }
   }
   /**
@@ -1582,10 +1582,10 @@ class g {
   static forwardSubstitution(t, e) {
     const s = e.size;
     for (let i = 0; i < s; i++) {
-      let n = 0;
-      for (let o = 0; o < i; o++)
-        n += t.get(i, o) * e.get(o);
-      e.set(i, e.get(i) - n);
+      let o = 0;
+      for (let n = 0; n < i; n++)
+        o += t.get(i, n) * e.get(n);
+      e.set(i, e.get(i) - o);
     }
   }
   /**
@@ -1596,10 +1596,10 @@ class g {
   static backwardSubstitution(t, e) {
     const s = e.size;
     for (let i = s - 1; i >= 0; i--) {
-      let n = 0;
-      for (let o = i + 1; o < s; o++)
-        n += t.get(i, o) * e.get(o);
-      e.set(i, (e.get(i) - n) / t.get(i, i));
+      let o = 0;
+      for (let n = i + 1; n < s; n++)
+        o += t.get(i, n) * e.get(n);
+      e.set(i, (e.get(i) - o) / t.get(i, i));
     }
   }
   /**
@@ -1610,8 +1610,8 @@ class g {
   static estimateConditionNumber(t) {
     let e = 0, s = 1 / 0;
     for (let i = 0; i < t.rows; i++) {
-      const n = Math.abs(t.get(i, i));
-      e = Math.max(e, n), s = Math.min(s, n);
+      const o = Math.abs(t.get(i, i));
+      e = Math.max(e, o), s = Math.min(s, o);
     }
     return s > 1e-14 ? e / s : 1 / 0;
   }
@@ -1641,22 +1641,22 @@ class V {
   analyzeCircuit(t) {
     this.reset();
     const e = /* @__PURE__ */ new Set(), s = /* @__PURE__ */ new Set();
-    for (const o of t) {
-      if (o.nodes)
-        for (const r of o.nodes)
+    for (const n of t) {
+      if (n.nodes)
+        for (const r of n.nodes)
           r !== "0" && r !== "gnd" && e.add(r);
-      (o.type === "V" || o.needsCurrentVariable()) && s.add(o.name);
+      (n.type === "V" || n.needsCurrentVariable()) && s.add(n.name);
     }
     let i = 0;
-    for (const o of Array.from(e).sort())
-      this.nodeMap.set(o, i), this.debugInfo.nodeNames.push(o), i++;
+    for (const n of Array.from(e).sort())
+      this.nodeMap.set(n, i), this.debugInfo.nodeNames.push(n), i++;
     this.nodeCount = i;
-    let n = 0;
-    for (const o of Array.from(s).sort())
-      this.voltageSourceMap.set(o, this.nodeCount + n), this.debugInfo.voltageSourceNames.push(o), n++;
-    this.voltageSourceCount = n, this.matrixSize = this.nodeCount + this.voltageSourceCount, this.debugInfo.matrixLabels = [
-      ...this.debugInfo.nodeNames.map((o) => `V(${o})`),
-      ...this.debugInfo.voltageSourceNames.map((o) => `I(${o})`)
+    let o = 0;
+    for (const n of Array.from(s).sort())
+      this.voltageSourceMap.set(n, this.nodeCount + o), this.debugInfo.voltageSourceNames.push(n), o++;
+    this.voltageSourceCount = o, this.matrixSize = this.nodeCount + this.voltageSourceCount, this.debugInfo.matrixLabels = [
+      ...this.debugInfo.nodeNames.map((n) => `V(${n})`),
+      ...this.debugInfo.voltageSourceNames.map((n) => `I(${n})`)
     ], console.log(`MNA Analysis: ${this.nodeCount} nodes, ${this.voltageSourceCount} voltage sources, matrix size: ${this.matrixSize}x${this.matrixSize}`);
   }
   /**
@@ -1717,8 +1717,8 @@ class V {
    * 在節點i和j之間添加電導 G = 1/R
    */
   stampResistor(t) {
-    const e = t.nodes, s = 1 / t.value, i = this.getNodeIndex(e[0]), n = this.getNodeIndex(e[1]);
-    i >= 0 && (this.matrix.addAt(i, i, s), n >= 0 && this.matrix.addAt(i, n, -s)), n >= 0 && (this.matrix.addAt(n, n, s), i >= 0 && this.matrix.addAt(n, i, -s));
+    const e = t.nodes, s = 1 / t.value, i = this.getNodeIndex(e[0]), o = this.getNodeIndex(e[1]);
+    i >= 0 && (this.matrix.addAt(i, i, s), o >= 0 && this.matrix.addAt(i, o, -s)), o >= 0 && (this.matrix.addAt(o, o, s), i >= 0 && this.matrix.addAt(o, i, -s));
   }
   /**
    * 電容的MNA印記 (用於暫態分析)
@@ -1728,55 +1728,55 @@ class V {
   stampCapacitor(t) {
     if (!t.timeStep)
       return;
-    const e = t.nodes, s = t.value, i = t.timeStep, n = s / i, o = this.getNodeIndex(e[0]), r = this.getNodeIndex(e[1]);
-    o >= 0 && (this.matrix.addAt(o, o, n), r >= 0 && this.matrix.addAt(o, r, -n)), r >= 0 && (this.matrix.addAt(r, r, n), o >= 0 && this.matrix.addAt(r, o, -n)), t.historyTerm !== void 0 && (o >= 0 && this.rhs.addAt(o, -t.historyTerm), r >= 0 && this.rhs.addAt(r, t.historyTerm));
+    const e = t.nodes, s = t.value, i = t.timeStep, o = s / i, n = this.getNodeIndex(e[0]), r = this.getNodeIndex(e[1]);
+    n >= 0 && (this.matrix.addAt(n, n, o), r >= 0 && this.matrix.addAt(n, r, -o)), r >= 0 && (this.matrix.addAt(r, r, o), n >= 0 && this.matrix.addAt(r, n, -o)), t.historyTerm !== void 0 && (n >= 0 && this.rhs.addAt(n, -t.historyTerm), r >= 0 && this.rhs.addAt(r, t.historyTerm));
   }
   /**
    * 電感的MNA印記 (需要電流變數)
    * 使用伴隨模型: v_L(t) = L * di/dt ≈ L/h * (i(t) - i(t-h))
    */
   stampInductor(t) {
-    const e = t.nodes, s = t.value, i = this.getNodeIndex(e[0]), n = this.getNodeIndex(e[1]), o = this.voltageSourceMap.get(t.name);
-    if (o === void 0)
+    const e = t.nodes, s = t.value, i = this.getNodeIndex(e[0]), o = this.getNodeIndex(e[1]), n = this.voltageSourceMap.get(t.name);
+    if (n === void 0)
       throw new Error(`Inductor ${t.name} current variable not found`);
-    if (i >= 0 && (this.matrix.addAt(i, o, 1), this.matrix.addAt(o, i, 1)), n >= 0 && (this.matrix.addAt(n, o, -1), this.matrix.addAt(o, n, -1)), t.timeStep) {
+    if (i >= 0 && (this.matrix.addAt(i, n, 1), this.matrix.addAt(n, i, 1)), o >= 0 && (this.matrix.addAt(o, n, -1), this.matrix.addAt(n, o, -1)), t.timeStep) {
       const r = t.timeStep;
-      this.matrix.addAt(o, o, -s / r), t.historyTerm !== void 0 && this.rhs.addAt(o, -s / r * t.historyTerm);
+      this.matrix.addAt(n, n, -s / r), t.historyTerm !== void 0 && this.rhs.addAt(n, -s / r * t.historyTerm);
     }
   }
   /**
    * 電壓源的MNA印記
    */
   stampVoltageSource(t, e) {
-    const s = t.nodes, i = this.getNodeIndex(s[0]), n = this.getNodeIndex(s[1]), o = this.voltageSourceMap.get(t.name);
-    if (o === void 0)
+    const s = t.nodes, i = this.getNodeIndex(s[0]), o = this.getNodeIndex(s[1]), n = this.voltageSourceMap.get(t.name);
+    if (n === void 0)
       throw new Error(`Voltage source ${t.name} current variable not found`);
-    i >= 0 && (this.matrix.addAt(i, o, 1), this.matrix.addAt(o, i, 1)), n >= 0 && (this.matrix.addAt(n, o, -1), this.matrix.addAt(o, n, -1));
+    i >= 0 && (this.matrix.addAt(i, n, 1), this.matrix.addAt(n, i, 1)), o >= 0 && (this.matrix.addAt(o, n, -1), this.matrix.addAt(n, o, -1));
     const r = t.getValue(e);
-    this.rhs.addAt(o, r);
+    this.rhs.addAt(n, r);
   }
   /**
    * 電流源的MNA印記
    */
   stampCurrentSource(t, e) {
-    const s = t.nodes, i = this.getNodeIndex(s[0]), n = this.getNodeIndex(s[1]), o = t.getValue(e);
-    i >= 0 && this.rhs.addAt(i, -o), n >= 0 && this.rhs.addAt(n, o);
+    const s = t.nodes, i = this.getNodeIndex(s[0]), o = this.getNodeIndex(s[1]), n = t.getValue(e);
+    i >= 0 && this.rhs.addAt(i, -n), o >= 0 && this.rhs.addAt(o, n);
   }
   /**
    * 壓控電壓源 (VCVS) 的印記
    * E * V_control = V_output
    */
   stampVCVS(t) {
-    const e = [t.nodes[0], t.nodes[1]], s = [t.nodes[2], t.nodes[3]], i = t.value, n = this.getNodeIndex(e[0]), o = this.getNodeIndex(e[1]), r = this.getNodeIndex(s[0]), a = this.getNodeIndex(s[1]), c = this.voltageSourceMap.get(t.name);
-    n >= 0 && (this.matrix.addAt(n, c, 1), this.matrix.addAt(c, n, 1)), o >= 0 && (this.matrix.addAt(o, c, -1), this.matrix.addAt(c, o, -1)), r >= 0 && this.matrix.addAt(c, r, -i), a >= 0 && this.matrix.addAt(c, a, i);
+    const e = [t.nodes[0], t.nodes[1]], s = [t.nodes[2], t.nodes[3]], i = t.value, o = this.getNodeIndex(e[0]), n = this.getNodeIndex(e[1]), r = this.getNodeIndex(s[0]), a = this.getNodeIndex(s[1]), c = this.voltageSourceMap.get(t.name);
+    o >= 0 && (this.matrix.addAt(o, c, 1), this.matrix.addAt(c, o, 1)), n >= 0 && (this.matrix.addAt(n, c, -1), this.matrix.addAt(c, n, -1)), r >= 0 && this.matrix.addAt(c, r, -i), a >= 0 && this.matrix.addAt(c, a, i);
   }
   /**
    * 壓控電流源 (VCCS) 的印記  
    * I_output = gm * V_control
    */
   stampVCCS(t) {
-    const e = [t.nodes[0], t.nodes[1]], s = [t.nodes[2], t.nodes[3]], i = t.value, n = this.getNodeIndex(e[0]), o = this.getNodeIndex(e[1]), r = this.getNodeIndex(s[0]), a = this.getNodeIndex(s[1]);
-    n >= 0 && r >= 0 && this.matrix.addAt(n, r, i), n >= 0 && a >= 0 && this.matrix.addAt(n, a, -i), o >= 0 && r >= 0 && this.matrix.addAt(o, r, -i), o >= 0 && a >= 0 && this.matrix.addAt(o, a, i);
+    const e = [t.nodes[0], t.nodes[1]], s = [t.nodes[2], t.nodes[3]], i = t.value, o = this.getNodeIndex(e[0]), n = this.getNodeIndex(e[1]), r = this.getNodeIndex(s[0]), a = this.getNodeIndex(s[1]);
+    o >= 0 && r >= 0 && this.matrix.addAt(o, r, i), o >= 0 && a >= 0 && this.matrix.addAt(o, a, -i), n >= 0 && r >= 0 && this.matrix.addAt(n, r, -i), n >= 0 && a >= 0 && this.matrix.addAt(n, a, i);
   }
   /**
    * 獲取節點在矩陣中的索引
@@ -1824,12 +1824,12 @@ class V {
     const e = "     " + this.debugInfo.matrixLabels.map((s) => s.padStart(12)).join("");
     console.log(e + "     RHS");
     for (let s = 0; s < this.matrixSize; s++) {
-      let n = this.debugInfo.matrixLabels[s].padStart(4) + " ";
-      for (let o = 0; o < this.matrixSize; o++) {
-        const r = this.matrix.get(s, o);
-        n += r.toFixed(t).padStart(12);
+      let o = this.debugInfo.matrixLabels[s].padStart(4) + " ";
+      for (let n = 0; n < this.matrixSize; n++) {
+        const r = this.matrix.get(s, n);
+        o += r.toFixed(t).padStart(12);
       }
-      n += " | " + this.rhs.get(s).toFixed(t).padStart(10), console.log(n);
+      o += " | " + this.rhs.get(s).toFixed(t).padStart(10), console.log(o);
     }
     console.log(`==================
 `);
@@ -1861,10 +1861,10 @@ class w {
    */
   addTimePoint(t, e, s) {
     this.timeVector.push(t);
-    for (const [i, n] of e)
-      this.nodeVoltages.has(i) || this.nodeVoltages.set(i, []), this.nodeVoltages.get(i).push(n);
-    for (const [i, n] of s)
-      this.branchCurrents.has(i) || this.branchCurrents.set(i, []), this.branchCurrents.get(i).push(n);
+    for (const [i, o] of e)
+      this.nodeVoltages.has(i) || this.nodeVoltages.set(i, []), this.nodeVoltages.get(i).push(o);
+    for (const [i, o] of s)
+      this.branchCurrents.has(i) || this.branchCurrents.set(i, []), this.branchCurrents.get(i).push(o);
   }
   /**
    * 獲取時間向量
@@ -1994,10 +1994,10 @@ class M {
     this.debug && console.log("Setting initial conditions...");
     const { matrix: t, rhs: e } = this.mnaBuilder.buildMNAMatrix(this.components, 0);
     this.debug && this.mnaBuilder.printMNAMatrix();
-    const s = g.solve(t, e), i = this.mnaBuilder.extractNodeVoltages(s), n = this.mnaBuilder.extractVoltageSourceCurrents(s);
-    for (const o of this.components)
-      o.updateHistory(i, n);
-    this.result.addTimePoint(this.startTime, i, n), this.debug && (console.log("Initial conditions set"), this.printSolutionSummary(i, n));
+    const s = g.solve(t, e), i = this.mnaBuilder.extractNodeVoltages(s), o = this.mnaBuilder.extractVoltageSourceCurrents(s);
+    for (const n of this.components)
+      n.updateHistory(i, o);
+    this.result.addTimePoint(this.startTime, i, o), this.debug && (console.log("Initial conditions set"), this.printSolutionSummary(i, o));
   }
   /**
    * 主時域迴圈
@@ -2025,10 +2025,10 @@ class M {
   async singleTimeStep(t) {
     for (const r of this.components)
       typeof r.updateCompanionModel == "function" && r.updateCompanionModel();
-    const { matrix: e, rhs: s } = this.mnaBuilder.buildMNAMatrix(this.components, t), i = g.solve(e, s), n = this.mnaBuilder.extractNodeVoltages(i), o = this.mnaBuilder.extractVoltageSourceCurrents(i);
+    const { matrix: e, rhs: s } = this.mnaBuilder.buildMNAMatrix(this.components, t), i = g.solve(e, s), o = this.mnaBuilder.extractNodeVoltages(i), n = this.mnaBuilder.extractVoltageSourceCurrents(i);
     for (const r of this.components)
-      r.updateHistory(n, o);
-    this.result.addTimePoint(t, n, o);
+      r.updateHistory(o, n);
+    this.result.addTimePoint(t, o, n);
   }
   /**
    * 完成分析
@@ -2078,12 +2078,12 @@ class M {
    */
   solveTimeStep(t, e = this.maxIterations) {
     try {
-      const { matrix: s, rhs: i } = this.mnaBuilder.buildMNAMatrix(this.components, t), n = g.solve(s, i), o = this.mnaBuilder.extractNodeVoltages(n), r = this.mnaBuilder.extractVoltageSourceCurrents(n), a = !0;
+      const { matrix: s, rhs: i } = this.mnaBuilder.buildMNAMatrix(this.components, t), o = g.solve(s, i), n = this.mnaBuilder.extractNodeVoltages(o), r = this.mnaBuilder.extractVoltageSourceCurrents(o), a = !0;
       for (const c of this.components)
-        c.updateHistory(o, r);
+        c.updateHistory(n, r);
       return {
         converged: a,
-        nodeVoltages: o,
+        nodeVoltages: n,
         branchCurrents: r,
         time: t
       };
@@ -2124,11 +2124,11 @@ class N {
       ms: 1e-3,
       s: 1
     };
-    for (const [n, o] of Object.entries(s))
-      if (e.endsWith(n)) {
-        const r = parseFloat(e.slice(0, -n.length));
+    for (const [o, n] of Object.entries(s))
+      if (e.endsWith(o)) {
+        const r = parseFloat(e.slice(0, -o.length));
         if (!isNaN(r))
-          return r * o;
+          return r * n;
       }
     const i = parseFloat(e);
     if (!isNaN(i))
@@ -2145,7 +2145,7 @@ class N {
     return e >= 1 ? `${t.toFixed(3)}s` : e >= 1e-3 ? `${(t * 1e3).toFixed(3)}ms` : e >= 1e-6 ? `${(t * 1e6).toFixed(3)}µs` : e >= 1e-9 ? `${(t * 1e9).toFixed(3)}ns` : `${(t * 1e12).toFixed(3)}ps`;
   }
 }
-class R {
+class E {
   constructor() {
     this.nodeVoltages = /* @__PURE__ */ new Map(), this.branchCurrents = /* @__PURE__ */ new Map(), this.componentPower = /* @__PURE__ */ new Map(), this.totalPower = 0, this.analysisInfo = {}, this.converged = !1;
   }
@@ -2177,11 +2177,11 @@ class R {
         const i = e.getVoltage(this.nodeVoltages);
         s = i * i / e.getResistance();
       } else if (e.type === "V") {
-        const i = e.getValue(), n = this.getBranchCurrent(e.name);
-        s = -i * n;
+        const i = e.getValue(), o = this.getBranchCurrent(e.name);
+        s = -i * o;
       } else if (e.type === "I") {
-        const i = e.getVoltage(this.nodeVoltages), n = e.getValue();
-        s = -i * n;
+        const i = e.getVoltage(this.nodeVoltages), o = e.getValue();
+        s = -i * o;
       }
       this.componentPower.set(e.name, s), this.totalPower += Math.abs(s);
     }
@@ -2203,7 +2203,7 @@ class R {
     };
   }
 }
-class E {
+class P {
   constructor() {
     this.mnaBuilder = new V(), this.debug = !1;
   }
@@ -2215,13 +2215,13 @@ class E {
    */
   async run(t, e = {}) {
     this.debug = e.debug || !1;
-    const s = new R();
+    const s = new E();
     try {
       this.debug && console.log("Starting DC analysis..."), this.mnaBuilder.analyzeCircuit(t);
-      const { matrix: i, rhs: n } = this.mnaBuilder.buildMNAMatrix(t, 0);
+      const { matrix: i, rhs: o } = this.mnaBuilder.buildMNAMatrix(t, 0);
       this.debug && (console.log("MNA Matrix built"), this.mnaBuilder.printMNAMatrix());
-      const o = g.solve(i, n);
-      return s.nodeVoltages = this.mnaBuilder.extractNodeVoltages(o), s.branchCurrents = this.mnaBuilder.extractVoltageSourceCurrents(o), s.converged = !0, s.calculatePower(t), s.analysisInfo = {
+      const n = g.solve(i, o);
+      return s.nodeVoltages = this.mnaBuilder.extractNodeVoltages(n), s.branchCurrents = this.mnaBuilder.extractVoltageSourceCurrents(n), s.converged = !0, s.calculatePower(t), s.analysisInfo = {
         method: "Modified Nodal Analysis",
         matrixSize: this.mnaBuilder.matrixSize,
         nodeCount: this.mnaBuilder.nodeCount,
@@ -2250,15 +2250,15 @@ class E {
    */
   printResults(t) {
     console.log("\\n=== DC Analysis Results ==="), console.log("\\nNode Voltages:");
-    for (const [n, o] of t.nodeVoltages)
-      Math.abs(o) < 1e-12 ? console.log(`  V(${n}) = 0V`) : Math.abs(o) >= 1e3 ? console.log(`  V(${n}) = ${(o / 1e3).toFixed(3)}kV`) : Math.abs(o) >= 1 ? console.log(`  V(${n}) = ${o.toFixed(6)}V`) : Math.abs(o) >= 1e-3 ? console.log(`  V(${n}) = ${(o * 1e3).toFixed(3)}mV`) : Math.abs(o) >= 1e-6 ? console.log(`  V(${n}) = ${(o * 1e6).toFixed(3)}µV`) : console.log(`  V(${n}) = ${o.toExponential(3)}V`);
+    for (const [o, n] of t.nodeVoltages)
+      Math.abs(n) < 1e-12 ? console.log(`  V(${o}) = 0V`) : Math.abs(n) >= 1e3 ? console.log(`  V(${o}) = ${(n / 1e3).toFixed(3)}kV`) : Math.abs(n) >= 1 ? console.log(`  V(${o}) = ${n.toFixed(6)}V`) : Math.abs(n) >= 1e-3 ? console.log(`  V(${o}) = ${(n * 1e3).toFixed(3)}mV`) : Math.abs(n) >= 1e-6 ? console.log(`  V(${o}) = ${(n * 1e6).toFixed(3)}µV`) : console.log(`  V(${o}) = ${n.toExponential(3)}V`);
     console.log("\\nBranch Currents:");
-    for (const [n, o] of t.branchCurrents)
-      Math.abs(o) < 1e-12 ? console.log(`  I(${n}) = 0A`) : Math.abs(o) >= 1 ? console.log(`  I(${n}) = ${o.toFixed(6)}A`) : Math.abs(o) >= 1e-3 ? console.log(`  I(${n}) = ${(o * 1e3).toFixed(3)}mA`) : Math.abs(o) >= 1e-6 ? console.log(`  I(${n}) = ${(o * 1e6).toFixed(3)}µA`) : Math.abs(o) >= 1e-9 ? console.log(`  I(${n}) = ${(o * 1e9).toFixed(3)}nA`) : console.log(`  I(${n}) = ${o.toExponential(3)}A`);
+    for (const [o, n] of t.branchCurrents)
+      Math.abs(n) < 1e-12 ? console.log(`  I(${o}) = 0A`) : Math.abs(n) >= 1 ? console.log(`  I(${o}) = ${n.toFixed(6)}A`) : Math.abs(n) >= 1e-3 ? console.log(`  I(${o}) = ${(n * 1e3).toFixed(3)}mA`) : Math.abs(n) >= 1e-6 ? console.log(`  I(${o}) = ${(n * 1e6).toFixed(3)}µA`) : Math.abs(n) >= 1e-9 ? console.log(`  I(${o}) = ${(n * 1e9).toFixed(3)}nA`) : console.log(`  I(${o}) = ${n.toExponential(3)}A`);
     console.log("\\nComponent Power:");
     let e = 0, s = 0;
-    for (const [n, o] of t.componentPower)
-      o < 0 ? (e += Math.abs(o), console.log(`  P(${n}) = ${Math.abs(o).toFixed(6)}W (supplied)`)) : o > 1e-12 && (s += o, console.log(`  P(${n}) = ${o.toFixed(6)}W (dissipated)`));
+    for (const [o, n] of t.componentPower)
+      n < 0 ? (e += Math.abs(n), console.log(`  P(${o}) = ${Math.abs(n).toFixed(6)}W (supplied)`)) : n > 1e-12 && (s += n, console.log(`  P(${o}) = ${n.toFixed(6)}W (dissipated)`));
     console.log("\\nPower Balance:"), console.log(`  Total Supplied: ${e.toFixed(6)}W`), console.log(`  Total Dissipated: ${s.toFixed(6)}W`), console.log(`  Balance Error: ${Math.abs(e - s).toFixed(9)}W`);
     const i = t.getSummary();
     console.log(`\\nMatrix Info: ${i.matrixSize}×${i.matrixSize}, condition ≈ ${i.matrixCondition.toExponential(2)}`), console.log("===========================\\n");
@@ -2271,9 +2271,9 @@ class E {
     this.debug = t;
   }
 }
-class P {
+class F {
   constructor(t = null) {
-    this.parser = new I(), this.transientAnalysis = new M(), this.dcAnalysis = new E(), this.components = [], this.models = /* @__PURE__ */ new Map(), this.parameters = /* @__PURE__ */ new Map(), this.analyses = [], this.options = /* @__PURE__ */ new Map(), this.results = /* @__PURE__ */ new Map(), this.lastResult = null, this.isInitialized = !1, this.debug = !1, t && this.loadNetlist(t);
+    this.parser = new I(), this.transientAnalysis = new M(), this.dcAnalysis = new P(), this.components = [], this.models = /* @__PURE__ */ new Map(), this.parameters = /* @__PURE__ */ new Map(), this.analyses = [], this.options = /* @__PURE__ */ new Map(), this.results = /* @__PURE__ */ new Map(), this.lastResult = null, this.isInitialized = !1, this.debug = !1, t && this.loadNetlist(t);
   }
   /**
    * 載入並解析網表
@@ -2399,20 +2399,20 @@ class P {
     const t = [], e = [];
     if (this.components.length === 0)
       return t.push("No components found in circuit"), { valid: !1, issues: t, warnings: e };
-    for (const o of this.components) {
-      o.isValid() || t.push(`Invalid component: ${o.name}`);
-      for (const r of o.nodes)
-        (!r || typeof r != "string") && t.push(`Invalid node in component ${o.name}: ${r}`);
-      o.value === 0 && (o.type === "R" || o.type === "L" || o.type === "C") && e.push(`Zero value in ${o.name} may cause numerical issues`);
+    for (const n of this.components) {
+      n.isValid() || t.push(`Invalid component: ${n.name}`);
+      for (const r of n.nodes)
+        (!r || typeof r != "string") && t.push(`Invalid node in component ${n.name}: ${r}`);
+      n.value === 0 && (n.type === "R" || n.type === "L" || n.type === "C") && e.push(`Zero value in ${n.name} may cause numerical issues`);
     }
     const s = this.getNodeList();
     s.includes("0") || s.includes("gnd") || s.includes("GND") || e.push("No ground node (0 or gnd) found - circuit may be floating");
-    const n = /* @__PURE__ */ new Map();
-    for (const o of this.components)
-      for (const r of o.nodes)
-        n.set(r, (n.get(r) || 0) + 1);
-    for (const [o, r] of n)
-      r === 1 && o !== "0" && o !== "gnd" && e.push(`Node ${o} has only one connection`);
+    const o = /* @__PURE__ */ new Map();
+    for (const n of this.components)
+      for (const r of n.nodes)
+        o.set(r, (o.get(r) || 0) + 1);
+    for (const [n, r] of o)
+      r === 1 && n !== "0" && n !== "gnd" && e.push(`Node ${n} has only one connection`);
     return {
       valid: t.length === 0,
       issues: t,
@@ -2432,8 +2432,8 @@ class P {
     for (const i of this.components)
       e[i.type] = (e[i.type] || 0) + 1;
     console.log("\\nComponent breakdown:");
-    for (const [i, n] of Object.entries(e))
-      console.log(`  ${i}: ${n}`);
+    for (const [i, o] of Object.entries(e))
+      console.log(`  ${i}: ${o}`);
     console.log("\\nNodes:", t.nodeList.join(", "));
     const s = this.validateCircuit();
     console.log(`\\nValidation: ${s.valid ? "PASSED" : "FAILED"}`), s.issues.length > 0 && (console.log("Issues:"), s.issues.forEach((i) => console.log(`  - ${i}`))), s.warnings.length > 0 && (console.log("Warnings:"), s.warnings.forEach((i) => console.log(`  - ${i}`))), console.log("=======================\\n");
@@ -2493,15 +2493,15 @@ class P {
         this.steppedParams.maxIterations
       ), s = Object.fromEntries(e.nodeVoltages), i = Object.fromEntries(e.branchCurrents);
       this.steppedResults.time.push(this.currentTime), this.steppedResults.voltages.push({ ...s }), this.steppedResults.currents.push({ ...i });
-      const n = {};
-      for (const o of this.components)
-        o.getOperatingStatus && (n[o.name] = o.getOperatingStatus());
-      return this.steppedResults.componentStates.push(n), this.currentTime += this.steppedParams.timeStep, this.currentIteration++, {
+      const o = {};
+      for (const n of this.components)
+        n.getOperatingStatus && (o[n.name] = n.getOperatingStatus());
+      return this.steppedResults.componentStates.push(o), this.currentTime += this.steppedParams.timeStep, this.currentIteration++, {
         time: this.currentTime - this.steppedParams.timeStep,
         iteration: this.currentIteration - 1,
         nodeVoltages: Object.fromEntries(e.nodeVoltages),
         branchCurrents: Object.fromEntries(e.branchCurrents),
-        componentStates: n,
+        componentStates: o,
         converged: e.converged
       };
     } catch (e) {
@@ -2528,7 +2528,7 @@ class P {
    */
   updateControlInputs(t) {
     for (const [e, s] of Object.entries(t)) {
-      const i = this.components.find((n) => n.name === e);
+      const i = this.components.find((o) => o.name === e);
       i && i.setGateState ? (i.setGateState(s), this.debug && console.log(`Updated ${e} gate state: ${s ? "ON" : "OFF"}`)) : i && i.setValue && i.setValue(s);
     }
   }
@@ -2583,8 +2583,8 @@ class P {
     const s = [];
     let i = 0;
     for (; !this.isFinished(); ) {
-      const n = t ? t(this.currentTime) : {}, o = this.step(n);
-      if (o && (s.push(o), i++, i % 1e3 === 0)) {
+      const o = t ? t(this.currentTime) : {}, n = this.step(o);
+      if (n && (s.push(n), i++, i % 1e3 === 0)) {
         const r = (this.currentTime - this.steppedParams.startTime) / (this.steppedParams.stopTime - this.steppedParams.startTime) * 100;
         console.log(`模擬進度: ${r.toFixed(1)}% (${i} steps)`);
       }
@@ -2610,7 +2610,7 @@ class P {
    */
   static getVersionInfo() {
     return {
-      name: "JSSolver-PE",
+      name: "AkingSPICE",
       version: "0.1.0",
       description: "JavaScript Solver for Power Electronics",
       features: [
@@ -2625,23 +2625,166 @@ class P {
         "MOSFET with body diode model",
         "Stepped simulation control API"
       ],
-      author: "JSSolver-PE Development Team",
+      author: "AkingSPICE Development Team",
       license: "MIT"
     };
   }
 }
+class y extends d {
+  /**
+   * @param {string} name 二極體名稱 (如 'D1', 'CR1')
+   * @param {string[]} nodes 連接節點 [anode, cathode]
+   * @param {Object} params 參數 {Vf, Ron, Roff}
+   */
+  constructor(t, e, s = {}) {
+    if (super(t, "D", e, 0, s), e.length < 2)
+      throw new Error(`Diode ${t} must have 2 nodes: [anode, cathode]`);
+    this.Vf = this.safeParseValue(s.Vf, 0.7), this.Ron = this.safeParseValue(s.Ron, 0.01), this.Roff = this.safeParseValue(s.Roff, 1e6), this.anode = e[0], this.cathode = e[1], this.isForwardBiased = !1, this.anodeCathodeVoltage = 0, this.current = 0, this.validate();
+  }
+  /**
+   * 安全地解析數值參數，如果失敗則返回默認值
+   * @param {*} value 要解析的值
+   * @param {number} defaultValue 默認值
+   * @returns {number} 解析後的數值或默認值
+   */
+  safeParseValue(t, e) {
+    try {
+      return t == null ? e : this.parseValue(t);
+    } catch {
+      return e;
+    }
+  }
+  /**
+   * 驗證二極體參數
+   */
+  validate() {
+    if (this.Ron <= 0)
+      throw new Error(`Diode ${this.name}: Ron must be positive`);
+    if (this.Roff <= this.Ron)
+      throw new Error(`Diode ${this.name}: Roff must be greater than Ron`);
+    if (this.Vf < 0)
+      throw new Error(`Diode ${this.name}: Forward voltage Vf must be non-negative`);
+  }
+  /**
+   * 計算二極體的等效電阻
+   * @param {number} vak 陽極-陰極電壓 (V)
+   * @returns {number} 等效電阻 (歐姆)
+   */
+  getEquivalentResistance(t) {
+    return this.isForwardBiased = t > this.Vf, this.isForwardBiased ? this.Ron : this.Roff;
+  }
+  /**
+   * 檢查二極體是否處於導通狀態
+   * @returns {boolean}
+   */
+  isOn() {
+    return this.isForwardBiased;
+  }
+  /**
+   * 獲取二極體壓降 (包含順向偏壓電壓)
+   * @returns {number} 實際壓降 (V)
+   */
+  getVoltageDrop() {
+    return this.isForwardBiased ? this.Vf + this.current * this.Ron : this.anodeCathodeVoltage;
+  }
+  /**
+   * 為 MNA 分析提供印花 (stamping) 支援
+   * 注意：這是一個非線性元件，需要在每次迭代中更新
+   * 
+   * @param {Matrix} matrix MNA 矩陣
+   * @param {Vector} rhs 右側向量  
+   * @param {Map} nodeMap 節點映射
+   * @param {Map} voltageSourceMap 電壓源映射
+   * @param {number} time 當前時間
+   */
+  stamp(t, e, s, i, o) {
+    const n = this.anode === "0" || this.anode === "gnd" ? -1 : s.get(this.anode), r = this.cathode === "0" || this.cathode === "gnd" ? -1 : s.get(this.cathode);
+    if (n === void 0 || r === void 0)
+      throw new Error(`Diode ${this.name}: Node mapping not found (anode: ${this.anode}, cathode: ${this.cathode})`);
+    let a = 0;
+    this.anodeCathodeVoltage !== void 0 && (a = this.anodeCathodeVoltage);
+    const c = this.getEquivalentResistance(a), h = 1 / c;
+    if (n >= 0 && (t.addAt(n, n, h), r >= 0 && t.addAt(n, r, -h)), r >= 0 && (t.addAt(r, r, h), n >= 0 && t.addAt(r, n, -h)), this.isForwardBiased) {
+      const u = this.Vf / c;
+      n >= 0 && e.addAt(n, -u), r >= 0 && e.addAt(r, u);
+    }
+  }
+  /**
+   * 更新元件狀態 (在每個時間步後調用)
+   * @param {number} vak 陽極-陰極電壓
+   * @param {number} iak 陽極到陰極電流
+   */
+  updateState(t, e) {
+    this.anodeCathodeVoltage = t, this.current = e, this.isForwardBiased = t > this.Vf;
+  }
+  /**
+   * 檢查是否需要電流變數 (對於理想二極體，通常不需要)
+   * @returns {boolean}
+   */
+  needsCurrentVariable() {
+    return !1;
+  }
+  /**
+   * 獲取元件資訊字串
+   * @returns {string}
+   */
+  toString() {
+    return `${this.name} (Diode): A=${this.anode} K=${this.cathode}, State=${this.isForwardBiased ? "ON" : "OFF"}, Vf=${this.Vf}V, Ron=${this.Ron}Ω`;
+  }
+  /**
+   * 獲取詳細的工作狀態
+   * @returns {Object}
+   */
+  getOperatingStatus() {
+    return {
+      name: this.name,
+      type: "Diode",
+      state: this.isForwardBiased ? "ON" : "OFF",
+      anodeCathodeVoltage: this.anodeCathodeVoltage,
+      current: this.current,
+      voltageDrop: this.getVoltageDrop(),
+      currentResistance: this.getEquivalentResistance(this.anodeCathodeVoltage),
+      isForwardBiased: this.isForwardBiased
+    };
+  }
+  /**
+   * 序列化為 JSON
+   * @returns {Object}
+   */
+  toJSON() {
+    return {
+      ...super.toJSON(),
+      Vf: this.Vf,
+      Ron: this.Ron,
+      Roff: this.Roff,
+      operatingStatus: this.getOperatingStatus()
+    };
+  }
+  /**
+   * 復製二極體
+   * @returns {Diode}
+   */
+  clone() {
+    return new y(this.name, this.nodes, {
+      Vf: this.Vf,
+      Ron: this.Ron,
+      Roff: this.Roff
+    });
+  }
+}
 export {
-  u as BaseComponent,
-  $ as Capacitor,
-  x as CurrentSource,
-  E as DCAnalysis,
-  v as Inductor,
-  P as JSSolverPE,
+  F as AkingSPICE,
+  d as BaseComponent,
+  v as Capacitor,
+  b as CurrentSource,
+  P as DCAnalysis,
+  y as Diode,
+  x as Inductor,
   C as MOSFET,
   I as NetlistParser,
-  y as Resistor,
+  $ as Resistor,
   M as TransientAnalysis,
   f as VoltageSource,
-  P as default
+  F as default
 };
-//# sourceMappingURL=jssolver-pe.es.js.map
+//# sourceMappingURL=AkingSPICE.es.js.map

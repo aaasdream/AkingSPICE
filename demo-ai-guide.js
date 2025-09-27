@@ -1,15 +1,15 @@
 /**
- * JSSolver-PE 演示範例
+ * AkingSPICE 演示範例
  * 展示如何使用 AI 使用指南建立電路
  */
 
-import { JSSolverPE, Resistor, Capacitor, Inductor, VoltageSource, MOSFET } from './src/index.js';
+import { AkingSPICE, Resistor, Capacitor, Inductor, VoltageSource, MOSFET } from './src/index.js';
 
 // 演示 1: 簡單 RC 電路（驗證基本功能）
 async function demo1_RC_Circuit() {
     console.log('\n=== 演示 1: RC 電路 ===');
     
-    const solver = new JSSolverPE();
+    const solver = new AkingSPICE();
     solver.setDebug(true);
     
     // 重置解算器
@@ -52,7 +52,7 @@ async function demo1_RC_Circuit() {
 async function demo2_BuckConverter() {
     console.log('\n=== 演示 2: Buck 轉換器 ===');
     
-    const solver = new JSSolverPE();
+    const solver = new AkingSPICE();
     solver.setDebug(false);  // 減少輸出
     
     // 重置解算器
@@ -149,8 +149,8 @@ async function demo3_SolverCapabilityTest() {
     console.log('\n=== 演示 3: 解算器能力測試 ===');
     
     // 顯示版本信息
-    console.log('JSSolver-PE 版本信息:');
-    const versionInfo = JSSolverPE.getVersionInfo();
+    console.log('AkingSPICE 版本信息:');
+    const versionInfo = AkingSPICE.getVersionInfo();
     console.log(`  名稱: ${versionInfo.name} v${versionInfo.version}`);
     console.log(`  功能: ${versionInfo.features.length} 項功能`);
     
@@ -177,7 +177,7 @@ async function demo3_SolverCapabilityTest() {
 
 // 主執行函數
 async function runAllDemos() {
-    console.log('JSSolver-PE AI 指南演示');
+    console.log('AkingSPICE AI 指南演示');
     console.log('========================');
     
     try {

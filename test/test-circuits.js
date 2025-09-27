@@ -2,7 +2,7 @@
  * 電路分析測試
  */
 
-import { JSSolverPE } from '../src/core/solver.js';
+import { AkingSPICE } from '../src/core/solver.js';
 
 export async function runCircuitTests(ctx) {
     
@@ -14,7 +14,7 @@ export async function runCircuitTests(ctx) {
         R2 2 0 1000
         `;
         
-        const solver = new JSSolverPE(netlist);
+        const solver = new AkingSPICE(netlist);
         const result = await solver.runDCAnalysis();
         
         ctx.assert.isTrue(result.converged);
@@ -37,7 +37,7 @@ export async function runCircuitTests(ctx) {
         .tran 1us 5ms
         `;
         
-        const solver = new JSSolverPE(netlist);
+        const solver = new AkingSPICE(netlist);
         const result = await solver.runAnalysis('.tran 1us 5ms');
         
         ctx.assert.isTrue(result.timeVector.length > 0);
@@ -76,7 +76,7 @@ export async function runCircuitTests(ctx) {
         C1 3 0 1e-6
         `;
         
-        const solver = new JSSolverPE(netlist);
+        const solver = new AkingSPICE(netlist);
         
         // 檢查電路信息
         const circuitInfo = solver.getCircuitInfo();
@@ -101,7 +101,7 @@ export async function runCircuitTests(ctx) {
         R1 1 0 1000
         `;
         
-        const solver = new JSSolverPE(netlist);
+        const solver = new AkingSPICE(netlist);
         const result = await solver.runAnalysis('.tran 1ms 50ms');
         
         ctx.assert.isTrue(result.timeVector.length > 0);
@@ -138,7 +138,7 @@ export async function runCircuitTests(ctx) {
         R2 2 0 2000
         `;
         
-        const solver = new JSSolverPE(netlist);
+        const solver = new AkingSPICE(netlist);
         const result = await solver.runDCAnalysis();
         
         ctx.assert.isTrue(result.converged);
@@ -172,7 +172,7 @@ export async function runCircuitTests(ctx) {
         * End of netlist
         `;
         
-        const solver = new JSSolverPE(netlist);
+        const solver = new AkingSPICE(netlist);
         
         const circuitInfo = solver.getCircuitInfo();
         ctx.assert.equal(circuitInfo.componentCount, 3); // VIN, R1, R2
@@ -192,7 +192,7 @@ export async function runCircuitTests(ctx) {
         `;
         
         ctx.assert.throws(() => {
-            new JSSolverPE(badNetlist);
+            new AkingSPICE(badNetlist);
         });
     });
     
@@ -203,7 +203,7 @@ export async function runCircuitTests(ctx) {
         R1 1 2 1000
         `;
         
-        const solver = new JSSolverPE(netlist);
+        const solver = new AkingSPICE(netlist);
         const validation = solver.validateCircuit();
         
         // 應該有警告：沒有接地節點
@@ -221,7 +221,7 @@ export async function runCircuitTests(ctx) {
         L1 4 0 10u
         `;
         
-        const solver = new JSSolverPE(netlist);
+        const solver = new AkingSPICE(netlist);
         const components = solver.components;
         
         // 檢查解析結果

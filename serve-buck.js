@@ -64,10 +64,10 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(port, () => {
-    console.log(`🚀 JSSolver-PE Buck 實戰服務器已啟動`);
+    console.log(`🚀 AkingSPICE Buck 實戰服務器已啟動`);
     console.log(`📋 網址: http://localhost:${port}`);
     console.log(`📁 服務目錄: ${__dirname}`);
-    console.log(`⚡ 使用打包後的 JSSolver-PE library`);
+    console.log(`⚡ 使用打包後的 AkingSPICE library`);
     
     // 自動打開瀏覽器 (可選)
     exec(`start http://localhost:${port}`, (err) => {

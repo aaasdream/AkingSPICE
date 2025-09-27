@@ -1,5 +1,5 @@
 /**
- * JSSolver-PE 主求解器類別
+ * AkingSPICE 主求解器類別
  * 
  * 這是使用者的主要介面，整合了網表解析、電路分析和結果管理
  */
@@ -9,9 +9,9 @@ import { TransientAnalysis, TransientUtils, TransientResult } from '../analysis/
 import { DCAnalysis } from '../analysis/dc.js';
 
 /**
- * JSSolver-PE 主求解器
+ * AkingSPICE 主求解器
  */
-export class JSSolverPE {
+export class AkingSPICE {
     constructor(netlist = null) {
         this.parser = new NetlistParser();
         this.transientAnalysis = new TransientAnalysis();
@@ -622,7 +622,7 @@ export class JSSolverPE {
      */
     static getVersionInfo() {
         return {
-            name: 'JSSolver-PE',
+            name: 'AkingSPICE',
             version: '0.1.0',
             description: 'JavaScript Solver for Power Electronics',
             features: [
@@ -637,7 +637,7 @@ export class JSSolverPE {
                 'MOSFET with body diode model',
                 'Stepped simulation control API'
             ],
-            author: 'JSSolver-PE Development Team',
+            author: 'AkingSPICE Development Team',
             license: 'MIT'
         };
     }

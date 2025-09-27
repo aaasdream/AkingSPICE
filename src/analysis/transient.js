@@ -2,7 +2,7 @@
  * 暫態分析 (Transient Analysis) 實現
  * 
  * 基於後向歐拉法的固定步長時域分析算法
- * 這是JSSolver-PE v0.1的核心分析引擎
+ * 這是AkingSPICE v0.1的核心分析引擎
  */
 
 import { Matrix, Vector, LUSolver } from '../core/linalg.js';
