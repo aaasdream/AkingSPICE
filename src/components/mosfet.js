@@ -33,14 +33,14 @@ export class MOSFET extends BaseComponent {
             throw new Error(`MOSFET ${name} must have at least 2 nodes: [drain, source], optional gate`);
         }
         
-        // MOSFET 開關參數 - 使用 BaseComponent 的 parseValue 方法解析工程記號
-        this.Ron = this.parseValue(params.Ron) || 1e-3;        // 導通電阻 (默認 1mΩ)
-        this.Roff = this.parseValue(params.Roff) || 1e6;       // 關斷電阻 (默認 1MΩ，不要太大)
+        // MOSFET 開關參數 - 安全地解析參數，如果解析失敗使用默認值
+        this.Ron = this.safeParseValue(params.Ron, 1e-3);        // 導通電阻 (默認 1mΩ)
+        this.Roff = this.safeParseValue(params.Roff, 1e6);       // 關斷電阻 (默認 1MΩ，不要太大)
         
         // 體二極體參數
-        this.Vf_diode = this.parseValue(params.Vf_diode) || 0.7;     // 二極體順向電壓 (默認 0.7V)
-        this.Von_diode = this.parseValue(params.Von_diode) || 0.001;  // 二極體導通電阻 (默認 1mΩ)
-        this.Roff_diode = this.parseValue(params.Roff_diode) || 1e6; // 二極體反向電阻 (默認 1MΩ)
+        this.Vf_diode = this.safeParseValue(params.Vf_diode, 0.7);     // 二極體順向電壓 (默認 0.7V)
+        this.Von_diode = this.safeParseValue(params.Von_diode, 0.001);  // 二極體導通電阻 (默認 1mΩ)
+        this.Roff_diode = this.safeParseValue(params.Roff_diode, 1e6); // 二極體反向電阻 (默認 1MΩ)
         
         // 控制狀態
         this.gateState = false; // false = OFF, true = ON
@@ -50,6 +50,41 @@ export class MOSFET extends BaseComponent {
         this.drain = nodes[0];
         this.source = nodes[1]; 
         this.gate = nodes[2] || null;   // 可選的gate節點，僅用於標識
+        
+        // 狀態追蹤
+        this.mosfetCurrent = 0;
+        
+        // 初始化參數驗證
+        this.validate();
+    }
+
+    /**
+     * 安全地解析數值參數，如果失敗則返回默認值
+     * @param {*} value 要解析的值
+     * @param {number} defaultValue 默認值
+     * @returns {number} 解析後的數值或默認值
+     */
+    safeParseValue(value, defaultValue) {
+        try {
+            if (value === undefined || value === null) {
+                return defaultValue;
+            }
+            return this.parseValue(value);
+        } catch (error) {
+            return defaultValue;
+        }
+    }
+
+    /**
+     * 驗證MOSFET參數
+     */
+    validate() {
+        if (this.Ron <= 0) {
+            throw new Error(`MOSFET ${this.name}: Ron must be positive`);
+        }
+        if (this.Roff <= this.Ron) {
+            throw new Error(`MOSFET ${this.name}: Roff must be greater than Ron`);
+        }
         
         // 狀態追蹤
         this.mosfetCurrent = 0;

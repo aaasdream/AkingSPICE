@@ -54,33 +54,37 @@ export class BaseComponent {
         }
         
         if (typeof value === 'string') {
-            // 移除空白
-            value = value.trim().toUpperCase();
+            // 移除空白，但保持大小寫敏感性用於區分 M/m
+            const trimmedValue = value.trim();
             
-            // 工程記號對應表
+            // 工程記號對應表 (大小寫敏感)
             const suffixes = {
                 'T': 1e12,   // Tera
                 'G': 1e9,    // Giga  
-                'MEG': 1e6,  // Mega (特殊處理)
-                'M': 1e-3,   // Milli (注意：M在電子學中通常表示Milli)
-                'K': 1e3,    // Kilo
-                'U': 1e-6,   // Micro (u的替代)
-                'µ': 1e-6,   // Micro
-                'N': 1e-9,   // Nano
-                'P': 1e-12,  // Pico
-                'F': 1e-15   // Femto
+                'MEG': 1e6,  // Mega (特殊處理，避免與 M 混淆)
+                'M': 1e6,    // Mega (大寫M = 百萬)
+                'K': 1e3,    // Kilo (大寫K)
+                'k': 1e3,    // Kilo (小寫k，也常用)
+                'm': 1e-3,   // milli (小寫m = 毫)
+                'u': 1e-6,   // micro (小寫u)
+                'µ': 1e-6,   // micro (μ符號)
+                'n': 1e-9,   // nano (小寫n)
+                'p': 1e-12,  // pico (小寫p)
+                'f': 1e-15   // femto (小寫f)
             };
             
-            // 特殊處理MEG (Mega)
-            if (value.endsWith('MEG')) {
-                const numPart = parseFloat(value.slice(0, -3));
-                return numPart * 1e6;
+            // 特殊處理MEG (避免與單個M混淆)
+            if (trimmedValue.toUpperCase().endsWith('MEG')) {
+                const numPart = parseFloat(trimmedValue.slice(0, -3));
+                if (!isNaN(numPart)) {
+                    return numPart * 1e6;
+                }
             }
             
-            // 處理其他後綴
+            // 處理其他後綴 (保持大小寫敏感)
             for (const [suffix, multiplier] of Object.entries(suffixes)) {
-                if (value.endsWith(suffix)) {
-                    const numPart = parseFloat(value.slice(0, -suffix.length));
+                if (trimmedValue.endsWith(suffix)) {
+                    const numPart = parseFloat(trimmedValue.slice(0, -suffix.length));
                     if (!isNaN(numPart)) {
                         return numPart * multiplier;
                     }
@@ -88,7 +92,7 @@ export class BaseComponent {
             }
             
             // 如果沒有後綴，直接解析數字
-            const numValue = parseFloat(value);
+            const numValue = parseFloat(trimmedValue);
             if (!isNaN(numValue)) {
                 return numValue;
             }

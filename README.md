@@ -1,10 +1,15 @@
-# JSSolver-PE (JavaScript Solver for Power Electronics)
+# AkingSpice (阿鏘的電路模擬解算器)
 
 一個專為動態電路模擬設計的純 JavaScript 函式庫，特別針對含有頻繁開關事件的電力電子電路。
+資料夾只有src與lib-dist對一般使用者有用，其他是開發者使用
+AkingSpice/
+├── src/      原始程式碼 node使用的js
+├── lib-dist  封裝成網頁使用的.js 抓這個就可以在網頁上進行SPICE電路模擬
+
 
 ## 🎯 專案願景
 
-JSSolver-PE 提供一個高效、穩定且易於整合的求解器，具備以下特色：
+AkingSpice 提供一個高效、穩定且易於整合的求解器，具備以下特色：
 
 - **效能優先**: 針對時域暫態分析進行深度優化
 - **控制導向**: 提供互動式 API，允許外部程式即時讀取電路狀態並改變元件參數
@@ -45,7 +50,7 @@ npm test
 ## 🏗 專案架構
 
 ```
-jssolver-pe/
+AkingSpice/
 ├── src/                    # 核心程式碼
 │   ├── core/              # 核心演算法
 │   │   ├── solver.js      # 主求解器類別

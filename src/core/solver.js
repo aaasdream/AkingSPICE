@@ -428,10 +428,13 @@ export class JSSolverPE {
                 this.steppedParams.maxIterations
             );
 
-            // 記錄結果
+            // 記錄結果 - 將 Map 轉換為普通物件
+            const nodeVoltagesObj = Object.fromEntries(stepResult.nodeVoltages);
+            const branchCurrentsObj = Object.fromEntries(stepResult.branchCurrents);
+            
             this.steppedResults.time.push(this.currentTime);
-            this.steppedResults.voltages.push({...stepResult.nodeVoltages});
-            this.steppedResults.currents.push({...stepResult.branchCurrents});
+            this.steppedResults.voltages.push({...nodeVoltagesObj});
+            this.steppedResults.currents.push({...branchCurrentsObj});
             
             // 記錄元件狀態 (特別是 MOSFET 等可控元件)
             const componentStates = {};
@@ -446,12 +449,12 @@ export class JSSolverPE {
             this.currentTime += this.steppedParams.timeStep;
             this.currentIteration++;
 
-            // 返回當前步驟的結果
+            // 返回當前步驟的結果 - 將 Map 轉換為普通物件
             return {
                 time: this.currentTime - this.steppedParams.timeStep,
                 iteration: this.currentIteration - 1,
-                nodeVoltages: stepResult.nodeVoltages,
-                branchCurrents: stepResult.branchCurrents,
+                nodeVoltages: Object.fromEntries(stepResult.nodeVoltages),
+                branchCurrents: Object.fromEntries(stepResult.branchCurrents),
                 componentStates: componentStates,
                 converged: stepResult.converged
             };

@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JSSolver-PE Buck 轉換器實戰 (互動圖表版)</title>
+    <!-- 引入 Plotly.js 函式庫 -->
+    <script src="https://cdn.plot.ly/plotly-2.20.0.min.js"></script>
+    <style>
+        /* [前略...] CSS 樣式與之前相同 */
+        body { font-family: 'Microsoft JhengHei', Arial, sans-serif; margin: 0; padding: 20px; background: linear-gradient(135deg, #2196F3 0%, #21CBF3 100%); min-height: 100vh; color: #333; }
+        .container { max-width: 1400px; margin: 0 auto; background: white; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); overflow: hidden; }
+        .header { background: linear-gradient(135deg, #FF6B6B 0%, #4ECDC4 100%); color: white; padding: 30px; text-align: center; }
+        .header h1 { margin: 0; font-size: 2.2em; font-weight: 300; }
+        .subtitle { margin-top: 10px; opacity: 0.9; font-size: 1.1em; }
+        .content { display: grid; grid-template-columns: 400px 1fr; gap: 0; min-height: 700px; }
+        .controls { background: #f8f9fa; padding: 30px; border-right: 1px solid #e9ecef; }
+        .results { padding: 30px; display: flex; flex-direction: column; gap: 20px; }
+        .control-group { margin-bottom: 20px; }
+        .control-group label { display: block; font-weight: 600; margin-bottom: 8px; color: #495057; font-size: 1em; }
+        .control-group input { width: 100%; padding: 12px; border: 2px solid #e9ecef; border-radius: 8px; font-size: 1em; }
+        .btn { width: 100%; padding: 15px; border: none; border-radius: 8px; font-size: 1.1em; font-weight: 600; cursor: pointer; margin-bottom: 15px; }
+        .btn-primary { background: linear-gradient(135deg, #FF6B6B 0%, #4ECDC4 100%); color: white; }
+        .btn-primary:hover:not(:disabled) { transform: translateY(-2px); }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-secondary { background: #6c757d; color: white; }
+        .result-panel { background: #f8f9fa; border-left: 5px solid #4ECDC4; padding: 20px; border-radius: 8px; }
+        .result-panel h3 { margin-top: 0; color: #495057; font-size: 1.3em; }
+        .result-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 15px; }
+        .result-item { background: white; padding: 15px; border-radius: 6px; border: 1px solid #e9ecef; }
+        .result-label { font-size: 0.9em; color: #6c757d; margin-bottom: 5px; }
+        .result-value { font-size: 1.4em; font-weight: 600; color: #495057; }
+        .status { padding: 10px 15px; border-radius: 6px; margin-bottom: 15px; font-weight: 600; }
+        .status.loading { background: #fff3cd; color: #856404; }
+        .status.success { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        .log { background: #2c3e50; color: #ecf0f1; padding: 15px; border-radius: 8px; font-family: 'Consolas', monospace; font-size: 0.9em; max-height: 150px; overflow-y: auto; white-space: pre-wrap; }
+        #progress-container { width: 100%; background-color: #e9ecef; border-radius: 8px; margin-top: 15px; overflow: hidden; display: none; }
+        #progress-bar { width: 0%; height: 20px; background: linear-gradient(135deg, #4ECDC4 0%, #21CBF3 100%); text-align: center; line-height: 20px; color: white; font-weight: 600; transition: width 0.2s ease-in-out; }
+        #chart-container { width: 100%; height: 400px; border: 1px solid #e9ecef; border-radius: 8px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔌 JSSolver-PE Buck 轉換器實戰</h1>
+            <div class="subtitle">互動式波形分析</div>
+        </div>
+        <div class="content">
+            <div class="controls">
+                <div id="status" class="status loading">🔄 載入 JSSolver-PE Library...</div>
+                <div class="control-group"><label for="inputVoltage">輸入電壓 (V)</label><input type="number" id="inputVoltage" value="12" min="1" max="50" step="0.1"></div>
+                <div class="control-group"><label for="dutyCycle">占空比 (%)</label><input type="number" id="dutyCycle" value="50" min="10" max="90" step="1"></div>
+                <div class="control-group"><label for="frequency">開關頻率 (kHz)</label><input type="number" id="frequency" value="100" min="10" max="1000" step="10"></div>
+                <div class="control-group"><label for="inductance">電感值 (μH)</label><input type="number" id="inductance" value="100" min="10" max="1000" step="10"></div>
+                <div class="control-group"><label for="capacitance">電容值 (μF)</label><input type="number" id="capacitance" value="220" min="10" max="1000" step="10"></div>
+                <div class="control-group"><label for="loadResistance">負載電阻 (Ω)</label><input type="number" id="loadResistance" value="5" min="1" max="100" step="0.1"></div>
+                <div class="control-group"><label for="simTime">模擬時間 (ms)</label><input type="number" id="simTime" value="5" min="1" max="50" step="1"></div>
+                <button class="btn btn-primary" id="runBtn" disabled>載入中...</button>
+                <button class="btn btn-secondary" id="clearBtn">清除結果</button>
+                <div id="progress-container"><div id="progress-bar">0%</div></div>
+            </div>
+            <div class="results">
+                <div id="chart-container"></div>
+                <div class="result-panel">
+                    <h3>🎯 解算器結果</h3>
+                    <div class="result-grid">
+                        <div class="result-item"><div class="result-label">平均輸出電壓</div><div class="result-value" id="avgVoltage">-- V</div></div>
+                        <div class="result-item"><div class="result-label">輸出電流</div><div class="result-value" id="outputCurrent">-- A</div></div>
+                        <div class="result-item"><div class="result-label">電壓漣波</div><div class="result-value" id="voltageRipple">-- V</div></div>
+                        <div class="result-item"><div class="result-label">模擬步數</div><div class="result-value" id="stepCount">--</div></div>
+                    </div>
+                </div>
+                 <div class="result-panel">
+                    <h3>📋 模擬日誌</h3>
+                    <div class="log" id="logOutput">等待開始模擬...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="./lib-dist/jssolver-pe.umd.js"></script>
+    <script>
+        let solver = null;
+        let isReady = false;
+        
+        function log(message, type = 'info') { const logOutput = document.getElementById('logOutput'); const timestamp = new Date().toLocaleTimeString(); const prefix = type === 'error' ? '❌' : type === 'success' ? '✅' : 'ℹ️'; logOutput.textContent += `[${timestamp}] ${prefix} ${message}\n`; logOutput.scrollTop = logOutput.scrollHeight; }
+        function updateStatus(message, type) { const status = document.getElementById('status'); status.textContent = message; status.className = `status ${type}`; }
+        
+        function initializeChart() {
+            const layout = {
+                title: 'Buck 轉換器模擬波形',
+                xaxis: { title: '時間 (ms)' },
+                yaxis: { title: '輸出電壓 (V)', color: '#1f77b4', range: [0, parseFloat(document.getElementById('inputVoltage').value) * 1.2] },
+                yaxis2: { title: '電感電流 (A)', color: '#ff7f0e', overlaying: 'y', side: 'right' },
+                yaxis3: { title: 'PWM', color: '#2ca02c', overlaying: 'y', side: 'right', position: 0.95, showgrid: false, range: [-0.1, 1.1], tickvals: [0, 1] },
+                legend: { x: 0, y: 1.1, orientation: 'h' },
+                margin: { l: 50, r: 100, b: 50, t: 50 }
+            };
+            Plotly.newPlot('chart-container', [], layout, {responsive: true});
+        }
+        
+        function updateChart(results) {
+            const timeData = [], voutData = [], iLData = [], pwmData = [];
+            
+            results.steps.forEach(step => {
+                timeData.push(step.time * 1000); // 轉為 ms
+                voutData.push(step.nodeVoltages['out'] || 0);
+                iLData.push(step.branchCurrents['L1'] || 0);
+                const pwmState = step.componentStates['MSW_H']?.gateState === 'ON' ? 1 : 0;
+                pwmData.push(pwmState);
+            });
+
+            const traces = [
+                { x: timeData, y: voutData, name: 'Vout (V)', type: 'scatter', mode: 'lines', line: { color: '#1f77b4' } },
+                { x: timeData, y: iLData, name: 'iL (A)', type: 'scatter', mode: 'lines', yaxis: 'y2', line: { color: '#ff7f0e' } },
+                { x: timeData, y: pwmData, name: 'PWM', type: 'scatter', mode: 'lines', yaxis: 'y3', line: { color: '#2ca02c', shape: 'hv' } }
+            ];
+            
+            // --- *** 關鍵修正 *** ---
+            const chartDiv = document.getElementById('chart-container');
+            Plotly.react(chartDiv, traces, chartDiv.layout); // 使用 chartDiv.layout 保持縮放狀態
+        }
+
+        async function initializeSolver() { try { log('開始初始化 JSSolver-PE...'); updateStatus('🔄 初始化解算器...', 'loading'); if (typeof window.JSSolverPE === 'undefined') throw new Error('JSSolver-PE library 未載入'); solver = new window.JSSolverPE.JSSolverPE(); solver.setDebug(false); log('JSSolver-PE 初始化成功！'); log(`版本: ${window.JSSolverPE.JSSolverPE.getVersionInfo().version}`); updateStatus('✅ 解算器就緒', 'success'); const runBtn = document.getElementById('runBtn'); runBtn.disabled = false; runBtn.textContent = '🚀 開始模擬'; isReady = true; } catch (error) { log(`初始化失敗: ${error.message}`, 'error'); updateStatus('❌ 初始化失敗', 'error'); console.error('JSSolver-PE initialization failed:', error); } }
+        function buildBuckCircuit() { const Vin = parseFloat(document.getElementById('inputVoltage').value); const L = parseFloat(document.getElementById('inductance').value) * 1e-6; const C = parseFloat(document.getElementById('capacitance').value) * 1e-6; const Rload = parseFloat(document.getElementById('loadResistance').value); log(`建立同步 Buck 電路: Vin=${Vin}V, L=${L*1e6}μH, C=${C*1e6}μF, R=${Rload}Ω`); solver.reset(); const { VoltageSource, MOSFET, Inductor, Capacitor, Resistor } = window.JSSolverPE; solver.components = [ new VoltageSource('VIN', ['vin', '0'], Vin), new MOSFET('MSW_H', ['vin', 'sw'], { Ron: 0.01, Roff: 1e6 }), new MOSFET('MSW_L', ['sw', '0'], { Ron: 0.01, Roff: 1e6 }), new Inductor('L1', ['sw', 'out'], L, {ic: 0}), new Capacitor('C1', ['out', '0'], C, {ic: 0}), new Resistor('RLOAD', ['out', '0'], Rload) ]; solver.isInitialized = true; const validation = solver.validateCircuit(); if (!validation.valid) throw new Error(`電路驗證失敗: ${validation.issues.join(', ')}`); log('同步 Buck 電路建立並驗證成功'); }
+        function updateProgress(current, total) { const progressBar = document.getElementById('progress-bar'); const progressContainer = document.getElementById('progress-container'); if (total > 0) { const percentage = Math.min(100, Math.round((current / total) * 100)); progressBar.style.width = `${percentage}%`; progressBar.textContent = `${percentage}%`; progressContainer.style.display = 'block'; } else { progressContainer.style.display = 'none'; } }
+        
+        async function runSimulation() {
+            if (!isReady) { log('解算器尚未就緒', 'error'); return; }
+            const runBtn = document.getElementById('runBtn');
+            runBtn.disabled = true; runBtn.textContent = '模擬中...';
+            try {
+                updateStatus('🔄 模擬進行中...', 'loading');
+                log('開始 Buck 轉換器模擬...');
+                initializeChart(); // 每次運行時重置圖表佈局
+                buildBuckCircuit();
+                const dutyCycle = parseFloat(document.getElementById('dutyCycle').value) / 100;
+                const frequency = parseFloat(document.getElementById('frequency').value) * 1000;
+                const simTime = parseFloat(document.getElementById('simTime').value) / 1000;
+                const period = 1 / frequency;
+                const timeStep = period / 100;
+                const totalSteps = Math.floor(simTime / timeStep);
+                const pwmControl = (time) => {
+                    const cycleTime = time % period;
+                    const highSideOn = cycleTime < (period * dutyCycle);
+                    return { 'MSW_H': highSideOn, 'MSW_L': !highSideOn };
+                };
+                log(`PWM 週期: ${(period*1e6).toFixed(1)}μs, 時間步長: ${(timeStep*1e9).toFixed(1)}ns, 總步數: ${totalSteps}`);
+                const startTime = performance.now();
+                await solver.initSteppedTransient({ startTime: 0, stopTime: simTime, timeStep: timeStep });
+                const allResults = [];
+                let currentStep = 0;
+                const chunkSize = Math.max(100, Math.floor(totalSteps / 100));
+                
+                function simulationStepLoop() {
+                    for (let i = 0; i < chunkSize && !solver.isFinished(); i++) {
+                        const controlInputs = pwmControl(solver.getCurrentTime());
+                        const stepResult = solver.step(controlInputs);
+                        if (stepResult) { allResults.push(stepResult); }
+                        currentStep++;
+                    }
+                    updateProgress(currentStep, totalSteps);
+                    if (!solver.isFinished()) {
+                        setTimeout(simulationStepLoop, 0);
+                    } else {
+                        const endTime = performance.now();
+                        log(`模擬耗時: ${(endTime - startTime).toFixed(1)}ms`);
+                        const finalResults = { steps: allResults, summary: { totalSteps: allResults.length } };
+                        processResults(finalResults, dutyCycle);
+                        updateChart(finalResults);
+                        updateStatus('✅ 模擬完成', 'success');
+                        log('模擬成功完成！', 'success');
+                        runBtn.disabled = false; runBtn.textContent = '🚀 開始模擬';
+                        document.getElementById('progress-container').style.display = 'none';
+                    }
+                }
+                simulationStepLoop();
+            } catch (error) {
+                log(`模擬失敗: ${error.message}`, 'error');
+                updateStatus('❌ 模擬失敗', 'error');
+                console.error('Simulation error:', error);
+                runBtn.disabled = false; runBtn.textContent = '🚀 開始模擬';
+            }
+        }
+        
+        function processResults(results, dutyCycle) { const steps = results.steps; const stepCount = steps.length; log(`模擬完成: ${stepCount} 個時間步驒`); if (stepCount === 0) { log('模擬結果為空！', 'error'); return; } let avgVoltage = 0, avgCurrent = 0, validSteps = 0; const analysisStart = Math.max(0, stepCount - Math.floor(stepCount * 0.5)); let minV = Infinity, maxV = -Infinity; for (let i = analysisStart; i < stepCount; i++) { const step = steps[i]; const outputVoltage = step.nodeVoltages['out'] || 0; if (outputVoltage >= -1 && outputVoltage <= 20) { avgVoltage += outputVoltage; minV = Math.min(minV, outputVoltage); maxV = Math.max(maxV, outputVoltage); validSteps++; } } if (validSteps === 0) { log('沒有有效的模擬步驒！', 'error'); return; } avgVoltage /= validSteps; const voltageRipple = maxV - minV; const loadResistance = parseFloat(document.getElementById('loadResistance').value); avgCurrent = avgVoltage / loadResistance; log(`=== 模擬結果詳細分析 ===`); log(`平均輸出電壓: ${avgVoltage.toFixed(4)} V`); log(`電壓漣波: ${voltageRipple.toFixed(4)}V (${(voltageRipple/avgVoltage*100).toFixed(1)}%)`); const Vin = parseFloat(document.getElementById('inputVoltage').value); const theoretical = Vin * dutyCycle; const error = Math.abs(avgVoltage - theoretical); document.getElementById('avgVoltage').textContent = `${avgVoltage.toFixed(3)} V`; document.getElementById('outputCurrent').textContent = `${avgCurrent.toFixed(3)} A`; document.getElementById('voltageRipple').textContent = `${voltageRipple.toFixed(3)} V`; document.getElementById('stepCount').textContent = `${validSteps}/${stepCount}`; log(`結果: 平均輸出=${avgVoltage.toFixed(3)}V, 理論=${theoretical.toFixed(2)}V, 誤差=${(error/theoretical*100).toFixed(1)}%`, 'success'); }
+        
+        function clearResults() {
+            document.getElementById('avgVoltage').textContent = '-- V';
+            document.getElementById('outputCurrent').textContent = '-- A';
+            document.getElementById('voltageRipple').textContent = '-- V';
+            document.getElementById('stepCount').textContent = '--';
+            document.getElementById('logOutput').textContent = '等待開始模擬...\n';
+            initializeChart();
+            log('結果已清除');
+        }
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeChart();
+            document.getElementById('runBtn').addEventListener('click', runSimulation);
+            document.getElementById('clearBtn').addEventListener('click', clearResults);
+            initializeSolver();
+        });
+    </script>
+</body>
+</html>

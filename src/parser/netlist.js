@@ -502,9 +502,17 @@ export class NetlistParser {
                 const key = token.substring(0, equalIndex).toLowerCase();
                 const value = token.substring(equalIndex + 1);
                 
-                // 嘗試解析為數字
-                const numValue = parseFloat(value);
-                params[key] = isNaN(numValue) ? value : numValue;
+                // 保持字符串格式，讓各個組件自己處理工程記號
+                // 只有明確的純數字才轉換為數字類型
+                const trimmedValue = value.trim();
+                if (/^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$/.test(trimmedValue)) {
+                    // 純數字（包括科學記號）
+                    const numValue = parseFloat(trimmedValue);
+                    params[key] = isNaN(numValue) ? value : numValue;
+                } else {
+                    // 包含單位後綴或其他文本，保持字符串
+                    params[key] = value;
+                }
             }
         }
         

@@ -2,14 +2,32 @@
   "name": "jssolver-pe",
   "version": "0.1.0",
   "description": "JavaScript Solver for Power Electronics - A high-performance circuit simulator for power electronic circuits",
-  "main": "src/index.js",
+  "main": "lib-dist/jssolver-pe.umd.js",
+  "module": "lib-dist/jssolver-pe.es.js",
+  "exports": {
+    ".": {
+      "import": "./lib-dist/jssolver-pe.es.js",
+      "require": "./lib-dist/jssolver-pe.umd.js"
+    }
+  },
+  "files": [
+    "lib-dist",
+    "src",
+    "README.md",
+    "AI-USAGE-GUIDE.md",
+    "AI-QUICK-REFERENCE.md"
+  ],
   "type": "module",
   "scripts": {
     "test": "node test/run-tests.js",
     "test:watch": "node --watch test/run-tests.js",
     "example": "node examples/simple-rc.js",
     "lint": "echo 'ESLint not configured yet'",
-    "build": "echo 'Build process not configured yet'"
+    "build": "vite build",
+    "build:lib": "vite build --config vite.lib.config.js",
+    "dev": "vite",
+    "preview": "vite preview",
+    "serve:buck": "node serve-buck.js"
   },
   "keywords": [
     "circuit-simulation",
@@ -26,7 +44,9 @@
     "node": ">=18.0.0"
   },
   "devDependencies": {
-    "chalk": "^5.3.0"
+    "chalk": "^5.3.0",
+    "chart.js": "^4.5.0",
+    "vite": "^7.1.7"
   },
   "repository": {
     "type": "git",
