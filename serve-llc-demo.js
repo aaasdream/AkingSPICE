@@ -2,7 +2,7 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 
-const PORT = 3002;
+const PORT = 3003;
 
 // MIME types
 const mimeTypes = {

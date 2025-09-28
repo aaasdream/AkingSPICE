@@ -193,14 +193,17 @@ export class VoltageControlledMOSFET extends BaseComponent {
 
     /**
      * 檢查體二極體是否導通
+     * 體二極體是從 Source 到 Drain 的內建二極體
      * @returns {boolean}
      */
     isBodyDiodeOn() {
-        // 體二極體：bulk 到 source（對於 NMOS）
+        // 體二極體：source 到 drain（對於 NMOS）
         if (this.modelType === 'NMOS') {
-            return this.Vbs > this.Vf_body; // Vb > Vs + Vf
+            // 當 Vs > Vd + Vf 時，體二極體導通（電流從 source 流向 drain）
+            return (-this.Vds) > this.Vf_body;
         } else {
-            return this.Vbs < -this.Vf_body; // Vb < Vs - Vf (PMOS)
+            // 對於 PMOS，體二極體方向相反
+            return this.Vds > this.Vf_body;
         }
     }
 
@@ -217,53 +220,99 @@ export class VoltageControlledMOSFET extends BaseComponent {
             throw new Error(`VoltageControlledMOSFET ${this.name}: Node mapping not found`);
         }
         
-        // 獲取等效電阻並計算導納
-        const resistance = this.getEquivalentResistance();
-        const conductance = 1 / resistance;
+        // === 1. MOSFET 通道模型 ===
+        const channelResistance = this.getEquivalentResistance();
+        const channelConductance = 1 / channelResistance;
         
-        // 印花汲源電阻
+        // 印花 MOSFET 通道電阻 (drain-source)
         if (drainIndex >= 0) {
-            matrix.addAt(drainIndex, drainIndex, conductance);
+            matrix.addAt(drainIndex, drainIndex, channelConductance);
             if (sourceIndex >= 0) {
-                matrix.addAt(drainIndex, sourceIndex, -conductance);
+                matrix.addAt(drainIndex, sourceIndex, -channelConductance);
             }
         }
         
         if (sourceIndex >= 0) {
-            matrix.addAt(sourceIndex, sourceIndex, conductance);
+            matrix.addAt(sourceIndex, sourceIndex, channelConductance);
             if (drainIndex >= 0) {
-                matrix.addAt(sourceIndex, drainIndex, -conductance);
+                matrix.addAt(sourceIndex, drainIndex, -channelConductance);
             }
         }
         
-        // 如果有計算出的汲極電流，可以作為電流源處理
-        if (Math.abs(this.Id) > 1e-12) {
-            if (drainIndex >= 0) {
-                rhs.addAt(drainIndex, -this.Id); // 電流流出汲極
-            }
-            if (sourceIndex >= 0) {
-                rhs.addAt(sourceIndex, this.Id);  // 電流流入源極
-            }
-        }
+        // === 2. 體二極體模型 ===
+        // 體二極體是從 source 到 drain 的反向並聯二極體
+        // 導通條件：Vs - Vd > Vf_body (源極電壓高於汲極電壓 + 順向壓降)
         
-        // 處理體二極體（如果導通）
-        if (this.isBodyDiodeOn()) {
-            const bulkIndex = this.bulk === '0' ? -1 : nodeMap.get(this.bulk);
+        // 檢查體二極體是否應該導通
+        const bodyDiodeOn = this.isBodyDiodeOn();
+        
+        if (bodyDiodeOn) {
+            // 體二極體導通：建模為理想電壓源 + 串聯電阻
+            // 等效電路：從 source 到 drain，壓降 = Vf_body
+            
             const diodeConductance = 1 / this.Ron_body;
             
-            if (bulkIndex >= 0 && sourceIndex >= 0) {
-                matrix.addAt(bulkIndex, bulkIndex, diodeConductance);
-                matrix.addAt(bulkIndex, sourceIndex, -diodeConductance);
-                matrix.addAt(sourceIndex, bulkIndex, -diodeConductance);
+            // 添加體二極體的導納矩陣 (與通道並聯)
+            if (drainIndex >= 0) {
+                matrix.addAt(drainIndex, drainIndex, diodeConductance);
+                if (sourceIndex >= 0) {
+                    matrix.addAt(drainIndex, sourceIndex, -diodeConductance);
+                }
+            }
+            
+            if (sourceIndex >= 0) {
                 matrix.addAt(sourceIndex, sourceIndex, diodeConductance);
-                
-                // 體二極體順向偏壓
-                const diodeVoltage = this.modelType === 'NMOS' ? this.Vf_body : -this.Vf_body;
-                const currentSource = diodeVoltage * diodeConductance;
-                rhs.addAt(bulkIndex, -currentSource);
-                rhs.addAt(sourceIndex, currentSource);
+                if (drainIndex >= 0) {
+                    matrix.addAt(sourceIndex, drainIndex, -diodeConductance);
+                }
+            }
+            
+            // 添加體二極體的電壓源項到右側向量
+            // 電流 = G * (Vs - Vd - Vf_body)
+            // 重新排列：G * Vs - G * Vd = G * Vf_body
+            // 右側項：drain 節點 = -G * Vf_body, source 節點 = +G * Vf_body
+            
+            const voltageTerm = diodeConductance * this.Vf_body;
+            
+            if (drainIndex >= 0) {
+                rhs.addAt(drainIndex, -voltageTerm);
+            }
+            if (sourceIndex >= 0) {
+                rhs.addAt(sourceIndex, voltageTerm);
             }
         }
+        
+        // 調試輸出（簡化）
+        if (this.name === 'M1' && bodyDiodeOn) {
+            console.log(`${this.name}: Body diode ON, Vds=${this.Vds.toFixed(2)}V, Channel R=${channelResistance.toExponential(1)}Ω`);
+        }
+    }
+
+    /**
+     * 更新元件歷史狀態（在每個時間步求解後調用）
+     * @param {Map} nodeVoltages 節點電壓映射
+     * @param {Map} branchCurrents 支路電流映射
+     */
+    updateHistory(nodeVoltages, branchCurrents) {
+        // 🔥 關鍵修正：在每個時間步後更新 MOSFET 的工作狀態
+        this.updateVoltages(nodeVoltages);
+        
+        // 調用父類的 updateHistory
+        super.updateHistory(nodeVoltages, branchCurrents);
+    }
+
+    /**
+     * 設置閘極狀態（由控制器調用）
+     * @param {boolean} state 閘極狀態（true=ON, false=OFF）
+     */
+    setGateState(state) {
+        // 這個方法由 solver 的 updateControlInputs 調用
+        // 我們可以在這裡設置閘極電壓，但實際上閘極電壓由 VoltageSource 控制
+        // 因此這個方法主要用於觸發狀態更新
+        this.gateState = state;
+        
+        // 觸發電壓和工作狀態更新
+        // 注意：這裡無法獲取實際的節點電壓，需要等到 stamp 時再更新
     }
 
     /**
@@ -272,6 +321,21 @@ export class VoltageControlledMOSFET extends BaseComponent {
      */
     needsCurrentVariable() {
         return false; // 使用等效電阻模型，不需要額外電流變數
+    }
+
+    /**
+     * 計算通過MOSFET的電流
+     * @param {Map<string, number>} nodeVoltages 節點電壓
+     * @returns {number} 汲極電流 (安培)，正值表示從drain流向source
+     */
+    getCurrent(nodeVoltages) {
+        // 更新電壓
+        this.updateVoltages(nodeVoltages);
+        
+        // 更新操作點
+        this.operatingPoint.current = this.Id;
+        
+        return this.Id;
     }
 
     /**

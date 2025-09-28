@@ -18,7 +18,7 @@ export class AkingSPICE {
         this.dcAnalysis = new DCAnalysis();
         
         // 電路數據
-        this.components = [];
+        this._components = []; // 使用內部變數儲存
         this.models = new Map();
         this.parameters = new Map();
         this.analyses = [];
@@ -35,6 +35,37 @@ export class AkingSPICE {
         // 如果提供了網表，立即解析
         if (netlist) {
             this.loadNetlist(netlist);
+        }
+    }
+
+    // 🔥 新增：Component Setter，自動處理元元件
+    set components(componentArray) {
+        this._components = []; // 清空現有組件
+        this.addComponents(componentArray);
+    }
+
+    // 🔥 新增：Component Getter
+    get components() {
+        return this._components || [];
+    }
+    
+    // 🔥 新增：addComponent 方法，用於單個元件
+    addComponent(component) {
+        if (!this._components) {
+            this._components = [];
+        }
+        if (component.type === 'T_META' && typeof component.getComponents === 'function') {
+            // 如果是元元件，添加其子元件
+            this._components.push(...component.getComponents());
+        } else {
+            this._components.push(component);
+        }
+    }
+
+    // 🔥 新增：addComponents 方法，用於陣列
+    addComponents(componentArray) {
+        for (const comp of componentArray) {
+            this.addComponent(comp);
         }
     }
 

@@ -118,21 +118,65 @@ export class DCAnalysis {
             // 分析電路拓撲
             this.mnaBuilder.analyzeCircuit(components);
             
-            // 建立MNA矩陣 (t=0，所有動態元件使用DC行為)
-            const { matrix, rhs } = this.mnaBuilder.buildMNAMatrix(components, 0);
+            // 非線性求解迭代
+            const maxIterations = 20;
+            const tolerance = 1e-9;
+            let iteration = 0;
+            let converged = false;
+            let solution;
             
-            if (this.debug) {
-                console.log('MNA Matrix built');
-                this.mnaBuilder.printMNAMatrix();
+            while (iteration < maxIterations && !converged) {
+                iteration++;
+                
+                // 建立MNA矩陣 (t=0，所有動態元件使用DC行為)
+                const { matrix, rhs } = this.mnaBuilder.buildMNAMatrix(components, 0);
+                
+                if (this.debug && iteration === 1) {
+                    console.log('MNA Matrix built');
+                    this.mnaBuilder.printMNAMatrix();
+                }
+                
+                // 求解線性方程組
+                const newSolution = LUSolver.solve(matrix, rhs);
+                
+                // 檢查收斂性
+                if (iteration > 1) {
+                    let maxChange = 0;
+                    for (let i = 0; i < newSolution.size; i++) {
+                        const change = Math.abs(newSolution.get(i) - solution.get(i));
+                        maxChange = Math.max(maxChange, change);
+                    }
+                    
+                    if (maxChange < tolerance) {
+                        converged = true;
+                        if (this.debug) {
+                            console.log(`DC analysis converged after ${iteration} iterations (max change: ${maxChange.toExponential(2)})`);
+                        }
+                    }
+                }
+                
+                solution = newSolution;
+                
+                // 提取結果並更新組件狀態
+                const tempNodeVoltages = this.mnaBuilder.extractNodeVoltages(solution);
+                const tempBranchCurrents = this.mnaBuilder.extractVoltageSourceCurrents(solution);
+                
+                // 更新所有組件的電壓狀態
+                for (const component of components) {
+                    if (typeof component.updateHistory === 'function') {
+                        component.updateHistory(tempNodeVoltages, tempBranchCurrents);
+                    }
+                }
             }
             
-            // 求解線性方程組
-            const solution = LUSolver.solve(matrix, rhs);
+            if (!converged) {
+                console.warn(`DC analysis did not converge after ${maxIterations} iterations`);
+            }
             
-            // 提取結果
+            // 設置最終結果
             result.nodeVoltages = this.mnaBuilder.extractNodeVoltages(solution);
             result.branchCurrents = this.mnaBuilder.extractVoltageSourceCurrents(solution);
-            result.converged = true;
+            result.converged = converged;
             
             // 計算功耗
             result.calculatePower(components);
@@ -143,7 +187,8 @@ export class DCAnalysis {
                 matrixSize: this.mnaBuilder.matrixSize,
                 nodeCount: this.mnaBuilder.nodeCount,
                 voltageSourceCount: this.mnaBuilder.voltageSourceCount,
-                matrixCondition: this.estimateCondition(matrix)
+                iterations: iteration,
+                convergence: converged ? 'converged' : 'max iterations reached'
             };
             
             if (this.debug) {
@@ -234,7 +279,7 @@ export class DCAnalysis {
         console.log(`  Balance Error: ${Math.abs(totalSupplied - totalDissipated).toFixed(9)}W`);
         
         const info = result.getSummary();
-        console.log(`\\nMatrix Info: ${info.matrixSize}×${info.matrixSize}, condition ≈ ${info.matrixCondition.toExponential(2)}`);
+        console.log(`\\nMatrix Info: ${info.matrixSize}×${info.matrixSize}, iterations: ${info.iterations}`);
         console.log('===========================\\n');
     }
 

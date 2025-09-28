@@ -262,9 +262,13 @@ export class MNABuilder {
      * 電感的MNA印記 (需要電流變數)
      * 使用伴隨模型: v_L(t) = L * di/dt ≈ L/h * (i(t) - i(t-h))
      */
+    /**
+     * 電感的MNA印記 (需要電流變數)
+     * 🔥 修正版：支援耦合電感（互感）
+     */
     stampInductor(inductor) {
         const nodes = inductor.nodes;
-        const L = inductor.value;
+        const L = inductor.getInductance(); // 使用 getInductance()
         
         const n1 = this.getNodeIndex(nodes[0]);
         const n2 = this.getNodeIndex(nodes[1]);
@@ -274,7 +278,8 @@ export class MNABuilder {
             throw new Error(`Inductor ${inductor.name} current variable not found`);
         }
 
-        // B矩陣: 電流從節點流出的關係
+        // B矩陣和C矩陣：電流從節點流出的關係
+        // V_n1 - V_n2 - V_L = 0  =>  V_n1 - V_n2 = V_L
         if (n1 >= 0) {
             this.matrix.addAt(n1, currIndex, 1);
             this.matrix.addAt(currIndex, n1, 1);
@@ -284,15 +289,48 @@ export class MNABuilder {
             this.matrix.addAt(currIndex, n2, -1);
         }
 
-        // D矩陣: 電感的電壓-電流關係
+        // D矩陣：電感的電壓-電流關係
         if (inductor.timeStep) {
+            // 瞬時分析：V_L = L * di/dt
             const h = inductor.timeStep;
+            
+            // 1. 印花自感項
             this.matrix.addAt(currIndex, currIndex, -L / h);
             
-            // 歷史項
+            // 2. 印花歷史項（來自自感）
             if (inductor.historyTerm !== undefined) {
                 this.rhs.addAt(currIndex, -L / h * inductor.historyTerm);
             }
+
+            // 🔥 3. 印花互感項
+            if (inductor.couplings) {
+                for (const coupling of inductor.couplings) {
+                    const otherInductor = coupling.inductor;
+                    const M = coupling.mutualInductance;
+                    
+                    // 獲取另一個電感的電流變數索引
+                    const otherCurrIndex = this.voltageSourceMap.get(otherInductor.name);
+                    if (otherCurrIndex === undefined) {
+                        throw new Error(`Coupled inductor ${otherInductor.name} not found for ${inductor.name}`);
+                    }
+
+                    // 添加互感對矩陣的貢獻 (V_L += M * dI_other/dt)
+                    this.matrix.addAt(currIndex, otherCurrIndex, -M / h);
+                    
+                    // 添加互感對歷史項的貢獻
+                    if (otherInductor.historyTerm !== undefined) {
+                        this.rhs.addAt(currIndex, -M / h * otherInductor.historyTerm);
+                    }
+                }
+            }
+        } else {
+            // DC 分析：電感表現為短路，V_L = 0
+            // 直接設置電壓約束 V_n1 - V_n2 = 0
+            // 這已經在上面的 B 和 C 矩陣中處理了
+            
+            // 添加電感的寄生電阻（如果有的話）
+            const R = inductor.resistance || 1e-9; // 添加極小電阻避免數值問題
+            this.matrix.addAt(currIndex, currIndex, -R);
         }
     }
 

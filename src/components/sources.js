@@ -285,6 +285,20 @@ export class VoltageSource extends BaseComponent {
         
         return `${this.name}: ${this.nodes[0]}(+) ${this.nodes[1]}(-) ${valueStr}`;
     }
+
+    /**
+     * 動態設置電壓值（用於控制系統）
+     * @param {number} newValue 新的電壓值
+     */
+    setValue(newValue) {
+        this.value = newValue;
+        // 如果是DC源，同時更新源配置
+        if (this.sourceConfig.type === 'DC') {
+            this.sourceConfig.dc = newValue;
+            this.sourceConfig.amplitude = newValue;
+            this.sourceConfig.offset = newValue;
+        }
+    }
 }
 
 /**

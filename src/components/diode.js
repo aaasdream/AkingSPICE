@@ -185,6 +185,28 @@ export class Diode extends BaseComponent {
     }
 
     /**
+     * 更新歷史狀態 (在每個時間步結束時調用)
+     * @param {Map<string, number>} nodeVoltages 節點電壓
+     * @param {Map<string, number>} branchCurrents 支路電流
+     */
+    updateHistory(nodeVoltages, branchCurrents) {
+        // 調用基類方法
+        super.updateHistory(nodeVoltages, branchCurrents);
+        
+        // 計算陽極-陰極電壓
+        const anodeVoltage = nodeVoltages.get(this.anode) || 0;
+        const cathodeVoltage = nodeVoltages.get(this.cathode) || 0;
+        const vak = anodeVoltage - cathodeVoltage;
+        
+        // 計算電流 (使用歐姆定律)
+        const resistance = this.getEquivalentResistance(vak);
+        const current = vak / resistance;
+        
+        // 更新狀態
+        this.updateState(vak, current);
+    }
+
+    /**
      * 檢查是否需要電流變數 (對於理想二極體，通常不需要)
      * @returns {boolean}
      */

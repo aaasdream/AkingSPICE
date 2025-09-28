@@ -207,6 +207,25 @@ export class MOSFET extends BaseComponent {
     }
 
     /**
+     * 計算通過MOSFET的總電流
+     * @param {Map<string, number>} nodeVoltages 節點電壓
+     * @returns {number} 總電流 (安培)，正值表示從drain流向source
+     */
+    getCurrent(nodeVoltages) {
+        const vds = this.getVoltage(nodeVoltages); // drain-source電壓
+        this.drainSourceVoltage = vds;
+        
+        const rTotal = this.getEquivalentResistance(vds);
+        const ids = vds / rTotal;
+        
+        // 更新電流狀態
+        this.totalCurrent = ids;
+        this.operatingPoint.current = ids;
+        
+        return ids;
+    }
+
+    /**
      * 檢查是否需要電流變數 (對於理想開關，通常不需要)
      * @returns {boolean}
      */

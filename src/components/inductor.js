@@ -30,6 +30,9 @@ export class Inductor extends LinearTwoTerminal {
         // 電感需要電流變數
         this.needsCurrentVar = true;
         
+        // 🔥 新增：用於儲存耦合資訊
+        this.couplings = null;
+        
         // 計算溫度修正後的電感值
         this.updateTemperatureCoefficient();
     }
@@ -132,15 +135,15 @@ export class Inductor extends LinearTwoTerminal {
         const current = branchCurrents.get(this.name) || 0;
         const voltage = this.getVoltageFromCurrent(current);
         
-        // 更新歷史值
+        // 🔥 關鍵修正：先為下一個時間步準備伴隨模型（基於當前歷史值）
+        this.updateCompanionModel();
+        
+        // 然後更新歷史值為當前值
         this.previousValues.set('current', current);
         this.previousValues.set('voltage', voltage);
         
         // 計算功耗 (理想電感功耗為0，但可能有寄生電阻)
         this.operatingPoint.power = voltage * current;
-        
-        // 為下一個時間步準備伴隨模型
-        this.updateCompanionModel();
     }
 
     /**

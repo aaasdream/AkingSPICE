@@ -120,15 +120,15 @@ export class Capacitor extends LinearTwoTerminal {
         const voltage = this.getVoltage(nodeVoltages);
         const current = this.getCurrent(nodeVoltages);
         
-        // 更新歷史值
+        // 🔥 關鍵修正：先為下一個時間步準備伴隨模型（基於當前歷史值）
+        this.updateCompanionModel();
+        
+        // 然後更新歷史值為當前值
         this.previousValues.set('voltage', voltage);
         this.previousValues.set('current', current);
         
         // 計算功耗 (對理想電容應該為0，但實際中可能有數值誤差)
         this.operatingPoint.power = voltage * current;
-        
-        // 為下一個時間步準備伴隨模型
-        this.updateCompanionModel();
     }
 
     /**
