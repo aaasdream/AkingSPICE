@@ -133,6 +133,15 @@ export class MNABuilder {
         this.matrix = Matrix.zeros(this.matrixSize, this.matrixSize);
         this.rhs = Vector.zeros(this.matrixSize);
 
+        // 🔥 新增：在蓋章前，先更新所有非線性元件的狀態
+        if (time > 0) {  // DC 分析時跳過
+            for (const component of components) {
+                if (component.type === 'VM' && typeof component.updateFromPreviousVoltages === 'function') {
+                    component.updateFromPreviousVoltages();
+                }
+            }
+        }
+
         // 逐個添加元件的貢獻
         for (const component of components) {
             try {
@@ -215,8 +224,7 @@ export class MNABuilder {
 
     /**
      * 電容的MNA印記 (用於暫態分析)
-     * 使用伴隨模型: i_c(t) = C * dv/dt ≈ C/h * (v(t) - v(t-h)) + i_hist
-     * 其中 h 是時間步長
+     * 使用伴隨模型，支持不同的積分方法
      */
     stampCapacitor(capacitor) {
         if (!capacitor.timeStep) {
@@ -225,9 +233,8 @@ export class MNABuilder {
         }
 
         const nodes = capacitor.nodes;
-        const C = capacitor.value;
-        const h = capacitor.timeStep;
-        const Geq = C / h; // 等效電導
+        // 使用組件自己的等效電導 (支持梯形法)
+        const Geq = capacitor.equivalentConductance;
 
         const n1 = this.getNodeIndex(nodes[0]);
         const n2 = this.getNodeIndex(nodes[1]);
@@ -248,12 +255,12 @@ export class MNABuilder {
         }
 
         // 歷史電流項 (右手邊)
-        if (capacitor.historyTerm !== undefined) {
+        if (capacitor.historyCurrentSource !== undefined) {
             if (n1 >= 0) {
-                this.rhs.addAt(n1, -capacitor.historyTerm);
+                this.rhs.addAt(n1, capacitor.historyCurrentSource);
             }
             if (n2 >= 0) {
-                this.rhs.addAt(n2, capacitor.historyTerm);
+                this.rhs.addAt(n2, -capacitor.historyCurrentSource);
             }
         }
     }
@@ -291,19 +298,25 @@ export class MNABuilder {
 
         // D矩陣：電感的電壓-電流關係
         if (inductor.timeStep) {
-            // 瞬時分析：V_L = L * di/dt
-            const h = inductor.timeStep;
+            // 暫態分析：使用組件的等效電阻 (支持梯形法)
+            const Req = inductor.equivalentResistance;
             
-            // 1. 印花自感項
-            this.matrix.addAt(currIndex, currIndex, -L / h);
+            // 1. 印花等效電阻項
+            this.matrix.addAt(currIndex, currIndex, -Req);
             
-            // 2. 印花歷史項（來自自感）
-            if (inductor.historyTerm !== undefined) {
-                this.rhs.addAt(currIndex, -L / h * inductor.historyTerm);
+            // 2. 印花歷史電壓源項
+            if (inductor.historyVoltageSource !== undefined) {
+                this.rhs.addAt(currIndex, -inductor.historyVoltageSource);
             }
 
             // 🔥 3. 印花互感項
             if (inductor.couplings) {
+                // 獲取時間步長
+                const h = inductor.timeStep;
+                if (!h) {
+                    throw new Error(`Inductor ${inductor.name} time step not initialized for coupling`);
+                }
+                
                 for (const coupling of inductor.couplings) {
                     const otherInductor = coupling.inductor;
                     const M = coupling.mutualInductance;

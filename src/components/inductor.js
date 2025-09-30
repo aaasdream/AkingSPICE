@@ -65,28 +65,52 @@ export class Inductor extends LinearTwoTerminal {
     /**
      * 初始化暫態分析
      * @param {number} timeStep 時間步長
+     * @param {string} method 積分方法: 'backward_euler' 或 'trapezoidal'
      */
-    initTransient(timeStep) {
+    initTransient(timeStep, method = 'backward_euler') {
         super.initTransient(timeStep);
         
+        this.integrationMethod = method;
         const L = this.getInductance();
-        this.equivalentResistance = L / timeStep;
         
-        // 初始條件：設置初始電流
+        if (method === 'trapezoidal') {
+            // 梯形法: R_eq = 2L/h + Rs
+            this.equivalentResistance = 2 * L / timeStep + this.resistance;
+        } else {
+            // 後向歐拉法: R_eq = L/h + Rs
+            this.equivalentResistance = L / timeStep + this.resistance;
+        }
+        
+        // 初始條件：設置初始電流和電壓
         this.previousValues.set('current', this.ic);
-        this.historyVoltageSource = this.equivalentResistance * this.ic;
+        this.previousValues.set('voltage', this.ic * this.resistance); // 梯形法需要初始電壓
+        
+        if (method === 'trapezoidal') {
+            this.historyVoltageSource = (2 * L / timeStep) * this.ic + this.ic * this.resistance;
+        } else {
+            this.historyVoltageSource = (L / timeStep) * this.ic;
+        }
     }
 
     /**
      * 計算伴隨模型的歷史項
-     * 電感的伴隨模型：v_L(t) = R_eq * i(t) + V_hist
-     * 其中 R_eq = L/h, V_hist = R_eq * i(t-h)
+     * 支持後向歐拉法和梯形積分法
      */
     updateCompanionModel() {
         if (!this.timeStep) return;
         
         const previousCurrent = this.previousValues.get('current') || 0;
-        this.historyVoltageSource = this.equivalentResistance * previousCurrent;
+        const previousVoltage = this.previousValues.get('voltage') || 0;
+        const L = this.getInductance();
+        
+        if (this.integrationMethod === 'trapezoidal') {
+            // 梯形法: V_hist = 2L/h * i_n-1 + v_n-1
+            this.historyVoltageSource = (2 * L / this.timeStep) * previousCurrent + previousVoltage;
+        } else {
+            // 後向歐拉法: V_hist = L/h * i(t-h)
+            this.historyVoltageSource = (L / this.timeStep) * previousCurrent;
+        }
+        
         this.historyTerm = previousCurrent; // 用於MNA矩陣
     }
 
@@ -102,11 +126,19 @@ export class Inductor extends LinearTwoTerminal {
         }
         
         const previousCurrent = this.previousValues.get('current') || 0;
+        const previousVoltage = this.previousValues.get('voltage') || 0;
         const L = this.getInductance();
         
-        // 數值微分：v = L * (i(t) - i(t-h)) / h + R * i(t)
-        const diDt = (current - previousCurrent) / this.timeStep;
-        const voltage = L * diDt + this.resistance * current;
+        let voltage;
+        if (this.integrationMethod === 'trapezoidal') {
+            // 梯形法: v_n = 2L/h * (i_n - i_n-1) - v_n-1 + Rs * i_n
+            const inductiveVoltage = (2 * L / this.timeStep) * (current - previousCurrent) - previousVoltage;
+            voltage = inductiveVoltage + this.resistance * current;
+        } else {
+            // 後向歐拉法: v = L * (i(t) - i(t-h)) / h + R * i(t)
+            const diDt = (current - previousCurrent) / this.timeStep;
+            voltage = L * diDt + this.resistance * current;
+        }
         
         this.operatingPoint.current = current;
         this.operatingPoint.voltage = voltage;

@@ -353,22 +353,60 @@ async function main() {
                 }
             }
             
-            // 🔥 修正的中心抽頭整流控制邏輯
-            // 當Q1導通時，電流從sw_a流向諧振腔，sec_a應為正
-            // 當Q3導通時，電流從諧振腔流向sw_b，sec_b應為正
-            const sr1_on = q1_on;  // SR1在Q1半周期導通，sec_a->out
-            const sr2_on = q3_on;  // SR2在Q3半周期導通，sec_b->out  
-            const sr3_on = sr1_on || sr2_on; // SR3始終提供回流路徑
-
-            const controlInputs = {
+            // 先進行一步模擬獲取當前電壓（使用簡單控制）
+            const tempControlInputs = {
                 'VG1': q1_on ? 12 : 0, 'VG2': !q1_on ? 12 : 0,
                 'VG3': q3_on ? 12 : 0, 'VG4': !q3_on ? 12 : 0,
-                'V_GSR1': sr1_on ? 12 : 0,  // SR1與Q1同步
-                'V_GSR2': sr2_on ? 12 : 0,  // SR2與Q3同步
-                'V_GSR3': sr3_on ? 12 : 0   // SR3提供連續回流
+                'V_GSR1': q1_on ? 12 : 0,  // 暫時使用基於開關的控制  
+                'V_GSR2': q3_on ? 12 : 0,
+                'V_GSR3': (q1_on || q3_on) ? 12 : 0
             };
 
-            const stepResult = solver.step(controlInputs);
+            const stepResult = solver.step(tempControlInputs);
+            
+            // ✅ 修正的中心抽頭整流控制邏輯 - 基於實際電壓差判斷
+            let sr1_on = q1_on, sr2_on = q3_on, sr3_on = q1_on || q3_on;
+            
+            if (stepResult && stepResult.nodeVoltages) {
+                const V_sec_a = stepResult.nodeVoltages['sec_a'] || 0;
+                const V_sec_b = stepResult.nodeVoltages['sec_b'] || 0;  
+                const V_sec_ct = stepResult.nodeVoltages['sec_ct'] || 0;
+                const V_out = stepResult.nodeVoltages['out'] || 0;
+                
+                // 導通閾值設定（模擬二極體特性）
+                const Vf_threshold = 0.5; // 0.5V導通閾值
+                
+                // SR1: 當sec_a電壓明顯高於輸出電壓時導通 (正向偏置)
+                sr1_on = (V_sec_a - V_out) > Vf_threshold;
+                
+                // SR2: 當sec_b電壓明顯高於輸出電壓時導通 (正向偏置)  
+                sr2_on = (V_sec_b - V_out) > Vf_threshold;
+                
+                // SR3: 當輸出電壓高於中心抽頭時導通 (回流路徑)
+                sr3_on = (V_out - V_sec_ct) > Vf_threshold;
+                
+                // 更新控制輸入（如果需要重新模擬）
+                const newControlInputs = {
+                    'VG1': q1_on ? 12 : 0, 'VG2': !q1_on ? 12 : 0,
+                    'VG3': q3_on ? 12 : 0, 'VG4': !q3_on ? 12 : 0,
+                    'V_GSR1': sr1_on ? 12 : 0,
+                    'V_GSR2': sr2_on ? 12 : 0,
+                    'V_GSR3': sr3_on ? 12 : 0
+                };
+                
+                // 檢查是否需要重新模擬（如果整流控制改變了）
+                const needResolve = (tempControlInputs['V_GSR1'] !== newControlInputs['V_GSR1']) ||
+                                   (tempControlInputs['V_GSR2'] !== newControlInputs['V_GSR2']) ||
+                                   (tempControlInputs['V_GSR3'] !== newControlInputs['V_GSR3']);
+                
+                if (needResolve && stepCount > 100) { // 避免啟動階段的重複計算
+                    // 重新執行這一步
+                    const finalResult = solver.step(newControlInputs);
+                    if (finalResult && finalResult.nodeVoltages) {
+                        Object.assign(stepResult.nodeVoltages, finalResult.nodeVoltages);
+                    }
+                }
+            }
             
             if (stepResult && stepResult.nodeVoltages) {
                 lastVout = stepResult.nodeVoltages['out'] || 0;
@@ -404,15 +442,22 @@ async function main() {
                     console.log(`\n🔍 步驟 ${stepCount} (t=${(time*1e6).toFixed(1)}μs) - 48V閉環控制中:`); 
                     console.log(`   半橋電壓: ${V_bridge_voltage.toFixed(1)}V`);
                     console.log(`   諧振電壓: ${lastVresonant.toFixed(1)}V (Q=${currentQ.toFixed(3)})`);
-                    console.log(`   次級電壓: sec_a=${V_sec_a.toFixed(1)}V, sec_b=${V_sec_b.toFixed(1)}V`);
+                    console.log(`   次級電壓: sec_a=${V_sec_a.toFixed(1)}V, sec_b=${V_sec_b.toFixed(1)}V, sec_ct=${V_sec_ct.toFixed(1)}V`);
                     console.log(`   輸出電壓: ${lastVout.toFixed(3)}V | 目標: 48V | 誤差: ${(48-lastVout).toFixed(2)}V`);
                     console.log(`   工作頻率: ${(currentFrequency/1000).toFixed(1)}kHz`);
                     console.log(`   48V控制狀態: ${Math.abs(lastVout - 48) < 2 ? '✅接近目標' : '🔧調整中'}`);
                     
+                    // ✅ 增強整流器診斷 - 使用當前步驟的電壓值
+                    const V_sec_a_diag = stepResult.nodeVoltages['sec_a'] || 0;
+                    const V_sec_b_diag = stepResult.nodeVoltages['sec_b'] || 0;
+                    const V_sec_ct_diag = stepResult.nodeVoltages['sec_ct'] || 0;
+                    console.log(`   整流判斷: sec_a-out=${(V_sec_a_diag-lastVout).toFixed(1)}V→SR1=${sr1_on ? 'ON' : 'OFF'}`);
+                    console.log(`            sec_b-out=${(V_sec_b_diag-lastVout).toFixed(1)}V→SR2=${sr2_on ? 'ON' : 'OFF'}`);  
+                    console.log(`            out-sec_ct=${(lastVout-V_sec_ct_diag).toFixed(1)}V→SR3=${sr3_on ? 'ON' : 'OFF'}`);
+                    
                     // 48V控制效能評估
                     const control_error = Math.abs(lastVout - 48) / 48 * 100;
                     console.log(`   控制精度: ${control_error.toFixed(1)}% (目標<5%)`);
-                    console.log(`   SR控制狀態: SR1=${controlInputs['V_GSR1'] > 0 ? 'ON' : 'OFF'}, SR2=${controlInputs['V_GSR2'] > 0 ? 'ON' : 'OFF'}, SR3=${controlInputs['V_GSR3'] > 0 ? 'ON' : 'OFF'}`);
                     console.log(`   PWM狀態: Q1=${q1_on ? 'ON' : 'OFF'}, Q3=${q3_on ? 'ON' : 'OFF'}, 相位=${((stepCount % stepsPerPeriod) / stepsPerPeriod * 360).toFixed(1)}°`);
                 }
 

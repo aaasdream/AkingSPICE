@@ -219,22 +219,33 @@ async function testRLCFrequencyResponse() {
             solver.components = [
                 new VoltageSource('V1', ['in', '0'], `SINE(0 10 ${f})`),
                 new Inductor('L1', ['in', 'n1'], L),
-                new Capacitor('C1', ['n1', 'out'], C),
+                // ✅ 修正：設置電容初始條件為0
+                new Capacitor('C1', ['n1', 'out'], C, { ic: 0 }),
                 new Resistor('R1', ['out', '0'], R)
             ];
             solver.isInitialized = true;
             
             const period = 1 / f;
+            // ✅ 修正：增加到100個週期確保穩態，特別是高Q值電路
             const results = await solver.runSteppedSimulation(() => ({}), {
-                stopTime: period * 10, // 模擬10個週期以達穩態
-                timeStep: period / 100
+                stopTime: period * 100, // 增加到100個週期
+                timeStep: period / 50   // ✅ 修正：減少時間步長提高精度
             });
             
-            // 分析穩態輸出振幅（取最後幾個週期）
-            const steadyStateStart = Math.floor(results.steps.length * 0.8);
-            const steadyVoltages = results.steps.slice(steadyStateStart).map(s => s.nodeVoltages['out']);
-            const outputAmplitude = (Math.max(...steadyVoltages) - Math.min(...steadyVoltages)) / 2;
-            const simulatedGain = outputAmplitude / 10.0; // 輸入振幅是10V
+            // ✅ 修正：使用最後20個週期計算RMS值，更穩定
+            const totalSteps = results.steps.length;
+            const lastTwentyCycles = Math.floor(totalSteps * 20/100); // 最後20個週期
+            const steadyStateStart = totalSteps - lastTwentyCycles;
+            const steadyVoltages = results.steps.slice(steadyStateStart).map(s => s.nodeVoltages['out'] || 0);
+            
+            // 計算RMS而非峰值，更準確
+            let sumSquares = 0;
+            for (const v of steadyVoltages) {
+                sumSquares += v * v;
+            }
+            const outputRMS = Math.sqrt(sumSquares / steadyVoltages.length);
+            const inputRMS = 10.0 / Math.sqrt(2); // 正弦波RMS = 峰值/√2
+            const simulatedGain = outputRMS / inputRMS;
             simulatedGains.push(simulatedGain);
             
             console.log(`      模擬增益=${simulatedGain.toFixed(4)}`);
@@ -273,18 +284,45 @@ async function testPWMFrequencyControl() {
             solver.reset();
             solver.components = [
                 new VoltageSource('Vdd', ['vdd', '0'], 12),
-                new VoltageControlledMOSFET('Q1', ['vdd', 'gate', 'out'], { Ron: 0.1, Roff: 1e6 }),
-                new Resistor('R1', ['out', '0'], 10)
+                new VoltageSource('Vgate', ['gate', '0'], 0), // 可控制的閘極電壓源
+                // ✅ 修正：高側開關配置 - drain接vdd, source接out
+                new VoltageControlledMOSFET('Q1', ['vdd', 'gate', 'out'], { 
+                    Vth: 2.0, 
+                    Ron: 0.1, 
+                    Roff: 1e8 
+                }),
+                new Resistor('Rload', ['vdd', 'out'], 100) // 修正：從Vdd到out的負載電阻
             ];
             solver.isInitialized = true;
             
             const period = 1 / targetFreq;
             const timeStep = period / 100;
             
-            // PWM控制函數
+            // 🔥 修正的PWM控制函數：更新閘極電壓源
             const pwmControl = (time) => {
                 const t_in_period = time % period;
-                return { 'Q1': t_in_period < (period * duty) };
+                const gate_voltage = t_in_period < (period * duty) ? 5.0 : 0.0; // 5V/0V開關
+                
+                // 更新閘極電壓源
+                const gateSource = solver.components.find(c => c.name === 'Vgate');
+                if (gateSource) {
+                    gateSource.value = gate_voltage;
+                    gateSource.dc = gate_voltage;
+                }
+                
+                // 🔥 關鍵：手動更新MOSFET狀態
+                const mosfet = solver.components.find(c => c.name === 'Q1');
+                if (mosfet && mosfet.updateVoltages) {
+                    const mockNodeVoltages = new Map([
+                        ['vdd', 12],
+                        ['gate', gate_voltage],
+                        ['out', gate_voltage > 2.0 ? 6 : 12], // 初始猜測
+                        ['0', 0]
+                    ]);
+                    mosfet.updateVoltages(mockNodeVoltages);
+                }
+                
+                return {}; // 不需要返回控制輸入
             };
             
             const results = await solver.runSteppedSimulation(pwmControl, {
@@ -296,12 +334,20 @@ async function testPWMFrequencyControl() {
             const times = results.steps.map(s => s.time);
             const voltages = results.steps.map(s => s.nodeVoltages['out']);
             
-            // 找高電平轉低電平的時間點（開關關閉）
+            // 找所有電平轉換的時間點（開關切換）
             const transitions = [];
+            const threshold = 6; // 6V作為高/低電平閾值
             for (let i = 1; i < voltages.length; i++) {
-                if (voltages[i-1] > 6 && voltages[i] < 6) {
+                // 檢測任何方向的轉換：高→低 或 低→高
+                if ((voltages[i-1] > threshold && voltages[i] < threshold) || 
+                    (voltages[i-1] < threshold && voltages[i] > threshold)) {
                     transitions.push(times[i]);
                 }
+            }
+            
+            console.log(`    檢測到 ${transitions.length} 個PWM轉換點`);
+            if (transitions.length > 0) {
+                console.log(`    首幾個轉換時間: ${transitions.slice(0, 5).map(t => (t*1e6).toFixed(2) + 'μs').join(', ')}`);
             }
             
             if (transitions.length >= 2) {

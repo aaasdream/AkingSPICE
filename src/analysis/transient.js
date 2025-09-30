@@ -241,8 +241,9 @@ export class TransientAnalysis {
      * 初始化暫態分析
      * @param {BaseComponent[]} components 元件列表
      * @param {number} timeStep 時間步長
+     * @param {string} integrationMethod 積分方法: 'backward_euler' 或 'trapezoidal'
      */
-    async initialize(components = null, timeStep = null) {
+    async initialize(components = null, timeStep = null, integrationMethod = 'backward_euler') {
         // 如果提供了元件列表，使用它
         if (components) {
             this.components = [...components];
@@ -253,23 +254,28 @@ export class TransientAnalysis {
             this.timeStep = timeStep;
         }
         
+        // 設置積分方法
+        this.integrationMethod = integrationMethod;
+        
         // 分析電路拓撲
         this.mnaBuilder.analyzeCircuit(this.components);
         
         // 初始化所有元件的暫態狀態
         for (const component of this.components) {
-            component.initTransient(this.timeStep);
+            component.initTransient(this.timeStep, integrationMethod);
         }
         
         // 設置初始條件 (DC工作點)
         await this.setInitialConditions();
         
         // 儲存分析信息
+        const methodName = integrationMethod === 'trapezoidal' ? 'Trapezoidal Rule' : 'Backward Euler';
         this.result.analysisInfo = {
             timeStep: this.timeStep,
             startTime: this.startTime,
             stopTime: this.stopTime,
-            method: 'Backward Euler',
+            method: methodName,
+            integrationMethod: integrationMethod,
             matrixSize: this.mnaBuilder.matrixSize,
             nodeCount: this.mnaBuilder.nodeCount,
             voltageSourceCount: this.mnaBuilder.voltageSourceCount

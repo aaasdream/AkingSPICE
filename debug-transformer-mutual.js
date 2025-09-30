@@ -1,104 +1,132 @@
-// 診斷變壓器互感計算和MNA實現
-import { MultiWindingTransformer } from './src/components/transformer.js';
+/**
+ * =================================================================
+ *      動態變壓器驗證套件 - 診斷互感、匝比與相位
+ * =================================================================
+ * 目的:
+ * 1. 在瞬態模擬中驗證 MultiWindingTransformer 的電壓變換比。
+ * 2. 驗證正、負耦合係數 (k) 是否能產生正確的同相/反相輸出電壓。
+ * 3. 驗證 MNA 矩陣中互感項的動態行為是否符合物理定律。
+ */
 
-console.log("=== LLC變壓器互感診斷 ===");
+import {
+    AkingSPICE, VoltageSource, Resistor,
+    MultiWindingTransformer
+} from './src/index.js';
 
-// 創建LLC變壓器配置 - 使用正確的格式
-const llcTransformer = new MultiWindingTransformer('T1', {
-    windings: [
-        { name: 'primary', nodes: ['p.pri', 'p.pri2'], inductance: 50e-6, turns: 6 },    // 一次側磁化電感 50μH
-        { name: 'sec_a', nodes: ['p.sec1', 'p.sec_ct'], inductance: 1.39e-6, turns: 1 }, // 二次側電感 1.39μH (50μH/36)
-        { name: 'sec_b', nodes: ['p.sec2', 'p.sec_ct'], inductance: 1.39e-6, turns: 1 }  // 二次側電感 1.39μH (50μH/36)
-    ],
-    couplingMatrix: [
-        [1.0, 0.98, -0.95],      // 一次側與sec_a耦合，與sec_b反向耦合
-        [0.98, 1.0, -0.90],      // sec_a與sec_b反向耦合  
-        [-0.95, -0.90, 1.0]      // sec_b與其他反向，係數較小確保穩定性
-    ]
-});
+// --- 沿用之前的微型測試框架 ---
+class AkingSPICETestRunner {
+    constructor() { this.suites = []; this.stats = { passes: 0, fails: 0, total: 0 }; }
+    addSuite(name, testFunc) { this.suites.push({ name, testFunc }); }
+    async run() {
+        console.log("🚀 開始執行 AkingSPICE 動態變壓器驗證套件...");
+        for (const suite of this.suites) {
+            console.log(`\n--- 🧪 測試套件: ${suite.name} ---`);
+            try { await suite.testFunc(this); } catch (error) { this.fail(`[套件執行失敗] ${suite.name}`, error); }
+        }
+        this.summary();
+    }
+    async test(name, testFunc) {
+        this.stats.total++;
+        try { await testFunc(); this.stats.passes++; console.log(`  ✅ [通過] ${name}`); }
+        catch (error) { this.stats.fails++; console.log(`  ❌ [失敗] ${name}`); console.error(`      └─> 錯誤: ${error.stack}`); }
+    }
+    fail(name, error) { this.stats.total++; this.stats.fails++; console.log(`  ❌ [失敗] ${name}`); console.error(`      └─> 錯誤: ${error.stack}`); }
+    summary() {
+        console.log("\n==================== 動態變壓器測試總結 ====================");
+        if (this.stats.fails === 0) { console.log("🎉 恭喜！MultiWindingTransformer 的動態行為驗證通過！"); }
+        else { console.log(`⚠️ 注意！發現 ${this.stats.fails} 個失敗的測試。請檢查日誌。`); }
+        console.log("==========================================================");
+    }
+    assertCloseTo(actual, expected, tolerance, message) { if (Math.abs(actual - expected) > tolerance) { throw new Error(`${message} | 預期: ${expected} (±${tolerance}), 實際: ${actual.toFixed(3)}`); } }
+    assertTrue(value, message) { if (value !== true) { throw new Error(`${message} | 實際: ${value}`); } }
+}
 
-// 設置耦合矩陣 - 與LLC電路相同
-const couplingMatrix = [
-    [1.0, 0.98, -0.95],
-    [0.98, 1.0, -0.90],
-    [-0.95, -0.90, 1.0]
-];
+/**
+ * 測試套件：動態變壓器驗證
+ */
+async function testDynamicTransformer(runner) {
+    const solver = new AkingSPICE();
 
-// 計算互感矩陣
-const mutualMatrix = llcTransformer.calculateMutualInductanceMatrix(couplingMatrix);
+    // --- 電路參數 ---
+    const p = {
+        V_pri_peak: 100,      // 一次側輸入電壓峰值
+        frequency: 1000,      // 測試頻率 1kHz
+        Lm: 50e-6,            // 磁化電感 50μH
+        turns_ratio: 6,       // 匝數比
+        R_load: 10,           // 次級負載電阻
+    };
+    p.L_sec = p.Lm / (p.turns_ratio ** 2); // 1.389μH
+    p.V_sec_peak_theory = p.V_pri_peak / p.turns_ratio; // 16.67V
 
-console.log("互感矩陣計算結果:");
-console.log("L11 (一次側自感):", (mutualMatrix[0][0] * 1e6).toFixed(1), "μH");
-console.log("L22 (sec_a自感):", (mutualMatrix[1][1] * 1e6).toFixed(3), "μH");  
-console.log("L33 (sec_b自感):", (mutualMatrix[2][2] * 1e6).toFixed(3), "μH");
-console.log("M12 (一次→sec_a互感):", (mutualMatrix[0][1] * 1e6).toFixed(3), "μH");
-console.log("M13 (一次→sec_b互感):", (mutualMatrix[0][2] * 1e6).toFixed(3), "μH");
-console.log("M21 (sec_a→一次互感):", (mutualMatrix[1][0] * 1e6).toFixed(3), "μH");
-console.log("M31 (sec_b→一次互感):", (mutualMatrix[2][0] * 1e6).toFixed(3), "μH");
+    await runner.test("變壓器匝數比和相位關係的動態驗證", async () => {
+        solver.reset();
 
-// 計算耦合係數
-const L1 = mutualMatrix[0][0];
-const L2 = mutualMatrix[1][1];
-const L3 = mutualMatrix[2][2];
-const M12 = mutualMatrix[0][1];
-const M13 = mutualMatrix[0][2];
-const M21 = mutualMatrix[1][0];
-const M31 = mutualMatrix[2][0];
+        const transformer = new MultiWindingTransformer('T1', {
+            windings: [
+                { name: 'primary', nodes: ['pri_in', '0'], inductance: p.Lm },
+                { name: 'sec_a', nodes: ['sec_a_out', '0'], inductance: p.L_sec }, // 同相繞組
+                { name: 'sec_b', nodes: ['sec_b_out', '0'], inductance: p.L_sec }  // 反相繞組
+            ],
+            couplingMatrix: [
+                [1.0, 0.98, -0.98],  // pri-sec_a 正耦合, pri-sec_b 負耦合
+                [0.98, 1.0, -0.95],
+                [-0.98, -0.95, 1.0]
+            ]
+        });
 
-console.log("\n耦合係數驗證:");
-const k12_calculated = M12 / Math.sqrt(L1 * L2);
-const k13_calculated = M13 / Math.sqrt(L1 * L3);
-const k21_calculated = M21 / Math.sqrt(L1 * L2);
-const k31_calculated = M31 / Math.sqrt(L1 * L3);
-console.log("k12 (計算值):", k12_calculated.toFixed(3));
-console.log("k13 (計算值):", k13_calculated.toFixed(3));
-console.log("k21 (計算值):", k21_calculated.toFixed(3));
-console.log("k31 (計算值):", k31_calculated.toFixed(3));
-console.log("k12 (原始值):", couplingMatrix[0][1]);
-console.log("k13 (原始值):", couplingMatrix[0][2]);
-console.log("k21 (原始值):", couplingMatrix[1][0]);
-console.log("k31 (原始值):", couplingMatrix[2][0]);
+        solver.addComponents([
+            new VoltageSource('Vin', ['pri_in', '0'], `SINE(0 ${p.V_pri_peak} ${p.frequency})`),
+            transformer,
+            new Resistor('R_load_a', ['sec_a_out', '0'], p.R_load),
+            new Resistor('R_load_b', ['sec_b_out', '0'], p.R_load)
+        ]);
+        solver.isInitialized = true;
 
-// 檢查互感的對稱性
-console.log("\n互感對稱性檢查:");
-console.log("M12 = M21?", Math.abs(M12 - M21) < 1e-12 ? "✓" : "✗");
-console.log("M13 = M31?", Math.abs(M13 - M31) < 1e-12 ? "✓" : "✗");
-console.log("M12:", M12);
-console.log("M21:", M21);
-console.log("M13:", M13);
-console.log("M31:", M31);
+        const period = 1 / p.frequency;
+        const results = await solver.runSteppedSimulation(() => ({}), {
+            stopTime: 5 * period,       // 模擬5個週期以達到穩態
+            timeStep: period / 100      // 每個週期100個點
+        });
 
-// 分析負值耦合的影響
-console.log("\n負值耦合分析:");
-console.log("couplingMatrix[0][2] = -0.95 意味著:");
-console.log("- 一次側電流變化時，在sec_b感應出相位相反的電壓");
-console.log("- couplingMatrix[2][0] = -0.95 意味著:");
-console.log("- sec_b電流變化時，在一次側感應出相位相反的電壓");
-console.log("- 這是全橋整流器中心抽頭變壓器的正常行為");
-console.log("- 但在MNA中，互感項使用 -M/h，所以負耦合變成正項");
+        // --- 分析結果 (取最後一個週期) ---
+        const lastCycleSteps = results.steps.slice(-101);
+        const v_pri = lastCycleSteps.map(s => s.nodeVoltages['pri_in']);
+        const v_sec_a = lastCycleSteps.map(s => s.nodeVoltages['sec_a_out']);
+        const v_sec_b = lastCycleSteps.map(s => s.nodeVoltages['sec_b_out']);
 
-// 理論驗證：6:1匝比的期望值
-const turns_ratio = 6;
-const expected_L2 = L1 / (turns_ratio * turns_ratio);
-const actual_ratio = Math.sqrt(L1 / L2);
+        const v_pri_peak = Math.max(...v_pri);
+        const v_sec_a_peak = Math.max(...v_sec_a);
+        const v_sec_b_peak = Math.max(...v_sec_b); // 峰值是正的
 
-console.log("\n匝比驗證:");
-console.log("預期二次側電感:", (expected_L2 * 1e6).toFixed(3), "μH");
-console.log("實際sec_a電感:", (L2 * 1e6).toFixed(3), "μH");
-console.log("實際sec_b電感:", (L3 * 1e6).toFixed(3), "μH");
-console.log("計算匝比(sec_a):", actual_ratio.toFixed(1));
-console.log("目標匝比:", turns_ratio);
+        // 1. 驗證匝數比
+        console.log(`  一次側峰值電壓: ${v_pri_peak.toFixed(2)}V`);
+        console.log(`  二次側(A)峰值電壓: ${v_sec_a_peak.toFixed(2)}V (理論值: ${p.V_sec_peak_theory.toFixed(2)}V)`);
+        console.log(`  二次側(B)峰值電壓: ${v_sec_b_peak.toFixed(2)}V (理論值: ${p.V_sec_peak_theory.toFixed(2)}V)`);
+        runner.assertCloseTo(v_sec_a_peak, p.V_sec_peak_theory, 1.0, "同相繞組 (sec_a) 的峰值電壓應符合匝數比");
+        runner.assertCloseTo(v_sec_b_peak, p.V_sec_peak_theory, 1.0, "反相繞組 (sec_b) 的峰值電壓應符合匝數比");
 
-// MNA影響分析
-console.log("\nMNA矩陣影響分析:");
-console.log("在瞬態分析中，互感項為: -M/h");
-console.log("M12 =", (M12 * 1e6).toFixed(3), "μH (正值)");
-console.log("M13 =", (M13 * 1e6).toFixed(3), "μH (負值)");
-console.log("M21 =", (M21 * 1e6).toFixed(3), "μH (正值)");
-console.log("M31 =", (M31 * 1e6).toFixed(3), "μH (負值)");
-console.log("假設時間步長 h = 1e-8s：");
-const h = 1e-8;
-console.log("一次側對sec_a MNA項 (-M12/h):", (-M12/h).toFixed(0));
-console.log("一次側對sec_b MNA項 (-M13/h):", (-M13/h).toFixed(0));
-console.log("sec_a對一次側MNA項 (-M21/h):", (-M21/h).toFixed(0));
-console.log("sec_b對一次側MNA項 (-M31/h):", (-M31/h).toFixed(0));
+        // 2. 驗證相位關係
+        // 找到一次側電壓達到峰值的索引
+        const pri_peak_index = v_pri.indexOf(v_pri_peak);
+        
+        // 檢查 sec_a 在相同索引處是否也接近峰值 (同相)
+        const v_sec_a_at_peak = v_sec_a[pri_peak_index];
+        console.log(`  一次側達峰值時, V(sec_a) = ${v_sec_a_at_peak.toFixed(2)}V`);
+        runner.assertTrue(v_sec_a_at_peak > v_sec_a_peak * 0.95, "同相繞組 (sec_a) 應與一次側同相");
+
+        // 檢查 sec_b 在相同索引處是否接近谷值 (反相)
+        const v_sec_b_at_peak = v_sec_b[pri_peak_index];
+        console.log(`  一次側達峰值時, V(sec_b) = ${v_sec_b_at_peak.toFixed(2)}V`);
+        runner.assertTrue(v_sec_b_at_peak < -v_sec_b_peak * 0.95, "反相繞組 (sec_b) 應與一次側反相");
+    });
+}
+
+// --- 主執行函數 ---
+async function main() {
+    const runner = new AkingSPICETestRunner();
+    runner.addSuite("動態變壓器模型驗證", testDynamicTransformer);
+    await runner.run();
+    process.exit(runner.stats.fails > 0 ? 1 : 0);
+}
+
+main();

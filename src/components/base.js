@@ -112,9 +112,11 @@ export class BaseComponent {
     /**
      * 初始化暫態分析
      * @param {number} timeStep 時間步長
+     * @param {string} method 積分方法 (可選)
      */
-    initTransient(timeStep) {
+    initTransient(timeStep, method = 'backward_euler') {
         this.timeStep = timeStep;
+        this.integrationMethod = method;
         this.previousValues.clear();
         this.historyTerm = 0;
     }

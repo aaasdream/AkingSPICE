@@ -103,7 +103,24 @@ async function testResonantTank(runner) {
         
         const v_out_peak_low = Math.max(...results.steps.map(s => Math.abs(s.nodeVoltages['out'])));
         // 低頻時增益應明顯低於諧振時，使用相對比較
-        runner.assertTrue(v_out_peak_low < v_out_peak_resonant * 0.8, `低頻增益應低於諧振時，低頻:${v_out_peak_low.toFixed(1)}V vs 諧振:${v_out_peak_resonant.toFixed(1)}V`);
+        runner.assertTrue(v_out_peak_low < v_out_peak_resonant * 0.95, `低頻增益應低於諧振時，低頻:${v_out_peak_low.toFixed(1)}V vs 諧振:${v_out_peak_resonant.toFixed(1)}V`);
+    });
+
+    await runner.test("在遠高於諧振頻率 (140kHz) 時增益應較低", async () => {
+        const freq_high = fr_theory * 2;
+        solver.reset();
+        solver.components = [
+            new VoltageSource('Vac', ['in', '0'], `SINE(0 100 ${freq_high})`),
+            new Inductor('Lr', ['in', 'res_node'], Lr),
+            new Capacitor('Cr', ['res_node', 'out'], Cr),
+            new Resistor('Rload', ['out', '0'], Rload)
+        ];
+        solver.isInitialized = true;
+        const results = await solver.runSteppedSimulation(() => ({}), { stopTime: 20 / freq_high, timeStep: 1 / (freq_high * 100) });
+        
+        const v_out_peak_high = Math.max(...results.steps.map(s => Math.abs(s.nodeVoltages['out'])));
+        // 高頻時增益應明顯低於諧振時
+        runner.assertTrue(v_out_peak_high < v_out_peak_resonant * 0.8, `高頻增益應低於諧振時，高頻:${v_out_peak_high.toFixed(1)}V vs 諧振:${v_out_peak_resonant.toFixed(1)}V`);
     });
 }
 

@@ -50,28 +50,53 @@ export class Capacitor extends LinearTwoTerminal {
     /**
      * 初始化暫態分析
      * @param {number} timeStep 時間步長
+     * @param {string} method 積分方法: 'backward_euler' 或 'trapezoidal'
      */
-    initTransient(timeStep) {
+    initTransient(timeStep, method = 'backward_euler') {
         super.initTransient(timeStep);
         
+        this.integrationMethod = method;
         const C = this.getCapacitance();
-        this.equivalentConductance = C / timeStep;
         
-        // 初始條件：設置初始電壓
+        if (method === 'trapezoidal') {
+            // 梯形法: G_eq = 2C/h
+            this.equivalentConductance = 2 * C / timeStep;
+        } else {
+            // 後向歐拉法: G_eq = C/h
+            this.equivalentConductance = C / timeStep;
+        }
+        
+        // 初始條件：設置初始電壓和電流
         this.previousValues.set('voltage', this.ic);
-        this.historyCurrentSource = -this.equivalentConductance * this.ic;
+        this.previousValues.set('current', 0); // 梯形法需要初始電流
+        
+        if (method === 'trapezoidal') {
+            this.historyCurrentSource = this.equivalentConductance * this.ic;
+        } else {
+            // 後向歐拉法: I_hist = G_eq * V_ic (修正符號)
+            this.historyCurrentSource = this.equivalentConductance * this.ic;
+        }
     }
 
     /**
      * 計算伴隨模型的歷史項
-     * 電容的伴隨模型：i_c(t) = C/h * [v(t) - v(t-h)] + i_hist
-     * 其中 i_hist = -C/h * v(t-h)
+     * 支持後向歐拉法和梯形積分法
      */
     updateCompanionModel() {
         if (!this.timeStep) return;
         
         const previousVoltage = this.previousValues.get('voltage') || 0;
-        this.historyCurrentSource = -this.equivalentConductance * previousVoltage;
+        const previousCurrent = this.previousValues.get('current') || 0;
+        
+        // 檢查是否使用梯形積分法
+        if (this.integrationMethod === 'trapezoidal') {
+            // 梯形法: I_hist = 2C/h * v_n-1 + i_n-1
+            this.historyCurrentSource = this.equivalentConductance * previousVoltage + previousCurrent;
+        } else {
+            // 後向歐拉法: I_hist = G_eq * V_ic = C/h * v(t-h)
+            this.historyCurrentSource = this.equivalentConductance * previousVoltage;
+        }
+        
         this.historyTerm = this.historyCurrentSource;
     }
 
@@ -90,10 +115,18 @@ export class Capacitor extends LinearTwoTerminal {
         }
         
         const previousVoltage = this.previousValues.get('voltage') || 0;
+        const previousCurrent = this.previousValues.get('current') || 0;
         const C = this.getCapacitance();
         
-        // 數值微分：i = C * (v(t) - v(t-h)) / h
-        const current = C * (currentVoltage - previousVoltage) / this.timeStep;
+        let current;
+        if (this.integrationMethod === 'trapezoidal') {
+            // 梯形法：i_n = 2C/h * (v_n - v_n-1) - i_n-1
+            current = (2 * C / this.timeStep) * (currentVoltage - previousVoltage) - previousCurrent;
+        } else {
+            // 後向歐拉法：i = C * (v(t) - v(t-h)) / h
+            current = C * (currentVoltage - previousVoltage) / this.timeStep;
+        }
+        
         this.operatingPoint.current = current;
         return current;
     }

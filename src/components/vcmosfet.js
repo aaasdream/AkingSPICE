@@ -289,11 +289,40 @@ export class VoltageControlledMOSFET extends BaseComponent {
     }
 
     /**
+     * 從上一時間步的節點電壓更新狀態（在蓋章前調用）
+     */
+    updateFromPreviousVoltages() {
+        if (!this.previousNodeVoltages) {
+            // 第一次調用，使用初始條件
+            this.Vgs = 0;
+            this.Vds = 0;
+            this.Vbs = 0;
+            this.updateOperatingRegion();
+            this.calculateDrainCurrent();
+            return;
+        }
+        
+        const Vg = this.previousNodeVoltages.get(this.gate) || 0;
+        const Vd = this.previousNodeVoltages.get(this.drain) || 0;
+        const Vs = this.previousNodeVoltages.get(this.source) || 0;
+        const Vb = this.previousNodeVoltages.get(this.bulk) || Vs;
+        
+        this.Vgs = Vg - Vs;
+        this.Vds = Vd - Vs;
+        this.Vbs = Vb - Vs;
+        this.updateOperatingRegion();
+        this.calculateDrainCurrent();
+    }
+
+    /**
      * 更新元件歷史狀態（在每個時間步求解後調用）
      * @param {Map} nodeVoltages 節點電壓映射
      * @param {Map} branchCurrents 支路電流映射
      */
     updateHistory(nodeVoltages, branchCurrents) {
+        // 保存當前節點電壓供下一時間步使用
+        this.previousNodeVoltages = new Map(nodeVoltages);
+        
         // 🔥 關鍵修正：在每個時間步後更新 MOSFET 的工作狀態
         this.updateVoltages(nodeVoltages);
         
