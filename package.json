@@ -1,59 +1,36 @@
 {
-  "name": "AkingSPICE",
-  "version": "0.1.0",
-  "description": "JavaScript Solver for Power Electronics - A high-performance circuit simulator for power electronic circuits",
-  "main": "lib-dist/AkingSPICE.umd.js",
-  "module": "lib-dist/AkingSPICE.es.js",
-  "exports": {
-    ".": {
-      "import": "./lib-dist/AkingSPICE.es.js",
-      "require": "./lib-dist/AkingSPICE.umd.js"
-    }
-  },
-  "files": [
-    "lib-dist",
-    "src",
-    "README.md",
-    "AI-USAGE-GUIDE.md",
-    "AI-QUICK-REFERENCE.md"
-  ],
+  "name": "akingspice",
+  "version": "0.2.0",
+  "description": "JavaScript Circuit Simulator with WebGPU Acceleration",
   "type": "module",
+  "main": "src/index.js",
   "scripts": {
-    "test": "node test/run-tests.js",
-    "test:watch": "node --watch test/run-tests.js",
-    "example": "node examples/simple-rc.js",
-    "lint": "echo 'ESLint not configured yet'",
-    "build": "vite build",
-    "build:lib": "vite build --config vite.lib.config.js",
-    "dev": "vite",
-    "preview": "vite preview",
-    "serve:buck": "node serve-buck.js"
+    "test": "node test/test-explicit-solver.js",
+    "test:explicit": "node test/test-explicit-solver.js",
+    "test:webgpu": "node test/test-webgpu-basic.js",
+    "test:gpu": "node test/test-gpu-explicit-solver.js",
+    "test:gpu-fast": "node test/test-batch-gpu.js",
+    "test:perf": "node test/quick-gpu-perf.js",
+    "build": "rollup -c",
+    "dev": "rollup -c -w"
   },
   "keywords": [
-    "circuit-simulation",
-    "power-electronics",
     "spice",
-    "solver",
-    "javascript",
-    "electronics",
-    "simulation"
+    "circuit",
+    "simulation",
+    "webgpu",
+    "javascript"
   ],
-  "author": "Your Name",
+  "author": "AkingSPICE Development Team",
   "license": "MIT",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=16.0.0"
+  },
+  "dependencies": {
+    "webgpu": "^0.3.8"
   },
   "devDependencies": {
-    "chalk": "^5.3.0",
-    "chart.js": "^4.5.0",
-    "vite": "^7.1.7"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/yourname/AkingSPICE.git"
-  },
-  "bugs": {
-    "url": "https://github.com/yourname/AkingSPICE/issues"
-  },
-  "homepage": "https://github.com/yourname/AkingSPICE#readme"
+    "@webgpu/types": "^0.1.65",
+    "rollup": "^4.0.0"
+  }
 }

@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>🔥 AkingSPICE - LLC 智能求解器 (GPU/CPU 自適應)</title>
+    <!-- 引入 Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- 引入 Monaco Editor -->
+    <link rel="stylesheet" data-name="vs/editor/editor.main" href="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.34.1/min/vs/editor/editor.main.min.css">
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica', Arial, sans-serif; 
+            display: flex; 
+            flex-direction: column; 
+            height: 100vh; 
+            margin: 0; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .header { 
+            background: rgba(255,255,255,0.1); 
+            backdrop-filter: blur(10px);
+            color: white; 
+            padding: 20px; 
+            text-align: center; 
+            box-shadow: 0 2px 20px rgba(0,0,0,0.1); 
+        }
+        .main-content { 
+            display: flex; 
+            flex: 1; 
+            min-height: 0;
+            height: calc(100vh - 140px);
+            gap: 20px;
+            padding: 20px;
+        }
+        .left-panel { 
+            width: 500px; 
+            background: rgba(255,255,255,0.95); 
+            border-radius: 15px;
+            padding: 25px; 
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            backdrop-filter: blur(10px);
+            display: flex; 
+            flex-direction: column;
+            height: 100%;
+            overflow-y: auto;
+        }
+        .right-panel { 
+            flex: 1; 
+            background: rgba(255,255,255,0.95); 
+            border-radius: 15px;
+            padding: 25px; 
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            backdrop-filter: blur(10px);
+            display: flex; 
+            flex-direction: column; 
+        }
+        .editor-container { 
+            border: 1px solid rgba(0,0,0,0.1); 
+            border-radius: 8px;
+            height: 250px;
+            min-height: 200px; 
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+        .chart-container { 
+            position: relative; 
+            flex: 1; 
+            min-height: 400px;
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: inset 0 2px 10px rgba(0,0,0,0.05);
+        }
+        .button-group {
+            display: flex;
+            gap: 15px;
+            margin-top: 15px;
+        }
+        button { 
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white; 
+            border: none; 
+            padding: 12px 20px; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            font-size: 1em;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+        button:hover:not(:disabled) { 
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+        }
+        button:disabled { 
+            background: #aaa; 
+            cursor: not-allowed; 
+            transform: none;
+            box-shadow: none;
+        }
+        .log {
+            margin-top: 15px; 
+            padding: 15px;
+            background: rgba(248,249,250,0.8);
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.85em;
+            max-height: 200px;
+            min-height: 120px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            flex-shrink: 0;
+        }
+        #progress-container { 
+            width: 100%; 
+            background-color: #e9ecef; 
+            border-radius: 8px; 
+            margin-top: 10px; 
+            overflow: hidden; 
+            display: none;
+            height: 24px;
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);
+        }
+        #progress-bar { 
+            width: 0%; 
+            height: 100%; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+            text-align: center; 
+            line-height: 24px; 
+            color: white; 
+            font-weight: 600; 
+            transition: width 0.3s ease-in-out;
+            font-size: 0.85em;
+        }
+        .solver-status {
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 15px;
+            font-size: 0.9em;
+            font-weight: 600;
+        }
+        .solver-gpu {
+            background: rgba(16, 185, 129, 0.15);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: #065f46;
+        }
+        .solver-cpu {
+            background: rgba(245, 158, 11, 0.15);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            color: #92400e;
+        }
+        .solver-error {
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #991b1b;
+        }
+        .param-input {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .param-input label {
+            flex: 1;
+            font-weight: 600;
+        }
+        .param-input input {
+            flex: 1;
+            padding: 5px 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .param-panel {
+            background: rgba(248,249,250,0.6); 
+            border-radius: 8px; 
+            padding: 15px; 
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>🔥 AkingSPICE - LLC 智能求解器</h1>
+    <p style="margin: 5px 0; opacity: 0.9;">GPU/CPU 自適應 • ExplicitStateSolver • 實時控制器調試</p>
+</div>
+
+<div class="main-content">
+    <div class="left-panel">
+        <div class="solver-status" id="solver-status">
+            🔄 正在檢測最佳求解器...
+        </div>
+        
+        <div class="param-panel">
+            <h4 style="margin: 0 0 10px 0;">⚙️ 電路參數</h4>
+            <div class="param-input">
+                <label>輸入電壓:</label>
+                <input type="number" id="vin" value="400" step="10">
+                <span>V</span>
+            </div>
+            <div class="param-input">
+                <label>目標輸出:</label>
+                <input type="number" id="vout" value="48" step="1">
+                <span>V</span>
+            </div>
+            <div class="param-input">
+                <label>模擬時間:</label>
+                <input type="number" id="simtime" value="5" step="1">
+                <span>ms</span>
+            </div>
+        </div>
+        
+        <h3>🧠 控制器程式碼</h3>
+        <div id="editor" class="editor-container"></div>
+        
+        <div class="button-group">
+            <button id="runBtn" disabled>初始化中...</button>
+            <button id="resetBtn">重置</button>
+        </div>
+        <div id="progress-container"><div id="progress-bar">0%</div></div>
+        <div class="log" id="logOutput">🔄 正在載入 AkingSPICE 智能求解器...</div>
+    </div>
+    
+    <div class="right-panel">
+        <h3>📈 LLC 模擬結果</h3>
+        <div class="chart-container">
+            <canvas id="simulationChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- 載入編譯後的 AkingSPICE 庫 -->
+<script src="./lib-dist/AkingSPICE.umd.js"></script>
+<!-- Monaco Editor -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.34.1/min/vs/loader.min.js"></script>
+
+<script>
+document.addEventListener('DOMContentLoaded', async () => {
+    let editor;
+    let solver = null;
+    let solverType = 'none';  // 'gpu', 'cpu', 'none'
+    let chart = null;
+    let isReady = false;
+    let simulationRunning = false;
+
+    const initialControllerCode = `
+// 🚀 LLC 智能控制器 - GPU/CPU 自適應版本
+class SmartLLCController {
+    constructor(targetVoltage, timeStep) {
+        this.target = targetVoltage;
+        this.timeStep = timeStep;
+        
+        // 頻率範圍 (基於驗證成功的設計)
+        this.fs_resonant = 22000;  // 22kHz 諧振頻率
+        this.fs_min = 15000;       // 15kHz 最小
+        this.fs_max = 30000;       // 30kHz 最大
+        this.current_frequency = 20000;
+        
+        // PID 控制器參數 (針對數值穩定性優化)
+        this.kp = 100;        // 適中的比例增益
+        this.ki = 3000;       // 較溫和的積分增益
+        this.kd = 10;         // 小幅微分增益
+        
+        // 狀態變數
+        this.integral = 0;
+        this.prev_error = 0;
+        this.error_history = [];
+        
+        // 自適應機制
+        this.performance_counter = 0;
+        this.stable_counter = 0;
+        
+        console.log(\`🚀 Smart LLC 控制器啟動! 目標: \${this.target}V\`);
+    }
+
+    update(time, feedback) {
+        const error = this.target - feedback.v_out;
+        
+        // 自適應增益調整
+        const error_magnitude = Math.abs(error);
+        let adaptive_factor = 1.0;
+        
+        if (error_magnitude > 10) {
+            adaptive_factor = 1.5;  // 大誤差時加強控制
+        } else if (error_magnitude < 1) {
+            adaptive_factor = 0.7;  // 小誤差時溫和控制
+            this.stable_counter++;
+        } else {
+            this.stable_counter = 0;
+        }
+        
+        // PID 計算
+        const proportional = this.kp * error * adaptive_factor;
+        
+        // 積分 (智能抗飽和)
+        this.integral += error * this.timeStep;
+        const max_integral = 20 / adaptive_factor; // 動態積分限制
+        this.integral = Math.max(-max_integral, Math.min(max_integral, this.integral));
+        const integral = this.ki * this.integral * adaptive_factor;
+        
+        // 微分 (噪聲抑制)
+        const derivative_raw = (error - this.prev_error) / this.timeStep;
+        const derivative = this.kd * derivative_raw * adaptive_factor;
+        this.prev_error = error;
+        
+        // 頻率調節
+        const pid_output = proportional + integral + derivative;
+        let target_frequency = this.fs_resonant - pid_output;
+        
+        // 智能頻率限制
+        target_frequency = Math.max(this.fs_min, Math.min(this.fs_max, target_frequency));
+        
+        // 動態平滑濾波
+        const filter_alpha = this.stable_counter > 100 ? 0.95 : 0.85;
+        this.current_frequency = filter_alpha * this.current_frequency + (1 - filter_alpha) * target_frequency;
+        
+        // 性能記錄
+        this.error_history.push(error_magnitude);
+        if (this.error_history.length > 50) this.error_history.shift();
+        this.performance_counter++;
+        
+        return this.current_frequency;
+    }
+    
+    getStatus() {
+        const avg_error = this.error_history.length > 0 ? 
+            this.error_history.reduce((a,b) => a+b, 0) / this.error_history.length : 0;
+        const stability = this.stable_counter / Math.max(this.performance_counter, 1);
+        
+        return {
+            frequency: this.current_frequency,
+            error: this.prev_error,
+            avg_error: avg_error,
+            integral: this.integral,
+            stability: stability,
+            performance_steps: this.performance_counter
+        };
+    }
+}
+
+// 必須返回控制器實例
+return new SmartLLCController(targetVoltage, timeStep);
+`;
+
+    // 日誌和狀態函數
+    function log(message, type = 'info') {
+        const logOutput = document.getElementById('logOutput');
+        const timestamp = new Date().toLocaleTimeString();
+        const prefixes = {
+            'error': '❌', 'success': '✅', 'gpu': '⚡', 'cpu': '🖥️', 
+            'warning': '⚠️', 'info': 'ℹ️'
+        };
+        const prefix = prefixes[type] || 'ℹ️';
+        logOutput.textContent += `[${timestamp}] ${prefix} ${message}\n`;
+        logOutput.scrollTop = logOutput.scrollHeight;
+    }
+
+    function updateSolverStatus(message, type) {
+        const status = document.getElementById('solver-status');
+        status.className = `solver-status solver-${type}`;
+        status.innerHTML = message;
+    }
+
+    function updateProgress(current, total) {
+        const progressBar = document.getElementById('progress-bar');
+        const progressContainer = document.getElementById('progress-container');
+        if (total > 0) {
+            const percentage = Math.min(100, Math.round((current / total) * 100));
+            progressBar.style.width = `${percentage}%`;
+            progressBar.textContent = `${percentage}% (${current}/${total})`;
+            progressContainer.style.display = 'block';
+        } else {
+            progressContainer.style.display = 'none';
+        }
+    }
+
+    // 初始化 Monaco Editor
+    require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.34.1/min/vs' }});
+    require(['vs/editor/editor.main'], () => {
+        editor = monaco.editor.create(document.getElementById('editor'), {
+            value: initialControllerCode,
+            language: 'javascript',
+            theme: 'vs-dark',
+            automaticLayout: true,
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false
+        });
+    });
+
+    // 初始化 Chart.js
+    const ctx = document.getElementById('simulationChart').getContext('2d');
+    chart = new Chart(ctx, {
+        type: 'line',
+        data: { labels: [], datasets: [] },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            interaction: { intersect: false, mode: 'index' },
+            plugins: { legend: { position: 'top' } },
+            scales: {
+                x: { title: { display: true, text: '時間 (ms)' } },
+                y: { title: { display: true, text: '電壓 (V)' }, beginAtZero: false },
+                y1: { 
+                    type: 'linear', 
+                    position: 'right', 
+                    title: { display: true, text: '頻率 (kHz)' }, 
+                    beginAtZero: false, 
+                    grid: { drawOnChartArea: false } 
+                }
+            }
+        }
+    });
+
+    // 🧠 智能求解器初始化 (GPU優先，CPU回退)
+    async function initializeSmartSolver() {
+        try {
+            log('檢查 AkingSPICE 庫載入狀態...');
+            
+            if (typeof AkingSPICE === 'undefined') {
+                throw new Error('AkingSPICE 庫未載入');
+            }
+            
+            log('✅ AkingSPICE 庫載入成功');
+            
+            // 首先嘗試 GPU 加速求解器
+            updateSolverStatus('🔍 嘗試初始化 GPU 加速求解器...', 'gpu');
+            
+            try {
+                if (AkingSPICE.GPUExplicitStateSolver) {
+                    log('嘗試創建 GPU 求解器...', 'gpu');
+                    solver = new AkingSPICE.GPUExplicitStateSolver({
+                        debug: false,
+                        timeStep: 50e-9,
+                        integrationMethod: 'forward_euler',
+                        solverMaxIterations: 1000,
+                        solverTolerance: 1e-9
+                    });
+                    
+                    // 測試 GPU 初始化 (簡單測試)
+                    const testComponents = [
+                        new AkingSPICE.VoltageSource('V1', ['a', 'gnd'], 1.0),
+                        new AkingSPICE.Resistor('R1', ['a', 'gnd'], 1000)
+                    ];
+                    
+                    await solver.initialize(testComponents);
+                    solverType = 'gpu';
+                    log('🎉 GPU 加速求解器初始化成功!', 'gpu');
+                    updateSolverStatus('⚡ GPU 加速引擎 - 預期 4.6x 性能提升', 'gpu');
+                    
+                } else {
+                    throw new Error('GPUExplicitStateSolver 不可用');
+                }
+                
+            } catch (gpuError) {
+                log(`GPU 初始化失敗: ${gpuError.message}`, 'warning');
+                log('回退到 CPU 求解器...', 'cpu');
+                
+                // 回退到 CPU 版本
+                if (AkingSPICE.ExplicitStateSolver) {
+                    solver = new AkingSPICE.ExplicitStateSolver({
+                        debug: false,
+                        timeStep: 50e-9,
+                        integrationMethod: 'forward_euler'
+                    });
+                    solverType = 'cpu';
+                    log('✅ CPU 求解器初始化成功', 'cpu');
+                    updateSolverStatus('🖥️ CPU 高效求解器 - 穩定可靠', 'cpu');
+                } else {
+                    throw new Error('CPU 求解器也不可用');
+                }
+            }
+            
+            const runBtn = document.getElementById('runBtn');
+            runBtn.disabled = false;
+            runBtn.textContent = `🚀 執行 ${solverType.toUpperCase()} 加速模擬`;
+            isReady = true;
+            
+        } catch (error) {
+            log(`求解器初始化完全失敗: ${error.message}`, 'error');
+            updateSolverStatus(`❌ 初始化失敗: ${error.message}`, 'error');
+            console.error('Smart Solver initialization failed:', error);
+        }
+    }
+
+    // 🔧 建立簡化但穩定的 LLC 電路
+    function buildStableLLCComponents() {
+        log(`建立穩定的 LLC 電路組件 (${solverType.toUpperCase()} 優化)...`);
+        
+        const { VoltageSource, VoltageControlledMOSFET, Inductor, Capacitor, Resistor } = AkingSPICE;
+        
+        const vin = parseFloat(document.getElementById('vin').value);
+        const vout_target = parseFloat(document.getElementById('vout').value);
+        
+        // 針對數值穩定性優化的 LLC 參數
+        const params = {
+            Vin: vin,
+            Vout_target: vout_target,
+            // 更保守的諧振參數
+            Lr: 50e-6,      // 50µH (較大的諧振電感)
+            Cr: 100e-9,     // 100nF (較小的諧振電容)
+            Lm: 500e-6,     // 500µH (較大的磁化電感)
+            Cout: 2000e-6,  // 2000µF (更大的輸出電容)
+            Rload: 2.0,     // 2Ω (適中負載)
+            deadTime: 200e-9,
+            // 變壓器簡化比例
+            turns_ratio: 0.2  // 保守的變壓器比例
+        };
+        
+        // 簡化但穩定的電路拓撲
+        const components = [
+            // 輸入電壓源
+            new VoltageSource('Vin', ['vin', 'gnd'], params.Vin),
+            
+            // 簡化的半橋開關
+            new VoltageControlledMOSFET('Q1', ['vin', 'gate1', 'sw_node'], { 
+                Ron: 0.2, Roff: 1e5, Vf_body: 0.7 
+            }),
+            new VoltageControlledMOSFET('Q2', ['sw_node', 'gate2', 'gnd'], { 
+                Ron: 0.2, Roff: 1e5, Vf_body: 0.7 
+            }),
+            
+            // 閘極驅動
+            new VoltageSource('Vg1', ['gate1', 'gnd'], 0),
+            new VoltageSource('Vg2', ['gate2', 'gnd'], 0),
+            
+            // LLC 諧振網路 (穩定參數)
+            new Inductor('Lr', ['sw_node', 'res_node'], params.Lr),
+            new Capacitor('Cr', ['res_node', 'pri_node'], params.Cr),
+            new Inductor('Lm', ['pri_node', 'gnd'], params.Lm),
+            
+            // 簡化的輸出整流 (理想整流器 + 變壓器效果)
+            new Resistor('Rectifier', ['pri_node', 'out_node'], 0.1), 
+            new VoltageControlledMOSFET('Ideal_Rectifier', ['pri_node', 'dummy_gate', 'out_node'], {
+                Ron: 0.01, Roff: 1e6, Vf_body: 0.3
+            }),
+            new VoltageSource('Vg_rect', ['dummy_gate', 'gnd'], 12), // 常開
+            
+            // 輸出濾波 (大電容保證穩定)
+            new Capacitor('Cout', ['out_node', 'gnd'], params.Cout, { ic: params.Vout_target * 0.1 }),
+            new Resistor('Rload', ['out_node', 'gnd'], params.Rload),
+            
+            // 數值穩定性電阻 (更大阻值避免奇異矩陣)
+            new Resistor('R_stab1', ['sw_node', 'gnd'], 5e6),
+            new Resistor('R_stab2', ['res_node', 'gnd'], 5e6),
+            new Resistor('R_stab3', ['pri_node', 'gnd'], 5e6),
+            new Resistor('R_stab4', ['out_node', 'gnd'], 5e6)
+        ];
+        
+        log(`穩定 LLC 電路創建完成 (${vin}V→${vout_target}V, ${solverType.toUpperCase()})`, 'success');
+        return { components, params };
+    }
+
+    // 🚀 執行智能模擬 (GPU/CPU 自適應)
+    async function runSmartSimulation() {
+        if (!isReady || simulationRunning) return;
+        
+        const runBtn = document.getElementById('runBtn');
+        runBtn.disabled = true;
+        runBtn.textContent = `${solverType.toUpperCase()} 模擬中...`;
+        simulationRunning = true;
+        
+        try {
+            log(`🚀 開始 ${solverType.toUpperCase()} 加速 LLC 模擬...`, solverType);
+            
+            const circuit = buildStableLLCComponents();
+            const simTime = parseFloat(document.getElementById('simtime').value) * 1e-3;
+            const timeStep = 50e-9;
+            const totalSteps = Math.floor(simTime / timeStep);
+            
+            // 創建控制器
+            let controller;
+            try {
+                const userCode = editor.getValue();
+                const controllerFactory = new Function('targetVoltage', 'timeStep', userCode);
+                controller = controllerFactory(circuit.params.Vout_target, timeStep);
+            } catch (e) {
+                throw new Error("控制器程式碼錯誤: " + e.message);
+            }
+            
+            log(`${solverType.toUpperCase()} 模擬參數: 時間=${simTime*1000}ms, 步長=${timeStep*1e9}ns, 總步數=${totalSteps}`, solverType);
+            
+            // 初始化求解器
+            const startTime = performance.now();
+            
+                if (solverType === 'gpu') {
+                    await solver.initialize(circuit.components);
+                } else {
+                    // CPU 版本初始化
+                    await solver.initialize(circuit.components, timeStep, {
+                        debug: false,
+                        integrationMethod: 'forward_euler',
+                        solverMaxIterations: 1000,
+                        solverTolerance: 1e-9
+                    });
+                }            const allResults = [];
+            let currentTime = 0;
+            let stepCount = 0;
+            let lastVout = circuit.params.Vout_target * 0.1; // 初始預估
+            let currentFrequency = 20e3;
+            
+            // 智能模擬循環 (適應 GPU/CPU)
+            async function smartSimulationLoop() {
+                const stepsPerChunk = solverType === 'gpu' ? 200 : 100;
+                
+                for (let i = 0; i < stepsPerChunk && stepCount < totalSteps; i++) {
+                    // 更新控制器
+                    currentFrequency = controller.update(currentTime, { 
+                        v_out: lastVout, 
+                        v_in: circuit.params.Vin 
+                    });
+                    
+                    // 生成開關信號
+                    const period = 1 / currentFrequency;
+                    const phase = (currentTime % period) / period;
+                    const deadPhase = circuit.params.deadTime / period;
+                    
+                    const q1_on = phase >= deadPhase && phase < 0.5 - deadPhase;
+                    
+                    // 控制輸入
+                    const controlInputs = {
+                        'gate1': q1_on ? 12 : 0,
+                        'gate2': !q1_on ? 12 : 0
+                    };
+                    
+                    // 求解一步
+                    try {
+                        let stepResult;
+                        
+                        if (solverType === 'gpu') {
+                            // GPU 版本
+                            if (solver.setControlInputs) {
+                                solver.setControlInputs(controlInputs);
+                            }
+                            stepResult = await solver.solveTimeStep();
+                        } else {
+                            // CPU 版本 - 直接調用 step 方法
+                            stepResult = solver.step(controlInputs);
+                        }
+                        
+                        if (stepResult && stepResult.nodeVoltages) {
+                            const result = {
+                                time: currentTime,
+                                nodeVoltages: stepResult.nodeVoltages,
+                                frequency: currentFrequency
+                            };
+                            allResults.push(result);
+                            lastVout = stepResult.nodeVoltages['out_node'] || lastVout;
+                        }
+                    } catch (error) {
+                        if (stepCount % 2000 === 0) {
+                            log(`${solverType.toUpperCase()} 計算警告 (步驟 ${stepCount}): ${error.message}`, 'warning');
+                        }
+                        // 繼續模擬，不中斷
+                    }
+                    
+                    currentTime += timeStep;
+                    stepCount++;
+                }
+
+                updateProgress(stepCount, totalSteps);
+
+                if (stepCount < totalSteps) {
+                    setTimeout(() => smartSimulationLoop(), 0);
+                } else {
+                    const endTime = performance.now();
+                    const duration = endTime - startTime;
+                    const performanceRate = totalSteps / duration * 1000;
+                    
+                    log(`🚀 ${solverType.toUpperCase()} 模擬完成! 耗時: ${duration.toFixed(1)}ms`, 'success');
+                    log(`⚡ 性能: ${performanceRate.toFixed(0)} 步/秒`, solverType);
+                    
+                    drawResults(allResults, controller);
+                    
+                    runBtn.disabled = false;
+                    runBtn.textContent = `🚀 執行 ${solverType.toUpperCase()} 加速模擬`;
+                    simulationRunning = false;
+                    document.getElementById('progress-container').style.display = 'none';
+                }
+            }
+            
+            await smartSimulationLoop();
+
+        } catch (error) {
+            log(`${solverType.toUpperCase()} 模擬失敗: ${error.message}`, 'error');
+            console.error('Smart Simulation error:', error);
+            runBtn.disabled = false;
+            runBtn.textContent = `🚀 執行 ${solverType.toUpperCase()} 加速模擬`;
+            simulationRunning = false;
+        }
+    }
+
+    // 🎨 繪製結果
+    function drawResults(results, controller) {
+        log(`繪製 ${results.length} 個數據點...`);
+        
+        const timeData = [], voutData = [], freqData = [], targetData = [];
+        const targetVoltage = parseFloat(document.getElementById('vout').value);
+
+        results.forEach(result => {
+            timeData.push(result.time * 1000);
+            voutData.push(result.nodeVoltages['out_node'] || 0);
+            freqData.push(result.frequency / 1000);
+            targetData.push(targetVoltage);
+        });
+
+        chart.data = {
+            labels: timeData,
+            datasets: [
+                { 
+                    label: '輸出電壓 (V_out)', 
+                    data: voutData, 
+                    borderColor: '#667eea', 
+                    backgroundColor: 'rgba(102,126,234,0.1)',
+                    borderWidth: 2, 
+                    pointRadius: 0, 
+                    fill: false 
+                },
+                { 
+                    label: '目標電壓', 
+                    data: targetData, 
+                    borderColor: '#ff6b6b', 
+                    borderWidth: 1, 
+                    pointRadius: 0, 
+                    borderDash: [10, 5], 
+                    fill: false 
+                },
+                { 
+                    label: '開關頻率 (kHz)', 
+                    data: freqData, 
+                    borderColor: '#764ba2', 
+                    borderWidth: 2, 
+                    pointRadius: 0, 
+                    yAxisID: 'y1', 
+                    fill: false 
+                }
+            ]
+        };
+        chart.update();
+        
+        // 統計分析
+        if (results.length > 0) {
+            const finalVout = voutData[voutData.length - 1];
+            const avgVout = voutData.reduce((sum, v) => sum + v, 0) / voutData.length;
+            const error = Math.abs(targetVoltage - finalVout);
+            const errorPercent = (error / targetVoltage * 100).toFixed(2);
+            
+            log(`📊 最終結果: Vout=${finalVout.toFixed(2)}V, 誤差=${error.toFixed(2)}V (${errorPercent}%)`, 'success');
+            
+            if (controller) {
+                const status = controller.getStatus();
+                log(`🎛️ 控制器: 頻率=${(status.frequency/1000).toFixed(1)}kHz, 穩定性=${(status.stability*100).toFixed(1)}%`, 'success');
+            }
+        }
+        
+        log('圖表繪製完成!', 'success');
+    }
+
+    // 重置函數
+    function resetSolver() {
+        if (solver) {
+            if (solver.reset) solver.reset();
+            chart.data = { labels: [], datasets: [] };
+            chart.update();
+            log(`${solverType.toUpperCase()} 求解器已重置`, 'success');
+        }
+    }
+
+    // 啟動應用
+    await initializeSmartSolver();
+    document.getElementById('runBtn').addEventListener('click', runSmartSimulation);
+    document.getElementById('resetBtn').addEventListener('click', resetSolver);
+});
+</script>
+
+</body>
+</html>

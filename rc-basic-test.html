@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>🔧 AkingSPICE 基本測試 - RC 電路</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            padding: 20px; 
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        button {
+            background: #10b981;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover { background: #059669; }
+        button:disabled { background: #aaa; cursor: not-allowed; }
+        .log {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 20px 0;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.9em;
+        }
+        .chart-container {
+            margin-top: 20px;
+            height: 400px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1>🔧 AkingSPICE 基本測試 - RC 電路</h1>
+        <p>測試最簡單的 RC 充電電路，驗證求解器基本功能</p>
+    </div>
+
+    <div class="controls">
+        <button id="testBtn">🚀 測試 RC 電路</button>
+        <button id="clearBtn">清除日誌</button>
+        <span>電路: 12V → R(1kΩ) → C(1µF) → GND</span>
+    </div>
+
+    <div class="log" id="logOutput">準備測試 RC 電路...</div>
+    
+    <div class="chart-container">
+        <canvas id="testChart"></canvas>
+    </div>
+</div>
+
+<script src="./lib-dist/AkingSPICE.umd.js"></script>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    let chart = null;
+    
+    // 初始化圖表
+    const ctx = document.getElementById('testChart').getContext('2d');
+    chart = new Chart(ctx, {
+        type: 'line',
+        data: { labels: [], datasets: [] },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: { title: { display: true, text: '時間 (ms)' } },
+                y: { title: { display: true, text: '電壓 (V)' }, beginAtZero: true }
+            }
+        }
+    });
+
+    function log(message) {
+        const logOutput = document.getElementById('logOutput');
+        const timestamp = new Date().toLocaleTimeString();
+        logOutput.textContent += `[${timestamp}] ${message}\n`;
+        logOutput.scrollTop = logOutput.scrollHeight;
+    }
+
+    function clearLog() {
+        document.getElementById('logOutput').textContent = '';
+    }
+
+    async function testRCCircuit() {
+        const testBtn = document.getElementById('testBtn');
+        testBtn.disabled = true;
+        testBtn.textContent = '測試中...';
+        
+        try {
+            log('🚀 開始 RC 電路基本測試...');
+            
+            // 檢查庫
+            if (typeof AkingSPICE === 'undefined') {
+                throw new Error('AkingSPICE 庫未載入');
+            }
+            log('✅ AkingSPICE 庫載入成功');
+            
+            // 創建求解器
+            const solver = new AkingSPICE.ExplicitStateSolver();
+            log('✅ ExplicitStateSolver 創建成功');
+            
+            // 創建簡單 RC 電路 - 修復極性和初始條件
+            const { VoltageSource, Resistor, Capacitor } = AkingSPICE;
+            
+            const components = [
+                new VoltageSource('V1', ['1', '0'], 12),          // 12V 電壓源 (節點1 → 地)
+                new Resistor('R1', ['1', '2'], 1000),             // 1kΩ 電阻 (節點1 → 節點2)
+                new Capacitor('C1', ['2', '0'], 1e-6)             // 1µF 電容 (節點2 → 地)，默認初始0V
+            ];
+            
+            log('📦 RC 電路組件創建完成');
+            log('   • V1: 12V (節點1 → 節點0)');
+            log('   • R1: 1kΩ (節點1 → 節點2)');  
+            log('   • C1: 1µF (節點2 → 節點0), 初始 0V');
+            log('   • 理論時間常數 τ = RC = 1ms');
+            log('   • 監測節點: 節點2 (電容電壓)');
+            
+            // 模擬參數
+            const timeStep = 10e-6;  // 10µs
+            const simTime = 5e-3;    // 5ms (5個時間常數)
+            const totalSteps = Math.floor(simTime / timeStep);
+            
+            log(`⚙️  模擬參數: 時間步長=${timeStep*1e6}µs, 總時間=${simTime*1000}ms, 步數=${totalSteps}`);
+            
+            // 初始化求解器
+            await solver.initialize(components, timeStep, {
+                debug: false,
+                integrationMethod: 'forward_euler'
+            });
+            log('✅ 求解器初始化成功');
+            
+            // 執行模擬
+            log('⚡ 開始時間步進...');
+            const startTime = performance.now();
+            
+            const results = [];
+            let successCount = 0;
+            
+            for (let step = 0; step < totalSteps; step++) {
+                try {
+                    const currentTime = step * timeStep;
+                    
+                    // 簡單步進，無需控制輸入
+                    const result = solver.step({});
+                    
+                    if (result && result.nodeVoltages) {
+                        // 使用節點2作為輸出電壓 (電容電壓)
+                        const vout = result.nodeVoltages['2'] || 0;
+                        results.push({
+                            time: currentTime * 1000,  // ms
+                            vout: vout
+                        });
+                        successCount++;
+                        
+                        // 每100步輸出一次
+                        if (step % 100 === 0) {
+                            log(`   步驟 ${step}: t=${(currentTime*1000).toFixed(2)}ms, V(節點2)=${vout.toFixed(3)}V`);
+                        }
+                    }
+                } catch (stepError) {
+                    if (step < 10) {  // 只報告前10個錯誤
+                        log(`⚠️  步驟 ${step} 失敗: ${stepError.message}`);
+                    }
+                }
+            }
+            
+            const endTime = performance.now();
+            const duration = endTime - startTime;
+            
+            log(`⚡ 模擬完成! 耗時: ${duration.toFixed(1)}ms`);
+            log(`📊 成功步數: ${successCount} / ${totalSteps} (${(successCount/totalSteps*100).toFixed(1)}%)`);
+            
+            if (results.length > 0) {
+                // 分析結果
+                const finalVout = results[results.length - 1].vout;
+                const theoreticalFinal = 12 * (1 - Math.exp(-simTime / (1e-3)));  // τ = 1ms
+                const error = Math.abs(finalVout - theoreticalFinal);
+                
+                log('📈 結果分析:');
+                log(`   最終電壓: ${finalVout.toFixed(3)}V`);
+                log(`   理論值: ${theoreticalFinal.toFixed(3)}V`);
+                log(`   誤差: ${error.toFixed(3)}V (${(error/theoreticalFinal*100).toFixed(1)}%)`);
+                
+                // 繪製結果
+                const timeData = results.map(r => r.time);
+                const voutData = results.map(r => r.vout);
+                
+                chart.data = {
+                    labels: timeData,
+                    datasets: [{
+                        label: 'Vout (實際)',
+                        data: voutData,
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        borderWidth: 2,
+                        pointRadius: 0
+                    }, {
+                        label: 'Vout (理論)',
+                        data: timeData.map(t => 12 * (1 - Math.exp(-t/1000 / 1))),  // τ = 1ms
+                        borderColor: '#ef4444',
+                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                        borderWidth: 2,
+                        borderDash: [5, 5],
+                        pointRadius: 0
+                    }]
+                };
+                chart.update();
+                
+                log('✅ 測試成功！圖表已更新');
+            } else {
+                log('❌ 沒有有效的模擬結果');
+            }
+            
+        } catch (error) {
+            log(`❌ 測試失敗: ${error.message}`);
+            console.error('Test error:', error);
+        } finally {
+            testBtn.disabled = false;
+            testBtn.textContent = '🚀 測試 RC 電路';
+        }
+    }
+
+    // 事件監聽器
+    document.getElementById('testBtn').addEventListener('click', testRCCircuit);
+    document.getElementById('clearBtn').addEventListener('click', clearLog);
+});
+</script>
+
+</body>
+</html>

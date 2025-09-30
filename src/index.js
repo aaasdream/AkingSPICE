@@ -26,5 +26,9 @@ export { MultiWindingTransformer } from './components/transformer.js';
 export { TransientAnalysis } from './analysis/transient.js';
 export { DCAnalysis } from './analysis/dc.js';
 
+// 🔥 導出 GPU 加速求解器 - 網頁模擬器的核心引擎
+export { GPUExplicitStateSolver } from './core/gpu-explicit-solver.js';
+export { ExplicitStateSolver } from './core/explicit-state-solver.js';
+
 // 預設導出主求解器
 export default AkingSPICE;

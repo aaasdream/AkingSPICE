@@ -203,6 +203,78 @@ export class BaseComponent {
     static fromJSON(json) {
         return new BaseComponent(json.name, json.type, json.nodes, json.rawValue, json.params);
     }
+
+    // ==================== 顯式狀態更新法新接口 ====================
+
+    /**
+     * 在預處理階段將元件信息註冊到電路預處理器中
+     * 這是從物件導向模型轉換為GPU數值模型的關鍵步驟
+     * @param {CircuitPreprocessor} preprocessor 預處理器實例
+     */
+    preprocess(preprocessor) {
+        // 基類預設實現 - 對於沒有特殊需求的元件
+        // 子類應該覆蓋這個方法來實現具體的預處理邏輯
+        console.warn(`Component ${this.name} (${this.type}) does not implement preprocess method`);
+    }
+
+    /**
+     * 在每個時間步更新右手側向量 (i) 的貢獻
+     * 這裡處理時變源、狀態變量對RHS的影響
+     * @param {Float32Array} rhsVector 要更新的RHS向量
+     * @param {Float32Array} stateVector 當前狀態向量 (Vc, Il)
+     * @param {number} time 當前時間
+     * @param {object} componentData 包含元件在緩存中索引的數據
+     */
+    updateRHS(rhsVector, stateVector, time, componentData) {
+        // 基類預設實現 - 大多數無源元件沒有直接貢獻
+        // 電流源、電容(視為電壓源)、電感(視為電流源)需要實現
+    }
+
+    /**
+     * 在每個時間步結束後，更新狀態變量 (僅對 C 和 L 有意義)
+     * 實現顯式積分：Vc(t+dt) = Vc(t) + dt * (Ic/C)，Il(t+dt) = Il(t) + dt * (Vl/L)
+     * @param {Float32Array} stateVector 狀態向量
+     * @param {Float32Array} nodeVoltages 求得的節點電壓
+     * @param {number} dt 時間步長
+     * @param {object} componentData 元件數據
+     */
+    updateState(stateVector, nodeVoltages, dt, componentData) {
+        // 基類預設實現 - 只有電容和電感需要實現
+        // 電容: dVc/dt = Ic/C = (V_node1 - V_node2 - Vc) * G_large / C
+        // 電感: dIl/dt = Vl/L = (V_node1 - V_node2) / L
+    }
+
+    /**
+     * 檢查此元件是否為狀態變量 (電容電壓或電感電流)
+     * @returns {boolean}
+     */
+    isStateVariable() {
+        return this.type === 'C' || this.type === 'L';
+    }
+
+    /**
+     * 獲取狀態變量類型
+     * @returns {string|null} 'voltage' for capacitors, 'current' for inductors, null for others
+     */
+    getStateVariableType() {
+        switch (this.type) {
+            case 'C': return 'voltage';  // 電容的狀態變量是電壓
+            case 'L': return 'current';  // 電感的狀態變量是電流
+            default: return null;
+        }
+    }
+
+    /**
+     * 獲取狀態變量的初始值
+     * @returns {number} 初始值
+     */
+    getInitialStateValue() {
+        switch (this.type) {
+            case 'C': return this.ic || 0;  // 電容初始電壓
+            case 'L': return this.ic || 0;  // 電感初始電流  
+            default: return 0;
+        }
+    }
 }
 
 /**

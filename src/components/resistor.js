@@ -42,6 +42,36 @@ export class Resistor extends LinearTwoTerminal {
         return this.actualValue || this.value;
     }
 
+    // ==================== 顯式狀態更新法接口 ====================
+    
+    /**
+     * 電阻預處理 - 添加導納到G矩陣
+     * @param {CircuitPreprocessor} preprocessor 預處理器
+     */
+    preprocess(preprocessor) {
+        // 獲取節點索引
+        const node1 = preprocessor.getNodeIndex(this.nodes[0]);
+        const node2 = preprocessor.getNodeIndex(this.nodes[1]);
+        
+        // 計算電導
+        const conductance = this.getConductance();
+        
+        // 添加到G矩陣: G[i,i] += G, G[j,j] += G, G[i,j] -= G, G[j,i] -= G
+        if (node1 >= 0) {
+            preprocessor.addConductance(node1, node1, conductance);
+            if (node2 >= 0) {
+                preprocessor.addConductance(node1, node2, -conductance);
+            }
+        }
+        
+        if (node2 >= 0) {
+            preprocessor.addConductance(node2, node2, conductance);
+            if (node1 >= 0) {
+                preprocessor.addConductance(node2, node1, -conductance);
+            }
+        }
+    }
+
     /**
      * 獲取電導值
      * @returns {number} 電導值 (西門子)

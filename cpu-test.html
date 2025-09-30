@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>🖥️ AkingSPICE CPU 測試</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .log { 
+            background: #f8f9fa; 
+            border: 1px solid #dee2e6; 
+            border-radius: 5px;
+            padding: 15px; 
+            margin: 10px 0; 
+            font-family: 'Courier New', monospace;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+            font-size: 0.9em;
+        }
+        button { 
+            padding: 12px 24px; 
+            margin: 5px; 
+            border: none; 
+            background: #007acc; 
+            color: white; 
+            border-radius: 5px; 
+            cursor: pointer; 
+            font-weight: 600;
+        }
+        button:hover { background: #005f99; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 5px; font-weight: 600; }
+        .status.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .status.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .status.info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🖥️ AkingSPICE CPU ExplicitStateSolver 測試</h1>
+        
+        <div class="status info" id="status">
+            🔄 準備測試 CPU 版本求解器...
+        </div>
+        
+        <div>
+            <button id="testBtn" onclick="runCPUTest()">測試 CPU 求解器</button>
+            <button onclick="clearLog()">清除日誌</button>
+        </div>
+        
+        <div class="log" id="log">等待測試開始...</div>
+    </div>
+
+    <!-- 載入 AkingSPICE 庫 -->
+    <script src="./lib-dist/AkingSPICE.umd.js"></script>
+
+    <script>
+        const logDiv = document.getElementById('log');
+        const statusDiv = document.getElementById('status');
+        
+        function addLog(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.textContent += `[${timestamp}] ${message}\n`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function setStatus(message, type = 'info') {
+            statusDiv.className = `status ${type}`;
+            statusDiv.innerHTML = message;
+        }
+        
+        function clearLog() {
+            logDiv.textContent = '';
+        }
+
+        // 初始檢查
+        document.addEventListener('DOMContentLoaded', () => {
+            addLog('🔍 檢查 AkingSPICE 庫載入狀態...');
+            
+            if (typeof AkingSPICE !== 'undefined') {
+                addLog('✅ AkingSPICE 庫載入成功');
+                
+                if (AkingSPICE.ExplicitStateSolver) {
+                    addLog('✅ ExplicitStateSolver (CPU版) 可用');
+                    setStatus('💻 CPU ExplicitStateSolver 就緒', 'success');
+                } else {
+                    addLog('❌ ExplicitStateSolver 不可用');
+                    setStatus('❌ CPU 求解器不可用', 'error');
+                }
+                
+                if (AkingSPICE.GPUExplicitStateSolver) {
+                    addLog('⚠️  GPU 版本也可用，但本測試專注於 CPU 版本');
+                }
+                
+            } else {
+                addLog('❌ AkingSPICE 庫未載入');
+                setStatus('❌ 庫載入失敗', 'error');
+            }
+        });
+
+        async function runCPUTest() {
+            const btn = document.getElementById('testBtn');
+            btn.disabled = true;
+            btn.textContent = '測試中...';
+            
+            try {
+                addLog('🚀 開始 CPU ExplicitStateSolver 測試...');
+                setStatus('🔄 執行 CPU 求解器測試...', 'info');
+                
+                // 創建 CPU 求解器
+                const cpuSolver = new AkingSPICE.ExplicitStateSolver();
+                addLog('✅ CPU 求解器實例創建成功');
+                
+                // 創建測試電路 - RC 電路
+                const { VoltageSource, Resistor, Capacitor } = AkingSPICE;
+                
+                const components = [
+                    new VoltageSource('V1', ['vin', 'gnd'], 5.0),      // 5V 電壓源
+                    new Resistor('R1', ['vin', 'vout'], 1000),         // 1kΩ 電阻
+                    new Capacitor('C1', ['vout', 'gnd'], 1e-6, { ic: 0 })  // 1µF 電容，初始電壓 0V
+                ];
+                
+                addLog('✅ 測試電路創建完成:');
+                addLog('   • V1: 5V 電壓源 (vin → gnd)');
+                addLog('   • R1: 1kΩ 電阻 (vin → vout)');
+                addLog('   • C1: 1µF 電容 (vout → gnd), 初始 0V');
+                addLog('   • 理論時間常數 τ = RC = 1ms');
+                
+                // 初始化 CPU 求解器
+                addLog('🔧 初始化 CPU 求解器...');
+                const timeStep = 10e-6;  // 10µs 時間步長
+                
+                await cpuSolver.initialize(components, timeStep, {
+                    debug: true,
+                    integrationMethod: 'forward_euler',
+                    solverMaxIterations: 1000,
+                    solverTolerance: 1e-9
+                });
+                
+                addLog('✅ CPU 求解器初始化成功');
+                addLog(`   • 時間步長: ${timeStep * 1e6}µs`);
+                addLog('   • 積分方法: Forward Euler');
+                
+                // 執行暫態模擬
+                addLog('⚡ 執行 CPU 暫態模擬...');
+                const simTime = 5e-3;  // 模擬 5ms
+                const numSteps = Math.floor(simTime / timeStep);
+                
+                addLog(`   • 模擬時間: ${simTime * 1000}ms`);
+                addLog(`   • 總時間步數: ${numSteps}`);
+                
+                const startTime = performance.now();
+                const results = [];
+                
+                for (let i = 0; i < numSteps; i++) {
+                    const result = cpuSolver.step();
+                    
+                    if (i % 50 === 0 || i < 10) {  // 記錄每50步或前10步
+                        results.push({
+                            step: i,
+                            time: result.time * 1000, // ms
+                            vout: result.nodeVoltages['vout'] || 0
+                        });
+                        
+                        if (i < 10) {
+                            addLog(`   步驟 ${i+1}: t=${(result.time*1000).toFixed(2)}ms, Vout=${result.nodeVoltages['vout']?.toFixed(3) || '0.000'}V`);
+                        }
+                    }
+                }
+                
+                const endTime = performance.now();
+                const duration = endTime - startTime;
+                
+                addLog(`⚡ CPU 模擬完成! 耗時: ${duration.toFixed(1)}ms`);
+                addLog(`📊 性能: ${(numSteps / duration * 1000).toFixed(0)} 步/秒`);
+                addLog(`📈 平均每步: ${(duration / numSteps).toFixed(4)}ms`);
+                
+                // 分析結果
+                addLog('📊 結果分析:');
+                const finalResult = results[results.length - 1];
+                const theoreticalFinal = 5.0 * (1 - Math.exp(-simTime / (1000 * 1e-6))); // V = Vin * (1 - exp(-t/RC))
+                
+                addLog(`   • 最終輸出電壓: ${finalResult.vout.toFixed(3)}V`);
+                addLog(`   • 理論值: ${theoreticalFinal.toFixed(3)}V`);
+                addLog(`   • 誤差: ${Math.abs(finalResult.vout - theoreticalFinal).toFixed(3)}V`);
+                addLog(`   • 相對誤差: ${(Math.abs(finalResult.vout - theoreticalFinal) / theoreticalFinal * 100).toFixed(2)}%`);
+                
+                // 檢查收斂性
+                const convergenceCheck = results.slice(-10);  // 最後10個結果
+                const voltageSpread = Math.max(...convergenceCheck.map(r => r.vout)) - Math.min(...convergenceCheck.map(r => r.vout));
+                
+                addLog(`   • 最後10步電壓變化範圍: ${voltageSpread.toFixed(4)}V`);
+                
+                if (voltageSpread < 0.01) {
+                    addLog('✅ 電路已達到穩態');
+                } else {
+                    addLog('⚠️  電路可能尚未完全穩定');
+                }
+                
+                setStatus('✅ CPU 求解器測試成功完成!', 'success');
+                addLog('🎉 CPU ExplicitStateSolver 測試成功!');
+                
+            } catch (error) {
+                addLog(`❌ CPU 測試失敗: ${error.message}`);
+                setStatus(`❌ 測試失敗: ${error.message}`, 'error');
+                console.error('CPU Test Error:', error);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '測試 CPU 求解器';
+            }
+        }
+    </script>
+</body>
+</html>

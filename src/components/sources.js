@@ -125,6 +125,69 @@ export class VoltageSource extends BaseComponent {
         return true;
     }
 
+    // ==================== 顯式狀態更新法接口 ====================
+    
+    /**
+     * 電壓源預處理 - 在顯式方法中需要特殊處理
+     * 理想電壓源會破壞G矩陣的對稱正定性
+     * 這裡使用大導納近似法
+     * @param {CircuitPreprocessor} preprocessor 預處理器
+     */
+    preprocess(preprocessor) {
+        // 獲取節點索引
+        const node1 = preprocessor.getNodeIndex(this.nodes[0]);
+        const node2 = preprocessor.getNodeIndex(this.nodes[1]);
+        
+        // 使用大導納近似理想電壓源
+        const largeAdmittance = 1e6;  // 降低導納值避免數值問題
+        
+        if (node1 >= 0) {
+            preprocessor.addConductance(node1, node1, largeAdmittance);
+            if (node2 >= 0) {
+                preprocessor.addConductance(node1, node2, -largeAdmittance);
+            }
+        }
+        
+        if (node2 >= 0) {
+            preprocessor.addConductance(node2, node2, largeAdmittance);
+            if (node1 >= 0) {
+                preprocessor.addConductance(node2, node1, -largeAdmittance);
+            }
+        }
+        
+        this.largeAdmittance = largeAdmittance;
+        
+        // 記錄節點索引供updateRHS使用
+        this.node1Idx = node1;
+        this.node2Idx = node2;
+    }
+
+    /**
+     * 更新RHS向量 - 電壓源的等效電流源貢獻
+     * @param {Float32Array} rhsVector RHS向量
+     * @param {Float32Array} stateVector 狀態向量
+     * @param {number} time 當前時間
+     * @param {object} componentData 組件數據
+     */
+    updateRHS(rhsVector, stateVector, time, componentData) {
+        // 使用預處理時記錄的節點索引
+        const node1Idx = this.node1Idx;
+        const node2Idx = this.node2Idx;
+        
+        // 獲取當前電壓值
+        const voltage = this.getValue(time);
+        
+        // 等效電流源: I = G_large * V
+        const currentContribution = this.largeAdmittance * voltage;
+        
+        if (node1Idx >= 0) {
+            rhsVector[node1Idx] += currentContribution;
+        }
+        if (node2Idx >= 0) {
+            rhsVector[node2Idx] -= currentContribution;
+        }
+    }
+
     /**
      * 獲取指定時間的電壓值
      * @param {number} time 時間 (秒)
@@ -356,6 +419,41 @@ export class CurrentSource extends BaseComponent {
      */
     needsCurrentVariable() {
         return false; // 電流源不需要額外的電流變數
+    }
+
+    // ==================== 顯式狀態更新法接口 ====================
+    
+    /**
+     * 電流源預處理 - 電流源不影響G矩陣
+     * @param {CircuitPreprocessor} preprocessor 預處理器
+     */
+    preprocess(preprocessor) {
+        // 電流源不添加任何導納到G矩陣
+        // 只在RHS中有貢獻
+        
+        // 記錄節點索引供後續使用
+        this.node1Idx = preprocessor.getNodeIndex(this.nodes[0]);
+        this.node2Idx = preprocessor.getNodeIndex(this.nodes[1]);
+    }
+
+    /**
+     * 更新RHS向量 - 電流源的直接貢獻
+     * @param {Float32Array} rhsVector RHS向量
+     * @param {Float32Array} stateVector 狀態向量
+     * @param {number} time 當前時間
+     * @param {object} componentData 組件數據
+     */
+    updateRHS(rhsVector, stateVector, time, componentData) {
+        // 獲取當前電流值
+        const current = this.getValue(time);
+        
+        // 電流從 nodes[0] 流向 nodes[1]
+        if (this.node1Idx >= 0) {
+            rhsVector[this.node1Idx] -= current;  // 電流流出 node1
+        }
+        if (this.node2Idx >= 0) {
+            rhsVector[this.node2Idx] += current;  // 電流流入 node2
+        }
     }
 
     /**

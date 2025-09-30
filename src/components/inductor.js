@@ -23,18 +23,12 @@ export class Inductor extends LinearTwoTerminal {
         this.tnom = params.tnom || 27;   // 標稱溫度 (°C)
         this.currentRating = params.current || Infinity; // 額定電流 (A)
         
-        // 暫態分析相關
-        this.equivalentResistance = 0;   // 等效電阻 R_eq = L/h
-        this.historyVoltageSource = 0;   // 歷史電壓源 V_hist
-        
-        // 電感需要電流變數
-        this.needsCurrentVar = true;
-        
-        // 🔥 新增：用於儲存耦合資訊
-        this.couplings = null;
-        
         // 計算溫度修正後的電感值
         this.updateTemperatureCoefficient();
+        
+        // 顯式方法相關 - 電感被視為電流源
+        // 耦合電感支持 (未來擴展)
+        this.couplings = null;
     }
 
     /**
@@ -62,56 +56,73 @@ export class Inductor extends LinearTwoTerminal {
         return true;
     }
 
+    // ==================== 顯式狀態更新法接口 ====================
+    
     /**
-     * 初始化暫態分析
-     * @param {number} timeStep 時間步長
-     * @param {string} method 積分方法: 'backward_euler' 或 'trapezoidal'
+     * 電感預處理 - 註冊為狀態變量（電流）
+     * 在顯式方法中，電感被建模為理想電流源 (值 = Il(t))
+     * @param {CircuitPreprocessor} preprocessor 預處理器
      */
-    initTransient(timeStep, method = 'backward_euler') {
-        super.initTransient(timeStep);
+    preprocess(preprocessor) {
+        // 獲取節點索引
+        this.node1Idx = preprocessor.getNodeIndex(this.nodes[0]);
+        this.node2Idx = preprocessor.getNodeIndex(this.nodes[1]);
         
-        this.integrationMethod = method;
-        const L = this.getInductance();
+        // 註冊為狀態變量 (電流類型)
+        // 這將在 identifyStateVariables 階段完成
+        this.componentData = {
+            node1: this.node1Idx,
+            node2: this.node2Idx,
+            inductance: this.getInductance(),
+            initialCurrent: this.ic,
+            resistance: this.resistance
+        };
         
-        if (method === 'trapezoidal') {
-            // 梯形法: R_eq = 2L/h + Rs
-            this.equivalentResistance = 2 * L / timeStep + this.resistance;
-        } else {
-            // 後向歐拉法: R_eq = L/h + Rs
-            this.equivalentResistance = L / timeStep + this.resistance;
-        }
+        // 電感被建模為電流源，不直接影響G矩陣
+        // (電流源只影響RHS向量)
         
-        // 初始條件：設置初始電流和電壓
-        this.previousValues.set('current', this.ic);
-        this.previousValues.set('voltage', this.ic * this.resistance); // 梯形法需要初始電壓
-        
-        if (method === 'trapezoidal') {
-            this.historyVoltageSource = (2 * L / timeStep) * this.ic + this.ic * this.resistance;
-        } else {
-            this.historyVoltageSource = (L / timeStep) * this.ic;
+        // 如果有寄生電阻，添加到G矩陣
+        if (this.resistance > 0) {
+            const conductance = 1 / this.resistance;
+            if (this.node1Idx >= 0) {
+                preprocessor.addConductance(this.node1Idx, this.node1Idx, conductance);
+                if (this.node2Idx >= 0) {
+                    preprocessor.addConductance(this.node1Idx, this.node2Idx, -conductance);
+                }
+            }
+            if (this.node2Idx >= 0) {
+                preprocessor.addConductance(this.node2Idx, this.node2Idx, conductance);
+                if (this.node1Idx >= 0) {
+                    preprocessor.addConductance(this.node2Idx, this.node1Idx, -conductance);
+                }
+            }
         }
     }
 
     /**
-     * 計算伴隨模型的歷史項
-     * 支持後向歐拉法和梯形積分法
+     * 更新RHS向量 - 電感作為電流源的貢獻
+     * 電感電流源：I = Il(t) 從 node1 流向 node2
+     * @param {Float32Array} rhsVector RHS向量
+     * @param {Float32Array} stateVector 狀態向量 [..., Il1, Il2, ...]
+     * @param {number} time 當前時間
+     * @param {object} componentData 組件數據
      */
-    updateCompanionModel() {
-        if (!this.timeStep) return;
+    updateRHS(rhsVector, stateVector, time, componentData) {
+        if (!componentData) return;
         
-        const previousCurrent = this.previousValues.get('current') || 0;
-        const previousVoltage = this.previousValues.get('voltage') || 0;
-        const L = this.getInductance();
+        // 獲取當前電感電流 (狀態變量)
+        const stateIndex = componentData.stateIndex;
+        if (stateIndex === undefined || !stateVector) return;
         
-        if (this.integrationMethod === 'trapezoidal') {
-            // 梯形法: V_hist = 2L/h * i_n-1 + v_n-1
-            this.historyVoltageSource = (2 * L / this.timeStep) * previousCurrent + previousVoltage;
-        } else {
-            // 後向歐拉法: V_hist = L/h * i(t-h)
-            this.historyVoltageSource = (L / this.timeStep) * previousCurrent;
+        const currentIl = stateVector[stateIndex] || 0;
+        
+        // 電流源貢獻: I 從 node1 流向 node2
+        if (this.node1Idx >= 0) {
+            rhsVector[this.node1Idx] -= currentIl;  // 電流流出 node1
         }
-        
-        this.historyTerm = previousCurrent; // 用於MNA矩陣
+        if (this.node2Idx >= 0) {
+            rhsVector[this.node2Idx] += currentIl;  // 電流流入 node2
+        }
     }
 
     /**
@@ -157,25 +168,37 @@ export class Inductor extends LinearTwoTerminal {
     }
 
     /**
-     * 更新歷史狀態
-     * @param {Map<string, number>} nodeVoltages 節點電壓
-     * @param {Map<string, number>} branchCurrents 支路電流
+     * 更新狀態變量 - 顯式積分方法
+     * dIl/dt = Vl/L，其中 Vl 是施加在電感上的電壓
+     * @param {Float32Array} stateVector 狀態向量
+     * @param {Float32Array} nodeVoltages 節點電壓解
+     * @param {number} dt 時間步長
+     * @param {object} componentData 組件數據
      */
-    updateHistory(nodeVoltages, branchCurrents) {
-        super.updateHistory(nodeVoltages, branchCurrents);
+    updateState(stateVector, nodeVoltages, dt, componentData) {
+        if (!componentData || componentData.stateIndex === undefined) return;
         
-        const current = branchCurrents.get(this.name) || 0;
-        const voltage = this.getVoltageFromCurrent(current);
+        const stateIndex = componentData.stateIndex;
+        const currentIl = stateVector[stateIndex];
         
-        // 🔥 關鍵修正：先為下一個時間步準備伴隨模型（基於當前歷史值）
-        this.updateCompanionModel();
+        // 獲取節點電壓
+        const v1 = this.node1Idx >= 0 ? nodeVoltages[this.node1Idx] : 0;
+        const v2 = this.node2Idx >= 0 ? nodeVoltages[this.node2Idx] : 0;
+        const nodeVoltage = v1 - v2;
         
-        // 然後更新歷史值為當前值
-        this.previousValues.set('current', current);
-        this.previousValues.set('voltage', voltage);
+        // 電感電壓 = 節點電壓 - 寄生電阻壓降
+        const vl = nodeVoltage - currentIl * this.resistance;
         
-        // 計算功耗 (理想電感功耗為0，但可能有寄生電阻)
-        this.operatingPoint.power = voltage * current;
+        // 顯式歐拉積分: Il(t+dt) = Il(t) + dt * (Vl/L)
+        const L = this.getInductance();
+        const dIlDt = vl / L;
+        
+        stateVector[stateIndex] = currentIl + dt * dIlDt;
+        
+        // 更新運行點資訊 (用於調試)
+        this.operatingPoint.current = currentIl;
+        this.operatingPoint.voltage = nodeVoltage;
+        this.operatingPoint.power = nodeVoltage * currentIl;
     }
 
     /**
@@ -187,6 +210,15 @@ export class Inductor extends LinearTwoTerminal {
         return Math.abs(current) > this.currentRating;
     }
 
+    /**
+     * 簡化的更新歷史方法
+     */
+    updateHistory(nodeVoltages, branchCurrents) {
+        // 在顯式方法中主要由updateState處理
+        const voltage = this.getVoltage(nodeVoltages);
+        this.operatingPoint.voltage = voltage;
+    }
+    
     /**
      * 獲取電感器資訊
      * @param {number} current 當前電流
@@ -201,17 +233,13 @@ export class Inductor extends LinearTwoTerminal {
             tc1: this.tc1,
             tc2: this.tc2,
             currentRating: this.currentRating,
-            operatingPoint: { ...this.operatingPoint }
+            operatingPoint: { ...this.operatingPoint },
+            explicitMethod: true
         };
         
         if (current !== null) {
             info.storedEnergy = this.getStoredEnergy(current);
             info.overCurrent = this.isOverCurrent(current);
-        }
-        
-        if (this.timeStep) {
-            info.equivalentResistance = this.equivalentResistance;
-            info.historyVoltageSource = this.historyVoltageSource;
         }
         
         return info;

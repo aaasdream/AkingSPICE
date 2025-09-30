@@ -22,12 +22,11 @@ export class Capacitor extends LinearTwoTerminal {
         this.tnom = params.tnom || 27;   // 標稱溫度 (°C)
         this.voltageRating = params.voltage || Infinity; // 額定電壓 (V)
         
-        // 暫態分析相關
-        this.equivalentConductance = 0;  // 等效電導 G_eq = C/h
-        this.historyCurrentSource = 0;   // 歷史電流源 I_hist
-        
         // 計算溫度修正後的電容值
         this.updateTemperatureCoefficient();
+        
+        // 顯式方法相關 - 電容被視為電壓源
+        this.largeAdmittance = 1e6;  // 用於近似理想電壓源的大導納（降低以避免數值問題）
     }
 
     /**
@@ -47,57 +46,72 @@ export class Capacitor extends LinearTwoTerminal {
         return this.actualValue || this.value;
     }
 
+    // ==================== 顯式狀態更新法接口 ====================
+    
     /**
-     * 初始化暫態分析
-     * @param {number} timeStep 時間步長
-     * @param {string} method 積分方法: 'backward_euler' 或 'trapezoidal'
+     * 電容預處理 - 註冊為狀態變量並添加到G矩陣
+     * 在顯式方法中，電容被建模為理想電壓源 (值 = Vc(t))
+     * @param {CircuitPreprocessor} preprocessor 預處理器
      */
-    initTransient(timeStep, method = 'backward_euler') {
-        super.initTransient(timeStep);
+    preprocess(preprocessor) {
+        // 獲取節點索引
+        this.node1Idx = preprocessor.getNodeIndex(this.nodes[0]);
+        this.node2Idx = preprocessor.getNodeIndex(this.nodes[1]);
         
-        this.integrationMethod = method;
-        const C = this.getCapacitance();
+        // 註冊為狀態變量 (電壓類型)
+        // 這將在 identifyStateVariables 階段完成，這裡只記錄索引
+        this.componentData = {
+            node1: this.node1Idx,
+            node2: this.node2Idx,
+            capacitance: this.getCapacitance(),
+            initialVoltage: this.ic
+        };
         
-        if (method === 'trapezoidal') {
-            // 梯形法: G_eq = 2C/h
-            this.equivalentConductance = 2 * C / timeStep;
-        } else {
-            // 後向歐拉法: G_eq = C/h
-            this.equivalentConductance = C / timeStep;
+        // 電容被建模為理想電壓源，使用大導納近似
+        // 這會在G矩陣中添加: G[i,i] += G_large, G[j,j] += G_large, G[i,j] -= G_large, G[j,i] -= G_large
+        if (this.node1Idx >= 0) {
+            preprocessor.addConductance(this.node1Idx, this.node1Idx, this.largeAdmittance);
+            if (this.node2Idx >= 0) {
+                preprocessor.addConductance(this.node1Idx, this.node2Idx, -this.largeAdmittance);
+            }
         }
         
-        // 初始條件：設置初始電壓和電流
-        this.previousValues.set('voltage', this.ic);
-        this.previousValues.set('current', 0); // 梯形法需要初始電流
-        
-        if (method === 'trapezoidal') {
-            this.historyCurrentSource = this.equivalentConductance * this.ic;
-        } else {
-            // 後向歐拉法: I_hist = G_eq * V_ic (修正符號)
-            this.historyCurrentSource = this.equivalentConductance * this.ic;
+        if (this.node2Idx >= 0) {
+            preprocessor.addConductance(this.node2Idx, this.node2Idx, this.largeAdmittance);
+            if (this.node1Idx >= 0) {
+                preprocessor.addConductance(this.node2Idx, this.node1Idx, -this.largeAdmittance);
+            }
         }
     }
 
     /**
-     * 計算伴隨模型的歷史項
-     * 支持後向歐拉法和梯形積分法
+     * 更新RHS向量 - 電容作為電壓源的貢獻
+     * 電容電壓源方程: V_node1 - V_node2 = Vc(t)
+     * 轉換為電流源: I = G_large * Vc(t)
+     * @param {Float32Array} rhsVector RHS向量
+     * @param {Float32Array} stateVector 狀態向量 [Vc1, Vc2, ...]
+     * @param {number} time 當前時間
+     * @param {object} componentData 組件數據
      */
-    updateCompanionModel() {
-        if (!this.timeStep) return;
+    updateRHS(rhsVector, stateVector, time, componentData) {
+        if (!componentData) return;
         
-        const previousVoltage = this.previousValues.get('voltage') || 0;
-        const previousCurrent = this.previousValues.get('current') || 0;
+        // 獲取當前電容電壓 (狀態變量)
+        const stateIndex = componentData.stateIndex;
+        if (stateIndex === undefined || !stateVector) return;
         
-        // 檢查是否使用梯形積分法
-        if (this.integrationMethod === 'trapezoidal') {
-            // 梯形法: I_hist = 2C/h * v_n-1 + i_n-1
-            this.historyCurrentSource = this.equivalentConductance * previousVoltage + previousCurrent;
-        } else {
-            // 後向歐拉法: I_hist = G_eq * V_ic = C/h * v(t-h)
-            this.historyCurrentSource = this.equivalentConductance * previousVoltage;
+        const currentVc = stateVector[stateIndex] || 0;
+        
+        // 電壓源的等效電流源貢獻: I = G_large * Vc
+        const currentContribution = this.largeAdmittance * currentVc;
+        
+        // 添加到RHS: I流入正端，流出負端
+        if (this.node1Idx >= 0) {
+            rhsVector[this.node1Idx] += currentContribution;
         }
-        
-        this.historyTerm = this.historyCurrentSource;
+        if (this.node2Idx >= 0) {
+            rhsVector[this.node2Idx] -= currentContribution;
+        }
     }
 
     /**

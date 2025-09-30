@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>🔧 AkingSPICE 修復版 - LLC 穩定模擬器</title>
+    <!-- 引入 Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- 引入 Monaco Editor -->
+    <link rel="stylesheet" data-name="vs/editor/editor.main" href="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.34.1/min/vs/editor/editor.main.min.css">
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica', Arial, sans-serif; 
+            display: flex; 
+            flex-direction: column; 
+            height: 100vh; 
+            margin: 0; 
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        }
+        .header { 
+            background: rgba(255,255,255,0.1); 
+            backdrop-filter: blur(10px);
+            color: white; 
+            padding: 20px; 
+            text-align: center; 
+            box-shadow: 0 2px 20px rgba(0,0,0,0.1); 
+        }
+        .main-content { 
+            display: flex; 
+            flex: 1; 
+            min-height: 0;
+            height: calc(100vh - 140px);
+            gap: 20px;
+            padding: 20px;
+        }
+        .left-panel { 
+            width: 500px; 
+            background: rgba(255,255,255,0.95); 
+            border-radius: 15px;
+            padding: 25px; 
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            backdrop-filter: blur(10px);
+            display: flex; 
+            flex-direction: column;
+            height: 100%;
+            overflow-y: auto;
+        }
+        .right-panel { 
+            flex: 1; 
+            background: rgba(255,255,255,0.95); 
+            border-radius: 15px;
+            padding: 25px; 
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            backdrop-filter: blur(10px);
+            display: flex; 
+            flex-direction: column; 
+        }
+        .editor-container { 
+            border: 1px solid rgba(0,0,0,0.1); 
+            border-radius: 8px;
+            height: 220px;
+            min-height: 180px; 
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+        .chart-container { 
+            position: relative; 
+            flex: 1; 
+            min-height: 400px;
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: inset 0 2px 10px rgba(0,0,0,0.05);
+        }
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        button { 
+            background: linear-gradient(45deg, #10b981, #059669);
+            color: white; 
+            border: none; 
+            padding: 10px 18px; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-size: 0.9em;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            box-shadow: 0 3px 12px rgba(0,0,0,0.2);
+        }
+        button:hover:not(:disabled) { 
+            transform: translateY(-2px);
+            box-shadow: 0 5px 18px rgba(0,0,0,0.3);
+        }
+        button:disabled { 
+            background: #aaa; 
+            cursor: not-allowed; 
+            transform: none;
+            box-shadow: none;
+        }
+        .log {
+            margin-top: 15px; 
+            padding: 12px;
+            background: rgba(248,249,250,0.8);
+            border-radius: 8px;
+            border-left: 4px solid #10b981;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.8em;
+            max-height: 180px;
+            min-height: 100px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            flex-shrink: 0;
+        }
+        #progress-container { 
+            width: 100%; 
+            background-color: #e9ecef; 
+            border-radius: 6px; 
+            margin-top: 8px; 
+            overflow: hidden; 
+            display: none;
+            height: 20px;
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);
+        }
+        #progress-bar { 
+            width: 0%; 
+            height: 100%; 
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%); 
+            text-align: center; 
+            line-height: 20px; 
+            color: white; 
+            font-weight: 600; 
+            transition: width 0.3s ease-in-out;
+            font-size: 0.8em;
+        }
+        .solver-status {
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 15px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+        .solver-stable {
+            background: rgba(16, 185, 129, 0.15);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: #065f46;
+        }
+        .solver-working {
+            background: rgba(245, 158, 11, 0.15);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            color: #92400e;
+        }
+        .solver-error {
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #991b1b;
+        }
+        .param-input {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .param-input label {
+            flex: 1;
+            font-weight: 600;
+            font-size: 0.9em;
+        }
+        .param-input input {
+            flex: 1;
+            padding: 4px 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        .param-panel {
+            background: rgba(248,249,250,0.6); 
+            border-radius: 8px; 
+            padding: 12px; 
+            margin-bottom: 15px;
+        }
+        .circuit-selector {
+            background: rgba(16, 185, 129, 0.1);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 15px;
+        }
+        .circuit-option {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .circuit-option input[type="radio"] {
+            margin-right: 8px;
+        }
+        .circuit-option label {
+            font-size: 0.9em;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>🔧 AkingSPICE 修復版 - 穩定模擬器</h1>
+    <p style="margin: 5px 0; opacity: 0.9;">數值穩定優化 • 多電路選擇 • 智能求解器</p>
+</div>
+
+<div class="main-content">
+    <div class="left-panel">
+        <div class="solver-status" id="solver-status">
+            🔄 正在初始化穩定求解器...
+        </div>
+        
+        <div class="circuit-selector">
+            <h4 style="margin: 0 0 10px 0;">🔌 電路類型選擇</h4>
+            <div class="circuit-option">
+                <input type="radio" id="circuit-rc" name="circuit" value="rc" checked>
+                <label for="circuit-rc">RC 充電電路 (驗證基本功能)</label>
+            </div>
+            <div class="circuit-option">
+                <input type="radio" id="circuit-llc-simple" name="circuit" value="llc-simple">
+                <label for="circuit-llc-simple">簡化 LLC 諧振器 (穩定版)</label>
+            </div>
+            <div class="circuit-option">
+                <input type="radio" id="circuit-buck" name="circuit" value="buck">
+                <label for="circuit-buck">Buck 降壓轉換器 (開關測試)</label>
+            </div>
+        </div>
+        
+        <div class="param-panel">
+            <h4 style="margin: 0 0 10px 0;">⚙️ 模擬參數</h4>
+            <div class="param-input">
+                <label>輸入電壓:</label>
+                <input type="number" id="vin" value="12" step="1">
+                <span>V</span>
+            </div>
+            <div class="param-input">
+                <label>模擬時間:</label>
+                <input type="number" id="simtime" value="2" step="0.5">
+                <span>ms</span>
+            </div>
+            <div class="param-input">
+                <label>時間步長:</label>
+                <input type="number" id="timestep" value="1" step="0.1">
+                <span>µs</span>
+            </div>
+        </div>
+        
+        <h3>🧠 控制器程式碼 (簡化版)</h3>
+        <div id="editor" class="editor-container"></div>
+        
+        <div class="button-group">
+            <button id="runBtn" disabled>初始化中...</button>
+            <button id="resetBtn">重置</button>
+        </div>
+        <div id="progress-container"><div id="progress-bar">0%</div></div>
+        <div class="log" id="logOutput">🔄 載入穩定版求解器...</div>
+    </div>
+    
+    <div class="right-panel">
+        <h3>📈 穩定模擬結果</h3>
+        <div class="chart-container">
+            <canvas id="simulationChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- 載入 AkingSPICE 庫 -->
+<script src="./lib-dist/AkingSPICE.umd.js"></script>
+<!-- Monaco Editor -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.34.1/min/vs/loader.min.js"></script>
+
+<script>
+document.addEventListener('DOMContentLoaded', async () => {
+    let editor;
+    let solver = null;
+    let chart = null;
+    let isReady = false;
+    let simulationRunning = false;
+
+    const initialControllerCode = `// 🔧 穩定控制器 - 專為數值穩定性優化
+class StableController {
+    constructor(circuitType, timeStep) {
+        this.circuitType = circuitType;
+        this.timeStep = timeStep;
+        this.stepCount = 0;
+        
+        console.log('🔧 穩定控制器啟動 - 電路: ' + circuitType);
+    }
+
+    update(time, feedback) {
+        this.stepCount++;
+        
+        if (this.circuitType === 'rc') {
+            // RC 電路無需控制
+            return {};
+        }
+        
+        if (this.circuitType === 'buck') {
+            // Buck 轉換器 PWM 控制 (100kHz, 50% 占空比)
+            const frequency = 100000; // 100kHz
+            const period = 1 / frequency;
+            const phase = (time % period) / period;
+            
+            return {
+                'sw_gate': phase < 0.5 ? 12 : 0  // 50% 占空比
+            };
+        }
+        
+        if (this.circuitType === 'llc-simple') {
+            // 簡化 LLC 控制 (固定頻率)
+            const frequency = 50000; // 50kHz (較低頻率更穩定)
+            const period = 1 / frequency;
+            const phase = (time % period) / period;
+            
+            return {
+                'q1_gate': phase < 0.5 ? 12 : 0,
+                'q2_gate': phase >= 0.5 ? 12 : 0
+            };
+        }
+        
+        return {};
+    }
+    
+    getStatus() {
+        return {
+            circuit: this.circuitType,
+            steps: this.stepCount
+        };
+    }
+}
+
+// 返回控制器實例 (電路類型由外部傳入)
+function createController(circuitType, timeStep) {
+    return new StableController(circuitType, timeStep);
+}
+
+return createController;`;
+
+    // 初始化 Monaco Editor
+    require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.34.1/min/vs' }});
+    require(['vs/editor/editor.main'], () => {
+        editor = monaco.editor.create(document.getElementById('editor'), {
+            value: initialControllerCode,
+            language: 'javascript',
+            theme: 'vs-dark',
+            automaticLayout: true,
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false
+        });
+    });
+
+    // 初始化 Chart.js
+    const ctx = document.getElementById('simulationChart').getContext('2d');
+    chart = new Chart(ctx, {
+        type: 'line',
+        data: { labels: [], datasets: [] },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            interaction: { intersect: false, mode: 'index' },
+            plugins: { legend: { position: 'top' } },
+            scales: {
+                x: { title: { display: true, text: '時間 (ms)' } },
+                y: { title: { display: true, text: '電壓 (V)' }, beginAtZero: true }
+            }
+        }
+    });
+
+    // 日誌和狀態函數
+    function log(message, type = 'info') {
+        const logOutput = document.getElementById('logOutput');
+        const timestamp = new Date().toLocaleTimeString();
+        const prefixes = {
+            'error': '❌', 'success': '✅', 'warning': '⚠️', 'info': 'ℹ️'
+        };
+        const prefix = prefixes[type] || 'ℹ️';
+        logOutput.textContent += `[${timestamp}] ${prefix} ${message}\n`;
+        logOutput.scrollTop = logOutput.scrollHeight;
+    }
+
+    function updateSolverStatus(message, type) {
+        const status = document.getElementById('solver-status');
+        status.className = `solver-status solver-${type}`;
+        status.innerHTML = message;
+    }
+
+    function updateProgress(current, total) {
+        const progressBar = document.getElementById('progress-bar');
+        const progressContainer = document.getElementById('progress-container');
+        if (total > 0) {
+            const percentage = Math.min(100, Math.round((current / total) * 100));
+            progressBar.style.width = `${percentage}%`;
+            progressBar.textContent = `${percentage}%`;
+            progressContainer.style.display = 'block';
+        } else {
+            progressContainer.style.display = 'none';
+        }
+    }
+
+    // 🔧 初始化穩定求解器
+    async function initializeStableSolver() {
+        try {
+            log('檢查 AkingSPICE 庫...');
+            
+            if (typeof AkingSPICE === 'undefined') {
+                throw new Error('AkingSPICE 庫未載入');
+            }
+            
+            log('✅ AkingSPICE 庫載入成功');
+            
+            // 使用 CPU 版本 (更穩定)
+            if (AkingSPICE.ExplicitStateSolver) {
+                solver = new AkingSPICE.ExplicitStateSolver();
+                log('✅ ExplicitStateSolver 創建成功');
+                updateSolverStatus('💻 穩定 CPU 求解器就緒', 'stable');
+            } else {
+                throw new Error('ExplicitStateSolver 不可用');
+            }
+            
+            const runBtn = document.getElementById('runBtn');
+            runBtn.disabled = false;
+            runBtn.textContent = '🚀 執行穩定模擬';
+            isReady = true;
+            
+        } catch (error) {
+            log(`求解器初始化失敗: ${error.message}`, 'error');
+            updateSolverStatus(`❌ 初始化失敗: ${error.message}`, 'error');
+        }
+    }
+
+    // 🔌 建立穩定電路
+    function buildStableCircuit() {
+        const circuitType = document.querySelector('input[name="circuit"]:checked').value;
+        const vin = parseFloat(document.getElementById('vin').value);
+        
+        log(`建立 ${circuitType} 電路...`);
+        
+        const { VoltageSource, Resistor, Capacitor, Inductor, VoltageControlledMOSFET } = AkingSPICE;
+        
+        let components, expectedNodes;
+        
+        if (circuitType === 'rc') {
+            // 修復 RC 電路 - 確保正確的節點連接
+            components = [
+                new VoltageSource('V1', ['1', '0'], vin),           // 電壓源: 節點1 -> 節點0(地)
+                new Resistor('R1', ['1', '2'], 1000),               // 電阻: 節點1 -> 節點2
+                new Capacitor('C1', ['2', '0'], 1e-6, { ic: 0 })    // 電容: 節點2 -> 節點0(地)
+            ];
+            expectedNodes = ['1', '2', '0'];
+            log(`RC 電路: V1(${vin}V) -> R1(1kΩ) -> C1(1µF) -> GND`);
+            
+        } else if (circuitType === 'buck') {
+            // 簡單但穩定的 Buck 轉換器
+            components = [
+                new VoltageSource('Vin', ['vin', '0'], vin),
+                new VoltageControlledMOSFET('SW', ['vin', 'sw_gate', 'sw'], { Ron: 0.1, Roff: 1e5 }),
+                new VoltageSource('Vg', ['sw_gate', '0'], 0),
+                new Inductor('L1', ['sw', 'out'], 100e-6),          // 100µH
+                new Capacitor('C1', ['out', '0'], 100e-6, { ic: 1 }), // 100µF
+                new Resistor('R1', ['out', '0'], 10),                // 10Ω負載
+                // 穩定性電阻
+                new Resistor('R_stab1', ['sw', '0'], 1e6),
+                new Resistor('R_stab2', ['out', '0'], 1e6)
+            ];
+            expectedNodes = ['vin', 'sw', 'out', '0'];
+            log('Buck 電路: Vin -> SW -> L1 -> C1||R1 -> GND');
+            
+        } else if (circuitType === 'llc-simple') {
+            // 極度簡化的 LLC 諧振器 - 只有諧振部分
+            components = [
+                new VoltageSource('Vin', ['vin', '0'], vin),
+                // 半橋簡化為兩個受控開關
+                new VoltageControlledMOSFET('Q1', ['vin', 'q1_gate', 'bridge'], { Ron: 0.2, Roff: 1e5 }),
+                new VoltageControlledMOSFET('Q2', ['bridge', 'q2_gate', '0'], { Ron: 0.2, Roff: 1e5 }),
+                new VoltageSource('Vg1', ['q1_gate', '0'], 0),
+                new VoltageSource('Vg2', ['q2_gate', '0'], 0),
+                // 諧振網路 (保守參數)
+                new Inductor('Lr', ['bridge', 'res'], 100e-6),      // 100µH
+                new Capacitor('Cr', ['res', 'out'], 100e-9),        // 100nF
+                new Inductor('Lm', ['res', '0'], 500e-6),           // 500µH 磁化電感
+                // 輸出負載
+                new Resistor('Rload', ['out', '0'], 50),             // 50Ω
+                // 穩定性電阻
+                new Resistor('R_stab1', ['bridge', '0'], 2e6),
+                new Resistor('R_stab2', ['res', '0'], 2e6),
+                new Resistor('R_stab3', ['out', '0'], 2e6)
+            ];
+            expectedNodes = ['vin', 'bridge', 'res', 'out', '0'];
+            log('簡化LLC: Vin -> 半橋 -> Lr -> Cr -> Lm || Rload');
+        }
+        
+        log(`電路節點: ${expectedNodes.join(', ')}`);
+        return { components, circuitType, expectedNodes };
+    }
+
+    // 🚀 執行穩定模擬
+    async function runStableSimulation() {
+        if (!isReady || simulationRunning) return;
+        
+        const runBtn = document.getElementById('runBtn');
+        runBtn.disabled = true;
+        runBtn.textContent = '模擬中...';
+        simulationRunning = true;
+        updateSolverStatus('🔄 執行數值穩定模擬...', 'working');
+        
+        try {
+            log('🚀 開始穩定模擬...');
+            
+            const circuit = buildStableCircuit();
+            const simTime = parseFloat(document.getElementById('simtime').value) * 1e-3;
+            const timeStep = parseFloat(document.getElementById('timestep').value) * 1e-6;
+            const totalSteps = Math.floor(simTime / timeStep);
+            
+            // 創建控制器
+            let controller;
+            try {
+                const userCode = editor.getValue();
+                
+                // 直接執行代碼並從全局作用域獲取函數
+                const wrappedCode = `
+                    (function() {
+                        ${userCode}
+                    })()
+                `;
+                
+                const controllerFactory = eval(wrappedCode);
+                
+                if (typeof controllerFactory !== 'function') {
+                    throw new Error('控制器代碼必須返回一個函數');
+                }
+                
+                controller = controllerFactory(circuit.circuitType, timeStep);
+                
+                if (!controller || typeof controller.update !== 'function') {
+                    throw new Error('控制器必須有 update 方法');
+                }
+                
+                log(`✅ 控制器創建成功 - 類型: ${circuit.circuitType}`);
+                
+            } catch (e) {
+                throw new Error("控制器程式碼錯誤: " + e.message);
+            }
+            
+            log(`穩定模擬參數: ${circuit.circuitType}, 時間=${simTime*1000}ms, 步長=${timeStep*1e6}µs, 總步數=${totalSteps}`);
+            
+            // 初始化求解器 (使用更保守的設定)
+            const startTime = performance.now();
+            
+            await solver.initialize(circuit.components, timeStep, {
+                debug: false,
+                integrationMethod: 'forward_euler',
+                solverMaxIterations: 500,      // 減少迭代次數
+                solverTolerance: 1e-6          // 放寬容忍度
+            });
+            
+            log('✅ 求解器初始化成功，開始時間步進...');
+            
+            const allResults = [];
+            let errorCount = 0;
+            const maxErrors = 10; // 最多容忍10個錯誤
+            
+            for (let step = 0; step < totalSteps; step++) {
+                try {
+                    const currentTime = step * timeStep;
+                    
+                    // 獲取控制輸入
+                    let outputNode = '2';  // RC電路的輸出節點
+                    if (circuit.circuitType === 'buck') outputNode = 'out';
+                    if (circuit.circuitType === 'llc-simple') outputNode = 'out';
+                    
+                    const feedback = {
+                        v_out: allResults.length > 0 ? 
+                               (allResults[allResults.length - 1].nodeVoltages[outputNode] || 0) : 0
+                    };
+                    
+                    const controlInputs = controller.update(currentTime, feedback);
+                    
+                    // 執行一步
+                    const stepResult = solver.step(controlInputs);
+                    
+                    if (stepResult && stepResult.nodeVoltages) {
+                        allResults.push({
+                            time: currentTime,
+                            nodeVoltages: stepResult.nodeVoltages
+                        });
+                    }
+                    
+                    // 更新進度
+                    if (step % Math.max(1, Math.floor(totalSteps / 20)) === 0) {
+                        updateProgress(step, totalSteps);
+                    }
+                    
+                } catch (stepError) {
+                    errorCount++;
+                    if (errorCount <= maxErrors && step % 1000 === 0) {
+                        log(`步驟 ${step} 計算警告: ${stepError.message}`, 'warning');
+                    }
+                    if (errorCount > maxErrors * 10) {
+                        log(`錯誤過多 (${errorCount})，停止模擬`, 'error');
+                        break;
+                    }
+                }
+            }
+            
+            const endTime = performance.now();
+            const duration = endTime - startTime;
+            
+            log(`✅ 穩定模擬完成! 耗時: ${duration.toFixed(1)}ms, 錯誤: ${errorCount}`, 'success');
+            log(`📊 有效結果: ${allResults.length} / ${totalSteps} (${(allResults.length/totalSteps*100).toFixed(1)}%)`);
+            
+            drawStableResults(allResults, circuit);
+            updateSolverStatus('✅ 穩定模擬完成', 'stable');
+            
+        } catch (error) {
+            log(`模擬失敗: ${error.message}`, 'error');
+            updateSolverStatus(`❌ 模擬失敗: ${error.message}`, 'error');
+            console.error('Stable Simulation error:', error);
+        } finally {
+            runBtn.disabled = false;
+            runBtn.textContent = '🚀 執行穩定模擬';
+            simulationRunning = false;
+            document.getElementById('progress-container').style.display = 'none';
+        }
+    }
+
+    // 🎨 繪製穩定結果
+    function drawStableResults(results, circuit) {
+        if (results.length === 0) {
+            log('⚠️  沒有有效的模擬結果', 'warning');
+            return;
+        }
+        
+        log(`繪製 ${results.length} 個數據點...`);
+        
+        const timeData = [];
+        const datasets = [];
+        const colors = ['#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
+        
+        // 準備時間軸
+        results.forEach(result => {
+            timeData.push(result.time * 1000); // ms
+        });
+        
+        // 為每個重要節點創建數據集
+        const importantNodes = circuit.expectedNodes.filter(node => node !== '0'); // 排除地節點
+        
+        importantNodes.forEach((node, index) => {
+            const nodeData = results.map(result => result.nodeVoltages[node] || 0);
+            
+            datasets.push({
+                label: `節點 ${node}`,
+                data: nodeData,
+                borderColor: colors[index % colors.length],
+                backgroundColor: colors[index % colors.length] + '20',
+                borderWidth: 2,
+                pointRadius: 0,
+                fill: false
+            });
+        });
+        
+        chart.data = { labels: timeData, datasets };
+        chart.update();
+        
+        // 結果分析
+        const finalResult = results[results.length - 1];
+        log('📊 最終結果:');
+        importantNodes.forEach(node => {
+            const voltage = finalResult.nodeVoltages[node] || 0;
+            log(`   節點 ${node}: ${voltage.toFixed(3)}V`);
+        });
+        
+        log('圖表繪製完成!', 'success');
+    }
+
+    // 重置函數
+    function resetSolver() {
+        if (solver && solver.reset) {
+            solver.reset();
+        }
+        chart.data = { labels: [], datasets: [] };
+        chart.update();
+        updateSolverStatus('💻 穩定 CPU 求解器就緒', 'stable');
+        log('求解器已重置', 'success');
+    }
+
+    // 啟動應用
+    await initializeStableSolver();
+    document.getElementById('runBtn').addEventListener('click', runStableSimulation);
+    document.getElementById('resetBtn').addEventListener('click', resetSolver);
+});
+</script>
+
+</body>
+</html>
