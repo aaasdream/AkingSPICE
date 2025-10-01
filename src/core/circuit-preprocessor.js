@@ -34,6 +34,7 @@ export class CircuitPreprocessor {
     constructor() {
         // 節點映射
         this.nodeMap = new Map();           // 節點名稱 -> 矩陣索引
+        this.voltageSourceMap = new Map();  // 電壓源映射
         this.nodeCount = 0;
         this.nodeNames = [];                // 調試用節點名稱列表
         
@@ -368,6 +369,8 @@ export class CircuitPreprocessor {
             nodeCount: this.nodeCount,
             stateCount: this.stateCount,
             nodeNames: [...this.nodeNames],
+            nodeMap: new Map(this.nodeMap),
+            voltageSourceMap: new Map(this.voltageSourceMap || []),
             stateVariables: [...this.stateVariables],
             componentData: new Map(this.componentData),
             gpuBuffers: { ...this.gpuBuffers }

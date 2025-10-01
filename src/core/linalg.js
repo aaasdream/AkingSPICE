@@ -112,6 +112,20 @@ export class Matrix {
             console.log(`[${row}]`);
         }
     }
+
+    /**
+     * 轉換為字符串表示
+     * @param {number} precision 小數點後位數
+     * @returns {string}
+     */
+    toString(precision = 6) {
+        let result = `Matrix ${this.rows}x${this.cols}:\n`;
+        for (let i = 0; i < this.rows; i++) {
+            const row = this.data[i].map(val => val.toExponential(precision)).join('  ');
+            result += `[${row}]\n`;
+        }
+        return result;
+    }
 }
 
 /**

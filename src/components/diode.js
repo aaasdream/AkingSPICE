@@ -141,6 +141,10 @@ export class Diode extends BaseComponent {
 
         const resistance = this.getEquivalentResistance(vak);
         const conductance = 1 / resistance;
+        
+        if (Math.abs(vak) > 0.1) {
+            console.log(`  [${this.name}] 印花: VAK=${vak.toFixed(3)}V, R=${resistance.toExponential(2)}Ω, G=${conductance.toExponential(2)}S, 狀態=${this.isForwardBiased ? 'ON' : 'OFF'}`);
+        }
 
         // 印花導納矩陣 (類似電阻的印花方式)
         // 接地節點 (index = -1) 不需要印花到矩陣中
@@ -161,22 +165,55 @@ export class Diode extends BaseComponent {
         // 如果二極體導通，需要在 RHS 向量中添加順向偏壓的影響
         if (this.isForwardBiased) {
             const currentSource = this.Vf / resistance;  // 等效電流源
+            console.log(`  [${this.name}] 順向偏壓電流源: ${currentSource.toExponential(3)}A`);
             
             if (anodeIndex >= 0) {
-                rhs.addAt(anodeIndex, -currentSource);
+                rhs[anodeIndex] += -currentSource;
             }
             if (cathodeIndex >= 0) {
-                rhs.addAt(cathodeIndex, currentSource);
+                rhs[cathodeIndex] += currentSource;
             }
         }
     }
 
     /**
      * 更新元件狀態 (在每個時間步後調用)
+     * 統一接口，與 ExplicitStateSolver 配合使用
+     * @param {Map<string, number>} nodeVoltages 節點電壓映射
+     * @param {Array<number>} solutionVector 解向量  
+     * @param {number} timeStep 時間步長
+     * @param {number} currentTime 當前時間
+     * @param {Map<string, number>} nodeMap 節點映射
+     * @param {Matrix} gMatrix G矩陣
+     */
+    updateState(nodeVoltages, solutionVector, timeStep, currentTime, nodeMap, gMatrix) {
+        // 獲取陽極和陰極電壓
+        const anodeVoltage = nodeVoltages.get(this.anode) || 0;
+        const cathodeVoltage = nodeVoltages.get(this.cathode) || 0;
+        const vak = anodeVoltage - cathodeVoltage;
+        
+        // 計算通過二極體的電流
+        const resistance = this.getEquivalentResistance(vak);
+        const current = vak / resistance;
+        
+        // 更新內部狀態
+        this.anodeCathodeVoltage = vak;
+        this.current = current;
+        this.isForwardBiased = vak > this.Vf;
+        
+        // 調試輸出
+        if (Math.abs(vak) > 0.1 || this.isForwardBiased) {
+            console.log(`  [${this.name}] updateState: 陽極=${anodeVoltage.toFixed(3)}V, 陰極=${cathodeVoltage.toFixed(3)}V`);
+            console.log(`  [${this.name}] updateState: VAK=${vak.toFixed(3)}V, 電流=${current.toFixed(6)}A, 狀態=${this.isForwardBiased ? 'ON' : 'OFF'}`);
+        }
+    }
+
+    /**
+     * 更新元件狀態 (舊版接口，保持向後兼容)
      * @param {number} vak 陽極-陰極電壓
      * @param {number} iak 陽極到陰極電流
      */
-    updateState(vak, iak) {
+    updateStateOld(vak, iak) {
         this.anodeCathodeVoltage = vak;
         this.current = iak;
         

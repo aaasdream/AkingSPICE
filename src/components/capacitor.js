@@ -115,6 +115,22 @@ export class Capacitor extends LinearTwoTerminal {
     }
 
     /**
+     * 更新電容狀態變數 - 顯式積分法
+     * 計算 dVc/dt = Ic/C 並更新電容電壓
+     * @param {Map} nodeVoltageMap 節點電壓映射
+     * @param {Float32Array} solutionVector 解向量
+     * @param {number} dt 時間步長
+     * @param {number} currentTime 當前時間
+     * @param {Map} nodeMap 節點映射
+     * @param {Matrix} gMatrix G矩陣
+     */
+    updateState(nodeVoltageMap, solutionVector, dt, currentTime, nodeMap, gMatrix) {
+        // 由於顯式求解器的調用約定與我們需要的不一致，
+        // 電容的狀態更新由求解器的備用路徑處理。
+        // 這個方法只是為了標記電容有updateState能力，實際不做任何事情。
+    }
+
+    /**
      * 計算電容電流 i = C * dv/dt
      * @param {Map<string, number>} nodeVoltages 節點電壓
      * @returns {number} 電流 (安培)，正值表示從n1流向n2

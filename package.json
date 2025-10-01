@@ -27,7 +27,6 @@
     "node": ">=16.0.0"
   },
   "dependencies": {
-    "webgpu": "^0.3.8"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.65",

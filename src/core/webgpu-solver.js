@@ -8,13 +8,14 @@
  * 4. CPU-GPU數據傳輸優化
  */
 
-import { create, globals } from 'webgpu';
+// 移除有問題的 webgpu 依賴，直接使用瀏覽器原生 WebGPU API
+// import { create, globals } from 'webgpu';
 
 export class WebGPUSolver {
     constructor(options = {}) {
         this.debug = options.debug || false;
-        this.maxIterations = options.maxIterations || 1000;
-        this.tolerance = options.tolerance || 1e-9;
+        this.maxIterations = options.maxIterations || 2000;
+        this.tolerance = options.tolerance || 1e-12;
         
         // WebGPU組件
         this.gpu = null;
@@ -49,33 +50,45 @@ export class WebGPUSolver {
 
     /**
      * 初始化WebGPU上下文和設備
+     * @param {GPUDevice} device - 外部傳入的 WebGPU 設備
+     * @param {GPUAdapter} adapter - 外部傳入的 WebGPU 適配器
      */
-    async initialize() {
+    async initialize(device = null, adapter = null) {
         if (this.debug) console.log('🚀 初始化WebGPU線性求解器...');
         
         try {
-            // 設置WebGPU全局變量
-            this.gpu = create([]);
-            Object.assign(globalThis, globals);
-            
-            // 請求適配器和設備
-            this.adapter = await this.gpu.requestAdapter();
-            if (!this.adapter) {
-                throw new Error('無法獲取WebGPU適配器');
+            // 使用外部傳入的設備和適配器，或者自己創建
+            if (device && adapter) {
+                if (this.debug) console.log('✅ 使用外部傳入的 WebGPU 設備');
+                this.adapter = adapter;
+                this.device = device;
+            } else {
+                if (this.debug) console.log('🔍 自動獲取 WebGPU 設備...');
+                
+                // 使用瀏覽器原生 WebGPU API
+                if (!navigator.gpu) {
+                    throw new Error('瀏覽器不支援 WebGPU API');
+                }
+                
+                // 請求適配器和設備
+                this.adapter = await navigator.gpu.requestAdapter();
+                if (!this.adapter) {
+                    throw new Error('無法獲取WebGPU適配器');
+                }
+                
+                this.device = await this.adapter.requestDevice({
+                    requiredFeatures: [],
+                    requiredLimits: {
+                        maxComputeWorkgroupStorageSize: 16384,
+                        maxStorageBufferBindingSize: 134217728, // 128MB
+                    }
+                });
             }
             
-            this.device = await this.adapter.requestDevice({
-                requiredFeatures: [],
-                requiredLimits: {
-                    maxComputeWorkgroupStorageSize: 16384,
-                    maxStorageBufferBindingSize: 134217728, // 128MB
-                }
-            });
-            
             if (this.debug) {
-                console.log('✅ WebGPU設備創建成功');
-                console.log(`   適配器: ${this.adapter.info.description}`);
-                console.log(`   供應商: ${this.adapter.info.vendor}`);
+                console.log('✅ WebGPU設備初始化成功');
+                console.log(`   適配器: ${this.adapter.info?.description || 'Unknown'}`);
+                console.log(`   供應商: ${this.adapter.info?.vendor || 'Unknown'}`);
             }
             
             // 創建著色器和管線
@@ -187,8 +200,11 @@ export class WebGPUSolver {
                 }
                 
                 // Jacobi更新: x_new[i] = (rhs[i] - sum) / G[i,i]
+                // 使用更高精度的數值運算和relaxation factor
                 if (abs(diagonal) > 1e-12) {
-                    x_new[row] = (rhs[row] - sum) / diagonal;
+                    let update = (rhs[row] - sum) / diagonal;
+                    // 使用relaxation factor提高數值穩定性 (ω=0.8)
+                    x_new[row] = x_old[row] * 0.2 + update * 0.8;
                 } else {
                     x_new[row] = x_old[row]; // 保持舊值如果對角線接近零
                 }
@@ -201,8 +217,8 @@ export class WebGPUSolver {
      */
     generateStateUpdateWGSL() {
         return `
-            // 顯式狀態變量更新
-            // 對於電容: dVc/dt = Ic/C
+            // 顯式狀態變量更新 - 基於KCL的通用方法
+            // 對於電容: dVc/dt = Ic/C，其中 Ic 通過KCL計算
             // 對於電感: dIl/dt = Vl/L
             
             @group(0) @binding(0) var<storage, read> node_voltages: array<f32>;
@@ -210,12 +226,16 @@ export class WebGPUSolver {
             @group(0) @binding(2) var<storage, read_write> state_new: array<f32>;
             @group(0) @binding(3) var<storage, read> state_params: array<f32>; // C或L值
             @group(0) @binding(4) var<storage, read> state_nodes: array<i32>; // 節點索引對
-            @group(0) @binding(5) var<uniform> update_params: StateUpdateParams;
+            @group(0) @binding(5) var<storage, read> state_types: array<u32>; // 0=voltage(電容), 1=current(電感)
+            @group(0) @binding(6) var<storage, read> g_matrix: array<f32>; // G矩陣 (row-major)
+            @group(0) @binding(7) var<storage, read> rhs_vector: array<f32>; // RHS向量
+            @group(0) @binding(8) var<uniform> update_params: StateUpdateParams;
             
             struct StateUpdateParams {
                 state_count: u32,
+                node_count: u32,
                 time_step: f32,
-                resistor_conductance: f32, // 用於電容電流計算
+                large_admittance: f32, // 電容大導納值
                 method: u32, // 0=Euler, 1=RK4
             }
             
@@ -226,31 +246,52 @@ export class WebGPUSolver {
                     return;
                 }
                 
-                // 獲取狀態變量的節點索引
+                // 獲取狀態變量的節點索引和參數
                 let node1 = state_nodes[state_idx * 2];
                 let node2 = state_nodes[state_idx * 2 + 1];
-                
-                // 計算節點電壓差
-                var v1 = 0.0;
-                var v2 = 0.0;
-                if (node1 >= 0) { v1 = node_voltages[node1]; }
-                if (node2 >= 0) { v2 = node_voltages[node2]; }
-                let node_voltage = v1 - v2;
-                
-                // 計算狀態導數 (假設都是電容)
+                let state_type = state_types[state_idx];
+                let parameter = state_params[state_idx]; // C或L值
                 let current_state = state_old[state_idx];
-                let capacitance = state_params[state_idx];
                 
-                // 電容電流計算 (簡化為電阻分壓)
-                // Ic = (V_node - Vc) * G_resistor
-                let current = (node_voltage - current_state) * update_params.resistor_conductance;
-                let derivative = current / capacitance;
+                var derivative = 0.0;
                 
-                // 前向歐拉積分
+                if (state_type == 0u) {
+                    // 電容: dVc/dt = Ic/C
+                    // 使用簡化的電容電流計算: Ic = (V_node - Vc) * G_large
+                    var capacitor_current = 0.0;
+                    
+                    if (node1 >= 0) {
+                        // 獲取節點電壓
+                        var v1 = 0.0;
+                        var v2 = 0.0;
+                        if (node1 >= 0) { v1 = node_voltages[u32(node1)]; }
+                        if (node2 >= 0) { v2 = node_voltages[u32(node2)]; }
+                        let node_voltage = v1 - v2;
+                        
+                        // 電容電流 = (節點電壓 - 電容電壓) * 大導納
+                        capacitor_current = (node_voltage - current_state) * update_params.large_admittance;
+                    }
+                    
+                    // 計算導數: dVc/dt = Ic/C
+                    derivative = capacitor_current / parameter;
+                    
+                } else if (state_type == 1u) {
+                    // 電感: dIl/dt = Vl/L
+                    var v1 = 0.0;
+                    var v2 = 0.0;
+                    if (node1 >= 0) { v1 = node_voltages[u32(node1)]; }
+                    if (node2 >= 0) { v2 = node_voltages[u32(node2)]; }
+                    let node_voltage = v1 - v2;
+                    
+                    derivative = node_voltage / parameter;
+                }
+                
+                // 積分更新
                 if (update_params.method == 0u) {
+                    // 前向歐拉法: x(t+dt) = x(t) + dt * f(x(t), t)
                     state_new[state_idx] = current_state + update_params.time_step * derivative;
                 } else {
-                    // RK4暫時簡化為歐拉
+                    // RK4暫時簡化為歐拉（完整RK4需要多次求解）
                     state_new[state_idx] = current_state + update_params.time_step * derivative;
                 }
             }
@@ -341,26 +382,34 @@ export class WebGPUSolver {
     async solveLinearSystem(rhsVector, initialGuess = null) {
         const startTime = performance.now();
         
-        // 上傳RHS向量
-        this.device.queue.writeBuffer(
-            this.rhsBuffer, 
-            0, 
-            new Float32Array(rhsVector)
-        );
+        // 上傳RHS向量 (保持更高精度轉換)
+        const rhsFloat32 = new Float32Array(rhsVector.length);
+        for (let i = 0; i < rhsVector.length; i++) {
+            rhsFloat32[i] = rhsVector[i];
+        }
+        this.device.queue.writeBuffer(this.rhsBuffer, 0, rhsFloat32);
         
         // 設置初始猜測 (如果沒有提供，使用零向量)
         const initGuess = initialGuess || new Array(this.nodeCount).fill(0.0);
-        this.device.queue.writeBuffer(
-            this.solutionBuffer, 
-            0, 
-            new Float32Array(initGuess)
-        );
+        const initFloat32 = new Float32Array(initGuess.length);
+        for (let i = 0; i < initGuess.length; i++) {
+            initFloat32[i] = initGuess[i];
+        }
+        this.device.queue.writeBuffer(this.solutionBuffer, 0, initFloat32);
         
         // Jacobi迭代求解
         await this.runJacobiIterations();
         
         // 讀取結果
         const result = await this.readSolutionVector();
+        
+        // 調試輸出
+        if (this.debug && result.length > 0) {
+            console.log(`  GPU求解結果: [${Array.from(result).slice(0, Math.min(4, result.length)).map(x => x.toFixed(6)).join(', ')}${result.length > 4 ? '...' : ''}]`);
+            console.log(`  結果向量長度: ${result.length}`);
+        } else if (this.debug) {
+            console.log('  ⚠️ GPU返回空結果向量');
+        }
         
         this.stats.totalGPUTime += performance.now() - startTime;
         return result;
@@ -386,8 +435,23 @@ export class WebGPUSolver {
         
         this.device.queue.writeBuffer(paramsBuffer, 0, paramsData);
         
-        // 迭代求解 (優化迭代次數)
-        const actualIterations = Math.min(this.maxIterations, 50); // 大幅減少迭代次數
+        // 迭代求解 (根據矩陣大小調整迭代次數)
+        // 由於f32精度限制，需要更多迭代來達到收斂
+        let actualIterations;
+        if (this.nodeCount <= 2) {
+            // 小矩陣：使用極多迭代以補償32位精度限制
+            actualIterations = Math.min(this.maxIterations, 1500);
+        } else if (this.nodeCount <= 10) {
+            // 中等矩陣：保證精度
+            actualIterations = Math.min(this.maxIterations, 1000);
+        } else {
+            // 大矩陣：平衡性能和精度
+            actualIterations = Math.min(this.maxIterations, 500);
+        }
+        
+        if (this.debug) {
+            console.log(`  雅可比迭代: ${actualIterations} 次`);
+        }
         for (let iter = 0; iter < actualIterations; iter++) {
             // 創建綁定組
             const bindGroup = this.device.createBindGroup({

@@ -4,7 +4,7 @@
  */
 
 import { CircuitPreprocessor } from './circuit-preprocessor.js';
-import { createWebGPUSolver } from './webgpu-solver.js';
+import { WebGPUSolver } from './webgpu-solver.js';
 import { Matrix, Vector } from '../core/linalg.js';
 
 export class GPUExplicitStateSolver {
@@ -13,11 +13,11 @@ export class GPUExplicitStateSolver {
         this.timeStep = options.timeStep || 1e-6;
         this.integrationMethod = options.integrationMethod || 'forward_euler';
         
-        // GPU求解器選項
+        // GPU求解器選項 - 提高精度設定
         this.gpuOptions = {
             debug: this.debug,
-            maxIterations: options.solverMaxIterations || 1000,
-            tolerance: options.solverTolerance || 1e-9,
+            maxIterations: options.solverMaxIterations || 2000,
+            tolerance: options.solverTolerance || 1e-12,
         };
         
         // 組件和數據
@@ -57,7 +57,16 @@ export class GPUExplicitStateSolver {
         try {
             // 初始化WebGPU求解器
             console.log('   初始化WebGPU線性求解器...');
-            this.webgpuSolver = await createWebGPUSolver(this.gpuOptions);
+            this.webgpuSolver = new WebGPUSolver(this.gpuOptions);
+            
+            // 如果傳入了 WebGPU 設備，使用它們；否則讓求解器自動創建
+            if (this.gpuOptions.webGPUDevice && this.gpuOptions.webGPUAdapter) {
+                console.log('   使用外部提供的 WebGPU 設備');
+                await this.webgpuSolver.initialize(this.gpuOptions.webGPUDevice, this.gpuOptions.webGPUAdapter);
+            } else {
+                console.log('   自動創建 WebGPU 設備');
+                await this.webgpuSolver.initialize(); // 不傳參數，讓它自己創建
+            }
             
             // 預處理電路
             console.log('   預處理電路拓撲結構...');
@@ -93,9 +102,18 @@ export class GPUExplicitStateSolver {
     }
 
     /**
+     * 執行一個時間步 - 統一API
+     * @param {Object} controlInputs 控制輸入 (可選)
+     * @returns {Object} 時間步結果
+     */
+    async step(controlInputs = {}) {
+        return await this.solveTimeStep(controlInputs);
+    }
+
+    /**
      * 執行單個時間步的求解
      */
-    async solveTimeStep() {
+    async solveTimeStep(controlInputs = {}) {
         const stepStartTime = performance.now();
         
         // 1. 更新RHS向量 (包含狀態變數貢獻)
@@ -115,9 +133,34 @@ export class GPUExplicitStateSolver {
         this.currentTime += this.timeStep;
         this.updateStats(gpuTime, stateTime, performance.now() - stepStartTime);
         
+        // 將節點電壓數組轉換為節點ID映射對象
+        const nodeVoltageMap = {};
+        const nodeMap = this.circuitData.nodeMap || new Map();
+        const nodeIds = Array.from(nodeMap.keys());
+        
+        // 調試信息
+        if (this.debug) {
+            console.log(`  調試：nodeVoltages長度 = ${nodeVoltages.length}`);
+            console.log(`  調試：nodeIds長度 = ${nodeIds.length}`);
+            console.log(`  調試：nodeIds = [${nodeIds.join(', ')}]`);
+            console.log(`  調試：nodeVoltages = [${Array.from(nodeVoltages).join(', ')}]`);
+        }
+        
+        for (let i = 0; i < nodeVoltages.length && i < nodeIds.length; i++) {
+            nodeVoltageMap[nodeIds[i]] = nodeVoltages[i];
+        }
+        
+        // 構建狀態變量映射 (與CPU格式一致)
+        const stateVariables = new Map();
+        for (let i = 0; i < this.circuitData.stateCount; i++) {
+            const stateVar = this.circuitData.stateVariables[i];
+            stateVariables.set(stateVar.componentName, this.currentStateVector[i]);
+        }
+
         return {
-            nodeVoltages: Array.from(nodeVoltages),
-            stateVector: Array.from(this.currentStateVector),
+            nodeVoltages: nodeVoltageMap,
+            stateVector: Array.from(this.currentStateVector),  // 保留Array格式
+            stateVariables: stateVariables,  // 添加Map格式與CPU一致
             time: this.currentTime,
         };
     }
@@ -193,20 +236,12 @@ export class GPUExplicitStateSolver {
             const currentVc = this.currentStateVector[stateIndex];
             const C = stateVar.parameter;
             
-            // 使用KCL分析計算電容電流
-            const resistorConductance = 1e-3; // 從G矩陣結構推導
-            const vinVoltage = nodeVoltages[1] || 0; // 假設vin是索引1
-            const node1Voltage = nodeVoltages[0] || 0;
+            // 使用與CPU求解器相同的簡化電容電流計算
+            // 電容電流 = (節點電壓 - 電容電壓) * 大導納
+            const largeAdmittance = 1e6;
+            const capacitorCurrent = (nodeVoltage - currentVc) * largeAdmittance;
             
-            if (node1 >= 0 && node2 < 0) {
-                // 電容接地情況
-                const resistorCurrent = (vinVoltage - node1Voltage) * resistorConductance;
-                const capacitorCurrent = resistorCurrent;
-                return capacitorCurrent / C;
-            }
-            
-            // 通用情況: 簡化為RC模型
-            return (nodeVoltage - currentVc) / (1000 * C); // R=1000Ω
+            return capacitorCurrent / C;
             
         } else if (stateVar.type === 'current') {
             // 電感: dIl/dt = Vl/L
@@ -304,30 +339,189 @@ export class GPUExplicitStateSolver {
     }
 
     /**
-     * 清理資源
+     * 銷毀求解器，釋放GPU和記憶體資源
      */
     destroy() {
+        // 清理WebGPU資源
         if (this.webgpuSolver) {
             this.webgpuSolver.destroy();
             this.webgpuSolver = null;
         }
+        
+        // 清理CPU數據
+        this.components = null;
+        this.circuitData = null;
+        this.currentStateVector = null;
+        
+        // 重置狀態
+        this.currentTime = 0;
+        this.gpuBuffersInitialized = false;
+        
+        // 重置統計
+        this.stats = {
+            totalTimeSteps: 0,
+            totalGPUSolves: 0,
+            totalStateUpdates: 0,
+            avgGPUTime: 0,
+            avgStateUpdateTime: 0,
+            totalSimulationTime: 0,
+        };
+        
+        console.log('GPUExplicitStateSolver 已銷毀');
     }
 
     /**
-     * 驗證GPU求解結果
+     * 統一的run方法 - 與ExplicitStateSolver API兼容
+     * @param {number} startTime 開始時間
+     * @param {number} endTime 結束時間
+     * @returns {Object} 格式化的仿真結果
+     */
+    async run(startTime, endTime) {
+        console.log(`🚀 開始GPU顯式時域仿真: ${startTime}s 到 ${endTime}s, 步長 ${this.timeStep}s`);
+        
+        this.currentTime = startTime;
+        const timeVector = [];
+        const nodeVoltages = {};
+        const stateVariables = {};
+        
+        // 初始化結果數組
+        const nodeMap = this.circuitData.nodeMap || new Map();
+        for (const nodeId of nodeMap.keys()) {
+            nodeVoltages[nodeId] = [];
+        }
+        
+        // 初始化狀態變量數組
+        if (this.circuitData.stateCount > 0) {
+            for (const component of this.components) {
+                if (component.getStateVariables && component.getStateVariables().length > 0) {
+                    stateVariables[component.id] = [];
+                }
+            }
+        }
+        
+        const totalSteps = Math.ceil((endTime - startTime) / this.timeStep);
+        const simStartTime = performance.now();
+        
+        // 仿真主循環
+        for (let step = 0; step <= totalSteps; step++) {
+            // 解算當前時間步
+            const stepResult = await this.solveTimeStep();
+            
+            // 記錄時間
+            timeVector.push(this.currentTime);
+            
+            // 記錄節點電壓
+            if (stepResult.nodeVoltages) {
+                for (const [nodeId, voltage] of Object.entries(stepResult.nodeVoltages)) {
+                    if (nodeVoltages[nodeId]) {
+                        nodeVoltages[nodeId].push(voltage);
+                    }
+                }
+            }
+            
+            // 記錄狀態變量
+            if (stepResult.stateVector && this.circuitData.stateCount > 0) {
+                let stateIndex = 0;
+                for (const component of this.components) {
+                    if (component.getStateVariables && component.getStateVariables().length > 0) {
+                        const componentStates = component.getStateVariables().length;
+                        if (!stateVariables[component.id]) {
+                            stateVariables[component.id] = [];
+                        }
+                        
+                        // 提取該組件的狀態變量
+                        for (let i = 0; i < componentStates; i++) {
+                            if (stateIndex + i < stepResult.stateVector.length) {
+                                if (!stateVariables[component.id][i]) {
+                                    stateVariables[component.id][i] = [];
+                                }
+                                stateVariables[component.id][i].push(stepResult.stateVector[stateIndex + i]);
+                            }
+                        }
+                        stateIndex += componentStates;
+                    }
+                }
+            }
+            
+            // 進度輸出
+            if (step % Math.max(1, Math.floor(totalSteps / 20)) === 0 || step < 5) {
+                const progress = (step / totalSteps * 100).toFixed(1);
+                if (this.debug && step % Math.max(1, Math.floor(totalSteps / 10)) === 0) {
+                    console.log(`   GPU仿真進度: ${progress}% (${step}/${totalSteps})`);
+                }
+            }
+        }
+        
+        const totalTime = performance.now() - simStartTime;
+        this.stats.totalSimulationTime = totalTime;
+        
+        if (this.debug) {
+            console.log(`GPU仿真完成: ${totalSteps} 個時間步, 耗時 ${totalTime.toFixed(2)}ms`);
+            console.log(`   平均GPU求解時間: ${this.stats.avgGPUTime.toFixed(3)}ms`);
+            console.log(`   平均狀態更新時間: ${this.stats.avgStateUpdateTime.toFixed(3)}ms`);
+        }
+        
+        return {
+            timeVector,
+            nodeVoltages,
+            stateVariables: Object.keys(stateVariables).length > 0 ? stateVariables : null,
+            totalTime,
+            stats: this.getStats()
+        };
+    }
+
+    /**
+     * 驗證GPU求解結果 - 與CPU求解器對比
      */
     async validateAgainstCPU(cpuSolver, testDuration = 1e-5) {
         console.log('🔍 GPU vs CPU結果驗證...');
         
-        // 運行GPU仿真
-        const gpuResults = await this.runTransientAnalysis(0, testDuration, this.timeStep);
-        
-        // 運行CPU仿真 (需要相同的初始條件)
-        // TODO: 實現CPU版本比較
-        
-        return {
-            gpuResults: gpuResults.results,
-            validation: 'GPU求解器運行正常',
-        };
+        try {
+            // 運行GPU仿真
+            const gpuResults = await this.run(0, testDuration);
+            
+            // 運行CPU仿真 (相同組件和參數)
+            const cpuResults = await cpuSolver.run(0, testDuration);
+            
+            // 簡單驗證
+            const nodeErrors = [];
+            let maxError = 0;
+            
+            for (const [nodeId, gpuVoltages] of Object.entries(gpuResults.nodeVoltages)) {
+                const cpuVoltages = cpuResults.nodeVoltages[nodeId];
+                if (cpuVoltages && gpuVoltages.length === cpuVoltages.length) {
+                    for (let i = 0; i < gpuVoltages.length; i++) {
+                        const error = Math.abs(gpuVoltages[i] - cpuVoltages[i]);
+                        const relError = error / (Math.abs(cpuVoltages[i]) + 1e-12);
+                        maxError = Math.max(maxError, relError);
+                        
+                        if (relError > 1e-3) {  // 0.1% 閾值
+                            nodeErrors.push({
+                                node: nodeId,
+                                time: i,
+                                gpu: gpuVoltages[i],
+                                cpu: cpuVoltages[i],
+                                error: relError
+                            });
+                        }
+                    }
+                }
+            }
+            
+            return {
+                passed: maxError < 1e-3 && nodeErrors.length === 0,
+                maxError,
+                nodeErrors: nodeErrors.slice(0, 10),  // 最多顯示10個錯誤
+                gpuTime: gpuResults.totalTime,
+                cpuTime: cpuResults.totalTime,
+                speedup: cpuResults.totalTime / gpuResults.totalTime
+            };
+            
+        } catch (error) {
+            return {
+                passed: false,
+                error: `驗證過程異常: ${error.message}`
+            };
+        }
     }
 }

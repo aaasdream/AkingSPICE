@@ -54,6 +54,7 @@ class IterativeSolver {
         // 初始化
         let x = x0 ? new Float64Array(x0) : new Float64Array(n);
         let x_new = new Float64Array(n);
+        let lastError = 0;
         
         for (let iter = 0; iter < this.maxIterations; iter++) {
             // x_new[i] = (b[i] - Σ(A[i,j] * x[j], j≠i)) / A[i,i]
@@ -74,6 +75,7 @@ class IterativeSolver {
                 error += diff * diff;
             }
             error = Math.sqrt(error);
+            lastError = error;
             
             if (error < this.tolerance) {
                 if (this.debug) {
@@ -86,7 +88,7 @@ class IterativeSolver {
             x.set(x_new);
         }
         
-        throw new Error(`雅可比法未收斂: ${this.maxIterations} 次迭代後誤差仍為 ${error.toExponential(3)}`);
+        throw new Error(`雅可比法未收斂: ${this.maxIterations} 次迭代後誤差仍為 ${lastError.toExponential(3)}`);
     }
 
     /**
@@ -246,23 +248,55 @@ export class ExplicitStateSolver {
         const n = this.circuitData.nodeCount;
         this.gMatrix = Matrix.zeros(n, n);
         
-        const buffers = this.circuitData.gpuBuffers;
-        
-        // 從COO格式填充矩陣
-        for (let i = 0; i < buffers.gRows.length; i++) {
-            const row = buffers.gRows[i];
-            const col = buffers.gCols[i];
-            const value = buffers.gValues[i];
+        // 檢查是否有非線性元件
+        if (this.hasNonlinearComponents()) {
+            // 混合構建：先用預處理數據，然後更新非線性元件
+            const buffers = this.circuitData.gpuBuffers;
             
-            this.gMatrix.set(row, col, value);
+            // 從COO格式填充線性部分
+            for (let i = 0; i < buffers.gRows.length; i++) {
+                const row = buffers.gRows[i];
+                const col = buffers.gCols[i];
+                const value = buffers.gValues[i];
+                
+                this.gMatrix.set(row, col, value);
+            }
+            
+            // 然後為非線性元件重新印花
+            const rhs = new Float64Array(n);  // 臨時RHS，不用於實際計算
+            for (const component of this.components) {
+                if ((component.type === 'D' || component.type === 'M' || component.type === 'Q') &&
+                    typeof component.stamp === 'function') {
+                    component.stamp(this.gMatrix, rhs, this.circuitData.nodeMap, 
+                                   this.circuitData.voltageSourceMap, this.currentTime);
+                }
+            }
+            
+            if (this.debug && this.stats.totalTimeSteps < 5) {
+                console.log(`  混合重建G矩陣 (時間步 ${this.stats.totalTimeSteps})`);
+                console.log('  重建後G矩陣:');
+                this.gMatrix.print(3);
+            }
+        } else {
+            // 線性電路：使用預處理數據
+            const buffers = this.circuitData.gpuBuffers;
+            
+            // 從COO格式填充矩陣
+            for (let i = 0; i < buffers.gRows.length; i++) {
+                const row = buffers.gRows[i];
+                const col = buffers.gCols[i];
+                const value = buffers.gValues[i];
+                
+                this.gMatrix.set(row, col, value);
+            }
         }
         
-        if (this.debug) {
+        if (this.debug && this.stats.totalTimeSteps === 0) {
             console.log('G矩陣構建完成:');
             if (n <= 6) {
                 console.log(this.gMatrix.toString());
             } else {
-                console.log(`矩陣大小: ${n}x${n}, 非零元素: ${buffers.gRows.length}`);
+                console.log(`矩陣大小: ${n}x${n}`);
             }
         }
     }
@@ -300,21 +334,38 @@ export class ExplicitStateSolver {
         // 1. 更新控制輸入 (時變源、開關狀態等)
         this.updateControlInputs(controlInputs);
         
-        // 2. 構建RHS向量 i
+        // 2. 檢查是否需要重新構建 G 矩陣 (非線性元件如二極體)
+        if (this.hasNonlinearComponents()) {
+            this.buildGMatrix();
+        }
+        
+        // 3. 構建RHS向量 i
         this.buildRHSVector();
         
-        // 3. 求解純電阻網絡 Gv = i  
+        // 4. 求解純電阻網絡 Gv = i  
         this.solveResistiveNetwork();
         
-        // 4. 計算狀態變量導數並更新狀態
+        // 5. 計算狀態變量導數並更新狀態
         this.updateStateVariables();
         
-        // 5. 準備下一個時間步
+        // 6. 準備下一個時間步
         this.currentTime += this.timeStep;
         this.stats.totalTimeSteps++;
         
-        // 6. 返回當前時間步結果
+        // 7. 返回當前時間步結果
         return this.getCurrentStepResult();
+    }
+
+    /**
+     * 檢查是否有非線性元件需要重新構建 G 矩陣
+     * @returns {boolean}
+     */
+    hasNonlinearComponents() {
+        return this.components.some(comp => 
+            comp.type === 'D' ||          // 二極體
+            comp.type === 'M' ||          // MOSFET
+            comp.type === 'Q'             // 晶體管
+        );
     }
 
     /**
@@ -365,14 +416,14 @@ export class ExplicitStateSolver {
             this.stats.totalLinearSolves++;
             
         } catch (jacobiError) {
-            console.warn(`雅可比法失敗，嘗試高斯-塞德爾法: ${jacobiError.message}`);
+            console.warn(`雅可比法失敗，嘗試高斯-塞德爾法: ${jacobiError?.message || jacobiError}`);
             
             try {
                 const solution = this.linearSolver.gaussSeidel(this.gMatrix, this.rhsVector, this.solutionVector);
                 this.solutionVector.set(solution);
                 this.stats.totalLinearSolves++;
             } catch (gsError) {
-                throw new Error(`所有線性求解器都失敗: ${gsError.message}`);
+                throw new Error(`所有線性求解器都失敗: ${gsError?.message || gsError}`);
             }
         }
         
@@ -388,9 +439,62 @@ export class ExplicitStateSolver {
         const stateCount = this.circuitData.stateCount;
         const stateDerivatives = new Float64Array(stateCount);
         
-        // 計算每個狀態變量的導數
+
+        
+        // 使用元件的 updateState 方法更新狀態變數
+        // 為元件提供必要的上下文數據
+        const componentData = {
+            gMatrix: this.gMatrix,  // 使用求解器中的G矩陣
+            rhsVector: this.rhsVector
+        };
+        
+        // 遍歷所有元件，調用其 updateState 方法
+        if (this.components) {
+            // 創建節點電壓映射
+            const nodeVoltages = new Map();
+            nodeVoltages.set('0', 0);  // 接地
+            nodeVoltages.set('gnd', 0);
+            
+            for (let i = 0; i < this.circuitData.nodeCount; i++) {
+                const nodeName = this.circuitData.nodeNames[i];
+                nodeVoltages.set(nodeName, this.solutionVector[i]);
+            }
+            
+            for (const component of this.components) {
+                // 特殊處理：電容器和電感器使用備用路徑，其他組件使用updateState方法
+                if (component.type !== 'C' && component.type !== 'L' && 
+                    component.updateState && typeof component.updateState === 'function') {
+                    // 調用統一的 updateState 接口
+                    component.updateState(
+                        nodeVoltages,          // 節點電壓映射
+                        this.solutionVector,   // 解向量
+                        this.timeStep,         // 時間步長
+                        this.currentTime,      // 當前時間
+                        this.circuitData.nodeMap,  // 節點映射
+                        this.gMatrix           // G矩陣
+                    );
+                }
+            }
+        }
+        
+        // 備用方法：專門處理電容和電感的狀態更新
         for (let i = 0; i < stateCount; i++) {
             const stateVar = this.circuitData.stateVariables[i];
+            
+            // 檢查對應的元件類型
+            let component = null;
+            if (this.components) {
+                component = this.components.find(c => c.name === stateVar.componentName);
+            }
+            
+            // 只處理電容(C)和電感(L)
+            if (component && (component.type === 'C' || component.type === 'L')) {
+                // 使用備用路徑處理
+            } else {
+                continue; // 不是電容或電感，跳過
+            }
+            
+            // 對於沒有 updateState 方法的元件（如老版本的電感），使用傳統方式
             const node1 = stateVar.node1;
             const node2 = stateVar.node2;
             
@@ -399,97 +503,35 @@ export class ExplicitStateSolver {
             const v2 = node2 >= 0 ? this.solutionVector[node2] : 0;
             const nodeVoltage = v1 - v2;
             
-            if (stateVar.type === 'voltage') {
-                // 電容: dVc/dt = Ic/C
-                // 在顯式方法中，電容被建模為理想電壓源Vc
-                // 流過電容的電流通過KCL計算：Ic = 從節點流出的總電流
-                
-                const currentVc = this.stateVector[i];
+            if (stateVar.type === 'current') {
+                // 電感: dIl/dt = Vl/L，使用前向歐拉積分
+                const L = stateVar.parameter;
+                const dIldt = nodeVoltage / L;
+                this.stateVector[i] += this.timeStep * dIldt;
+            } else if (stateVar.type === 'voltage') {
+                // 電容: dVc/dt = Ic/C，需要計算電容電流
+                // 使用KCL計算流入電容正極的非電容電流
                 const C = stateVar.parameter;
+                const currentVc = this.stateVector[i];
                 
-                // 方法1：使用節點電壓和電路分析
-                // 對於RC電路，KCL在電容節點：
-                // Ic + Ir = 0  (假設沒有其他電流)
-                // Ir = (Vnode - Vother_nodes) / R
-                
-                // 方法2：使用修正的電容模型
-                // 電容兩端的實際電壓差應該是 nodeVoltage，而不是 Vc
-                // 但由於電容被建模為電壓源，需要計算實際流過的電流
-                
-                // 正確的電流計算：
-                // 在大導納模型中，電容電壓源產生的電流與實際電容電流不同
-                // 實際電容電流 = 節點KCL的結果
-                
-                // 簡化方法：對於串聯RC，Ic = (Vnode - Vc) / (R_equivalent)
-                // 但我們沒有直接的R值，使用電導矩陣推導
-                
-                // 使用節點電壓直接計算：對於RC電路
-                // dVc/dt = (Vnode - Vc) / (R*C)
-                // 其中 Vnode 是電容正極的節點電壓
-                
-                // 從調試輸出看，node1是電容正極，應該有電阻連接
-                // 使用簡化模型：Ic/C = (V_node - Vc) / (R*C)
-                // 需要找到等效電阻值
-                
-                // 正確的電流計算：通過KCL分析
-                // 電容被建模為電壓源Vc，我們需要計算流過它的電流
-                // 
-                // 方法：檢查RHS向量中電容貢獻的變化
-                // 電容的電流 = (G_large * Vc產生的貢獻) - (實際RHS中的電流)
-                
-                // 更直接的方法：利用節點電壓和電路結構
-                // 對於RC電路：Ic = (V_node1 - V_node2 - Vc) / 0 (理想電壓源)
-                // 但實際上由於大導納近似：Ic ≈ 節點處的KCL平衡電流
-                
-                // 從G矩陣的結構反推：
-                // 對於節點node1: G_total * V_node1 - G_neighbor * V_neighbor = RHS + Ic
-                // 其中G_total包括電容的大導納，Ic是我們要求的電容電流
-                
-                // 檢查G矩陣條目找到其他連接
-                const largeAdmittance = 1e6;
+                let capacitorCurrent = 0;
                 const node1Idx = stateVar.node1;
                 const node2Idx = stateVar.node2;
                 
-                // 計算節點node1的KCL平衡
-                // 總流出電流 = 通過所有導納的電流之和
-                let totalCurrent = 0;
+                // 使用傳統的電容電流計算方法
+                // 電容電流 Ic = (V_node_new - Vc_old) * G_large
+                // 這是基於電容被建模為電壓源的原理
+                const v1 = node1Idx >= 0 ? this.solutionVector[node1Idx] : 0;
+                const v2 = node2Idx >= 0 ? this.solutionVector[node2Idx] : 0;
+                const nodeVoltage = v1 - v2;
                 
-                // 簡化：假設除了電容大導納外，還有電阻導納
-                // 從G矩陣我們知道有 -1.000e-3 的交叉項，這對應1/1000 = 1mS的電阻
-                const resistorConductance = 1e-3; // 1/1000Ω
+                // 電容電流 = (節點電壓 - 電容電壓) * 大導納
+                capacitorCurrent = (nodeVoltage - currentVc) * 1e6;
                 
-                // 修復版本：正確計算電容電流
-                // 根據電路拓撲：V1(12V) -> R1 -> C1 -> GND
-                // RC 充電方程：dVc/dt = (Vin - Vc) / (R*C)
-                
-                const capacitorVoltage = this.stateVector[i]; // 電容當前電壓
-                const vinVoltage = 12; // 電壓源電壓 (固定12V)
-                
-                // RC 充電方程：dVc/dt = (Vin - Vc) / (R*C)
-                const R = 1000; // 1kΩ
-                const timeConstant = R * C;
-                const dVcdt = (vinVoltage - capacitorVoltage) / timeConstant;
-                
-                stateDerivatives[i] = dVcdt; // 直接使用dVc/dt
-                
-                stateDerivatives[i] = totalCurrent / C;
-                
-            } else if (stateVar.type === 'current') {
-                // 電感: dIl/dt = Vl/L
-                const L = stateVar.parameter;
-                stateDerivatives[i] = nodeVoltage / L;
+                const dVcdt = capacitorCurrent / C;
+                this.stateVector[i] += this.timeStep * dVcdt;
+                stateDerivatives[i] = dVcdt;
             }
-        }
-        
-        // 執行積分更新
-        if (this.integrationMethod === 'forward_euler') {
-            // 前向歐拉法: x(t+dt) = x(t) + dt * f(x(t), t)
-            for (let i = 0; i < stateCount; i++) {
-                this.stateVector[i] += this.timeStep * stateDerivatives[i];
-            }
-        } else if (this.integrationMethod === 'rk4') {
-            // 四階龍格庫塔法 (更穩定，但需要4次求解)
-            this.rungeKutta4Update(stateDerivatives);
         }
         
         if (this.stats.totalTimeSteps < 5) {
@@ -581,6 +623,10 @@ export class ExplicitStateSolver {
         const totalSteps = Math.ceil((stopTime - startTime) / this.timeStep);
         let stepCount = 0;
         
+        // 先求解t=0時刻的初始條件
+        this.step();
+        this.currentTime = startTime; // 重置時間為開始時間
+        
         // 記錄初始條件
         const initialResult = this.getCurrentStepResult();
         this.recordTimePoint(results, initialResult);
@@ -618,7 +664,26 @@ export class ExplicitStateSolver {
             console.log('仿真統計:', results.stats);
         }
         
-        return results;
+        // 轉換為GPU求解器兼容格式
+        const compatibleResults = {
+            timeVector: results.timeVector,
+            nodeVoltages: {},
+            stateVariables: {},
+            totalTime: results.stats.totalSimulationTime,
+            stats: results.stats
+        };
+        
+        // 轉換節點電壓Map為對象
+        for (const [nodeName, voltages] of results.nodeVoltages) {
+            compatibleResults.nodeVoltages[nodeName] = voltages;
+        }
+        
+        // 轉換狀態變量Map為對象
+        for (const [componentName, states] of results.stateVariables) {
+            compatibleResults.stateVariables[componentName] = states;
+        }
+        
+        return compatibleResults;
     }
 
     /**
@@ -691,5 +756,31 @@ export class ExplicitStateSolver {
             nodeVoltages: Array.from(this.solutionVector),
             rhsVector: Array.from(this.rhsVector)
         };
+    }
+
+    /**
+     * 銷毀求解器，釋放資源
+     * 對於CPU版本主要是清理記憶體引用
+     */
+    destroy() {
+        // 清理矩陣和向量
+        this.gMatrix = null;
+        this.stateVector = null;
+        this.rhsVector = null;
+        this.solutionVector = null;
+        
+        // 清理電路數據
+        this.circuitData = null;
+        this.components = null;
+        
+        // 重置狀態
+        this.currentTime = 0;
+        this.stats = {
+            totalTimeSteps: 0,
+            totalLinearSolves: 0,
+            averageSolverIterations: 0
+        };
+        
+        console.log('ExplicitStateSolver 已銷毀');
     }
 }

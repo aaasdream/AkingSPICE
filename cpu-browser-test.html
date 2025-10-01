@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>🚀 AkingSPICE - CPU 性能測試 (瀏覽器版)</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; 
+            margin: 20px; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 0;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: rgba(255,255,255,0.95);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        h1 { 
+            color: #333; 
+            text-align: center; 
+            margin-bottom: 30px;
+        }
+        .test-panel {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .circuit-info {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-left: 4px solid #007bff;
+        }
+        button { 
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white; 
+            border: none; 
+            padding: 15px 30px; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            font-size: 1.1em;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            margin: 10px;
+            min-width: 200px;
+        }
+        button:hover:not(:disabled) { 
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+        }
+        button:disabled { 
+            background: #aaa; 
+            cursor: not-allowed; 
+            transform: none;
+        }
+        .results {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(255,255,255,0.8);
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .status.info { background: #d1ecf1; color: #0c5460; }
+        .status.success { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        .status.warning { background: #fff3cd; color: #856404; }
+        .progress {
+            width: 100%;
+            height: 25px;
+            background: #e9ecef;
+            border-radius: 12px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #4facfe, #00f2fe);
+            transition: width 0.3s ease;
+            text-align: center;
+            line-height: 25px;
+            color: white;
+            font-weight: bold;
+            font-size: 0.9em;
+        }
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .metric {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .metric-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .metric-label {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 5px;
+        }
+        .warning-note {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            color: #856404;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 AkingSPICE - CPU 性能測試 (瀏覽器版)</h1>
+        
+        <div class="warning-note">
+            <strong>⚠️  注意：</strong>由於瀏覽器限制，此版本僅測試CPU性能。GPU版本需要Node.js環境支援。
+        </div>
+        
+        <div class="circuit-info">
+            <h3>📋 測試電路：簡單RC電路</h3>
+            <p><strong>組件：</strong>電壓源 5V，電阻 10Ω，電容 1μF</p>
+            <p><strong>時間步長：</strong>10ns</p>
+            <p><strong>測試步數：</strong>100,000 步 (1ms 模擬時間)</p>
+            <p><strong>預期結果：</strong>電容充電曲線，最終電壓趨近 5V</p>
+        </div>
+
+        <div class="test-panel">
+            <h3>💻 CPU 模擬測試</h3>
+            <button id="cpuTestBtn" onclick="runCPUTest()">🔄 執行 CPU 測試 (100,000 步)</button>
+            <button id="smallTestBtn" onclick="runSmallTest()">🔄 快速測試 (10,000 步)</button>
+            <div class="progress" id="cpuProgress" style="display:none;">
+                <div class="progress-bar" id="cpuProgressBar">0%</div>
+            </div>
+            <div class="results" id="cpuResults">等待測試...</div>
+            
+            <div class="metrics" id="metrics" style="display:none;">
+                <!-- 結果將在這裡顯示 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 載入 AkingSPICE 庫 -->
+    <script src="./lib-dist/AkingSPICE.umd.js"></script>
+    
+    <script>
+        // 測試參數
+        let TEST_STEPS = 100000;  // 可變測試步數
+        const TIME_STEP = 10e-9;    // 10ns
+        
+        // 創建測試電路組件 - 使用正確的AkingSPICE組件類
+        function createTestCircuit() {
+            try {
+                logStatus('cpuResults', '創建電路組件...', 'info');
+                
+                if (!AkingSPICE.VoltageSource || !AkingSPICE.Resistor || !AkingSPICE.Capacitor) {
+                    throw new Error('AkingSPICE 組件類不可用');
+                }
+                
+                const components = [
+                    new AkingSPICE.VoltageSource('V1', ['vin', 'gnd'], 5.0),
+                    new AkingSPICE.Resistor('R1', ['vin', 'vout'], 10),
+                    new AkingSPICE.Capacitor('C1', ['vout', 'gnd'], 1e-6)
+                ];
+                
+                logStatus('cpuResults', `✅ 成功創建 ${components.length} 個組件`, 'success');
+                return components;
+            } catch (error) {
+                logStatus('cpuResults', `❌ 組件創建失敗: ${error.message}`, 'error');
+                throw error;
+            }
+        }
+        
+        // 記錄狀態
+        function logStatus(elementId, message, type = 'info') {
+            const element = document.getElementById(elementId);
+            const statusDiv = document.createElement('div');
+            statusDiv.className = `status ${type}`;
+            statusDiv.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
+            element.appendChild(statusDiv);
+            element.scrollTop = element.scrollHeight;
+        }
+        
+        // 更新進度條
+        function updateProgress(elementId, current, total) {
+            const progressBar = document.getElementById(elementId);
+            const percentage = Math.round((current / total) * 100);
+            progressBar.style.width = `${percentage}%`;
+            progressBar.textContent = `${percentage}%`;
+        }
+        
+        // 顯示測試結果
+        function showResults(results) {
+            const metricsDiv = document.getElementById('metrics');
+            
+            // 計算統計數據
+            const finalTime = results.totalSteps * TIME_STEP * 1000; // 轉換為ms
+            const efficiency = (results.stepsPerSecond / 1000).toFixed(1); // K步/秒
+            const accuracyScore = (100 - Math.abs((results.finalVoltage - 4.99) / 4.99 * 100)).toFixed(2);
+            
+            metricsDiv.innerHTML = `
+                <div class="metric">
+                    <div class="metric-value">${results.totalSteps.toLocaleString()}</div>
+                    <div class="metric-label">模擬步數</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">${results.duration.toFixed(1)} ms</div>
+                    <div class="metric-label">執行時間</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">${efficiency}K</div>
+                    <div class="metric-label">性能 (步/秒)</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">${finalTime.toFixed(3)} ms</div>
+                    <div class="metric-label">模擬時間</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">${results.finalVoltage.toFixed(6)} V</div>
+                    <div class="metric-label">最終電容電壓</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">${accuracyScore}%</div>
+                    <div class="metric-label">精度分數</div>
+                </div>
+            `;
+            
+            metricsDiv.style.display = 'grid';
+        }
+        
+        // CPU測試 - 通用函數
+        async function runCPUTestWithSteps(steps, testName) {
+            TEST_STEPS = steps;
+            const startTime = performance.now();
+            const cpuBtn = document.getElementById('cpuTestBtn');
+            const smallBtn = document.getElementById('smallTestBtn');
+            const cpuProgressDiv = document.getElementById('cpuProgress');
+            const cpuResultsDiv = document.getElementById('cpuResults');
+            
+            try {
+                // 禁用按鈕
+                cpuBtn.disabled = true;
+                smallBtn.disabled = true;
+                cpuBtn.textContent = `⏳ ${testName} 執行中...`;
+                smallBtn.textContent = '⏳ 測試中...';
+                cpuProgressDiv.style.display = 'block';
+                cpuResultsDiv.innerHTML = '';
+                
+                logStatus('cpuResults', `開始 ${testName} (${TEST_STEPS.toLocaleString()} 步)...`, 'info');
+                logStatus('cpuResults', '檢查 AkingSPICE 庫...', 'info');
+                
+                if (typeof AkingSPICE === 'undefined') {
+                    throw new Error('AkingSPICE 庫未載入');
+                }
+                
+                logStatus('cpuResults', '✅ AkingSPICE 庫載入成功', 'success');
+                
+                // 檢查必要的類
+                const requiredClasses = ['ExplicitStateSolver', 'VoltageSource', 'Resistor', 'Capacitor'];
+                const missingClasses = requiredClasses.filter(cls => !AkingSPICE[cls]);
+                if (missingClasses.length > 0) {
+                    throw new Error(`缺少必要類: ${missingClasses.join(', ')}`);
+                }
+                
+                logStatus('cpuResults', '初始化 CPU 求解器...', 'info');
+                
+                // 創建CPU求解器
+                const cpuSolver = new AkingSPICE.ExplicitStateSolver({
+                    debug: false,
+                    timeStep: TIME_STEP
+                });
+                
+                const circuit = createTestCircuit();
+                await cpuSolver.initialize(circuit, TIME_STEP);
+                
+                logStatus('cpuResults', '✅ CPU 求解器初始化完成', 'success');
+                logStatus('cpuResults', `開始 ${TEST_STEPS.toLocaleString()} 步模擬...`, 'info');
+                
+                const results = [];
+                let currentTime = 0;
+                
+                // 分批處理以更新進度和避免阻塞UI
+                const batchSize = Math.min(1000, Math.max(100, Math.floor(TEST_STEPS / 100))); // 動態調整批次大小
+                const totalBatches = Math.ceil(TEST_STEPS / batchSize);
+                let completedSteps = 0;
+                
+                for (let batch = 0; batch < totalBatches; batch++) {
+                    const batchStart = batch * batchSize;
+                    const batchEnd = Math.min(batchStart + batchSize, TEST_STEPS);
+                    
+                    // 執行這個批次的模擬步驟
+                    for (let step = batchStart; step < batchEnd; step++) {
+                        const result = cpuSolver.step();
+                        
+                        // 每一定步數記錄一次結果
+                        const recordInterval = Math.max(1000, Math.floor(TEST_STEPS / 50)); // 最多記錄50個點
+                        if (step % recordInterval === 0 || step === TEST_STEPS - 1) {
+                            results.push({
+                                time: currentTime,
+                                capacitorVoltage: result.stateVariables?.get('C1') || 0,
+                                outputVoltage: result.nodeVoltages?.get('vout') || 0,
+                                step: step
+                            });
+                        }
+                        
+                        currentTime += TIME_STEP;
+                        completedSteps++;
+                    }
+                    
+                    // 更新進度
+                    updateProgress('cpuProgressBar', completedSteps, TEST_STEPS);
+                    
+                    // 每10個批次或最後一個批次顯示進度日誌
+                    if (batch % Math.max(1, Math.floor(totalBatches / 10)) === 0 || batch === totalBatches - 1) {
+                        logStatus('cpuResults', `進度: ${completedSteps.toLocaleString()}/${TEST_STEPS.toLocaleString()} (${Math.round(completedSteps/TEST_STEPS*100)}%)`, 'info');
+                    }
+                    
+                    // 讓出執行緒給UI更新
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                }
+                
+                const endTime = performance.now();
+                const duration = endTime - startTime;
+                const stepsPerSecond = Math.round(TEST_STEPS / (duration / 1000));
+                
+                // 最終結果
+                const finalResult = cpuSolver.step();
+                const finalVoltage = finalResult.stateVariables?.get('C1') || 0;
+                
+                const testResults = {
+                    duration: duration,
+                    stepsPerSecond: stepsPerSecond,
+                    finalVoltage: finalVoltage,
+                    totalSteps: TEST_STEPS,
+                    results: results
+                };
+                
+                logStatus('cpuResults', `✅ ${testName} 完成!`, 'success');
+                logStatus('cpuResults', `⏱️  總耗時: ${duration.toFixed(1)} ms`, 'success');
+                logStatus('cpuResults', `🚀 CPU性能: ${stepsPerSecond.toLocaleString()} 步/秒`, 'success');
+                logStatus('cpuResults', `🔋 最終電容電壓: ${finalVoltage.toFixed(6)} V`, 'success');
+                logStatus('cpuResults', `📊 記錄了 ${results.length} 個數據點`, 'info');
+                
+                showResults(testResults);
+                
+                // 性能評估
+                let performanceRating = '';
+                if (stepsPerSecond > 50000) performanceRating = '🚀 極快';
+                else if (stepsPerSecond > 20000) performanceRating = '⚡ 很快';
+                else if (stepsPerSecond > 10000) performanceRating = '✅ 良好';
+                else if (stepsPerSecond > 5000) performanceRating = '📈 中等';
+                else performanceRating = '🐌 較慢';
+                
+                logStatus('cpuResults', `🏆 性能評級: ${performanceRating}`, 'success');
+                
+            } catch (error) {
+                logStatus('cpuResults', `❌ ${testName} 失敗: ${error.message}`, 'error');
+                console.error('CPU Test Error:', error);
+                
+                // 詳細錯誤信息
+                if (error.stack) {
+                    console.error('Error Stack:', error.stack);
+                }
+            } finally {
+                // 恢復按鈕
+                cpuBtn.disabled = false;
+                smallBtn.disabled = false;
+                cpuBtn.textContent = '🔄 執行 CPU 測試 (100,000 步)';
+                smallBtn.textContent = '🔄 快速測試 (10,000 步)';
+                cpuProgressDiv.style.display = 'none';
+            }
+        }
+        
+        // CPU測試 - 大規模
+        async function runCPUTest() {
+            await runCPUTestWithSteps(100000, 'CPU 大規模測試');
+        }
+        
+        // 快速測試
+        async function runSmallTest() {
+            await runCPUTestWithSteps(10000, 'CPU 快速測試');
+        }
+        
+        // 頁面載入完成後初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('🚀 AkingSPICE 性能測試頁面載入完成');
+            
+            // 檢查庫載入狀態
+            setTimeout(() => {
+                if (typeof AkingSPICE !== 'undefined') {
+                    console.log('✅ AkingSPICE 庫載入成功');
+                    console.log('可用組件:', Object.keys(AkingSPICE).filter(k => k !== 'default'));
+                    
+                    logStatus('cpuResults', '🎉 AkingSPICE 庫載入完成，可以開始測試！', 'success');
+                    
+                    // 檢查關鍵組件
+                    const keyComponents = ['ExplicitStateSolver', 'VoltageSource', 'Resistor', 'Capacitor'];
+                    keyComponents.forEach(comp => {
+                        if (AkingSPICE[comp]) {
+                            logStatus('cpuResults', `✅ ${comp} 可用`, 'success');
+                        } else {
+                            logStatus('cpuResults', `❌ ${comp} 不可用`, 'error');
+                        }
+                    });
+                } else {
+                    console.error('❌ AkingSPICE 庫載入失敗');
+                    logStatus('cpuResults', '❌ AkingSPICE 庫載入失敗，請檢查文件路徑', 'error');
+                }
+            }, 1000);
+        });
+    </script>
+</body>
+</html>
