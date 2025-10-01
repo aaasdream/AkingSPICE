@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>GPU 測試</title>
+</head>
+<body>
+    <h1>GPU 優化測試</h1>
+    <button onclick="test()">運行測試</button>
+    <div id="output"></div>
+
+    <script type="module">
+        import { VoltageSource, Resistor, Capacitor, GPUExplicitStateSolver } from './lib-dist/AkingSPICE.es.js';
+
+        function log(msg) {
+            document.getElementById('output').innerHTML += '<p>' + msg + '</p>';
+            console.log(msg);
+        }
+
+        window.test = async function() {
+            try {
+                log('開始測試...');
+                
+                const components = [
+                    new VoltageSource('V1', ['vin', 'gnd'], 5),
+                    new Resistor('R1', ['vin', 'n1'], 1000),
+                    new Capacitor('C1', ['n1', 'gnd'], 1e-6, { ic: 0 })
+                ];
+                
+                log('電路創建完成');
+                
+                const solver = new GPUExplicitStateSolver({ debug: true });
+                await solver.initialize(components, 1e-6);
+                
+                log('求解器初始化完成');
+                log('節點數: ' + solver.circuitData.nodeCount);
+                log('狀態數: ' + solver.circuitData.stateCount);
+                
+                const result = await solver.solveTimeStep();
+                
+                if (result.fastPath) {
+                    log('✅ 使用快速路徑!');
+                } else {
+                    log('⚠️ 使用GPU路徑');
+                }
+                
+                log('電容電壓: ' + (result.nodeVoltages.n1 || 0).toFixed(6) + 'V');
+                
+            } catch (error) {
+                log('錯誤: ' + error.message);
+                console.error(error);
+            }
+        };
+    </script>
+</body>
+</html>

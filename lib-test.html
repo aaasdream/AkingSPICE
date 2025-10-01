@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AkingSPICE 庫測試</title>
+</head>
+<body>
+    <h1>AkingSPICE 庫測試</h1>
+    <div id="output"></div>
+
+    <script src="./lib-dist/AkingSPICE.umd.js"></script>
+    <script>
+        const output = document.getElementById('output');
+        
+        function log(message) {
+            output.innerHTML += message + '<br>';
+            console.log(message);
+        }
+        
+        try {
+            log('檢查 AkingSPICE 庫...');
+            
+            if (typeof AkingSPICE === 'undefined') {
+                log('❌ AkingSPICE 庫未載入');
+            } else {
+                log('✅ AkingSPICE 庫載入成功');
+                log('可用的類別: ' + Object.keys(AkingSPICE).join(', '));
+                
+                // 測試創建基本元件
+                const { VoltageSource, Resistor, Capacitor, ExplicitStateSolver } = AkingSPICE;
+                
+                log('測試創建基本元件...');
+                const v1 = new VoltageSource('V1', ['in', 'gnd'], 5);
+                const r1 = new Resistor('R1', ['in', 'out'], 1000);
+                const c1 = new Capacitor('C1', ['out', 'gnd'], 1e-6);
+                
+                log('✅ 基本元件創建成功');
+                
+                // 測試 CPU 求解器
+                if (ExplicitStateSolver) {
+                    log('測試 CPU 求解器...');
+                    const cpuSolver = new ExplicitStateSolver();
+                    log('✅ CPU 求解器創建成功');
+                } else {
+                    log('❌ ExplicitStateSolver 不可用');
+                }
+                
+                // 測試 GPU 求解器
+                if (AkingSPICE.GPUExplicitStateSolver) {
+                    log('測試 GPU 求解器...');
+                    try {
+                        const gpuSolver = new AkingSPICE.GPUExplicitStateSolver();
+                        log('✅ GPU 求解器創建成功');
+                    } catch (e) {
+                        log('❌ GPU 求解器創建失敗: ' + e.message);
+                    }
+                } else {
+                    log('❌ GPUExplicitStateSolver 不可用');
+                }
+            }
+        } catch (error) {
+            log('❌ 測試失敗: ' + error.message);
+            console.error(error);
+        }
+    </script>
+</body>
+</html>

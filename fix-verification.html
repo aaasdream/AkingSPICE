@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>修復驗證</title>
+    <style>
+        body { font-family: Arial; margin: 20px; }
+        .log { margin: 5px 0; padding: 8px; border-left: 3px solid #007bff; background: #f8f9fa; }
+        .success { border-left-color: #28a745; background: #d4edda; }
+        .error { border-left-color: #dc3545; background: #f8d7da; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>🔧 快速路徑修復驗證</h1>
+    <button onclick="testFix()">測試修復效果</button>
+    <div id="output"></div>
+
+    <script type="module">
+        import { VoltageSource, Resistor, Capacitor, GPUExplicitStateSolver } from './lib-dist/AkingSPICE.es.js';
+
+        function log(msg, type = 'log') {
+            const div = document.createElement('div');
+            div.className = type;
+            div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            document.getElementById('output').appendChild(div);
+            console.log(msg);
+        }
+
+        window.testFix = async function() {
+            document.getElementById('output').innerHTML = '';
+            log('🔍 開始修復效果測試...');
+
+            try {
+                const components = [
+                    new VoltageSource('V1', ['vin', 'gnd'], 5),
+                    new Resistor('R1', ['vin', 'n1'], 1000),
+                    new Capacitor('C1', ['n1', 'gnd'], 1e-6, { ic: 0 })
+                ];
+
+                const solver = new GPUExplicitStateSolver({ debug: false });
+                await solver.initialize(components, 1e-6);
+
+                log(`電路規模: ${solver.circuitData.nodeCount} 節點, ${solver.circuitData.stateCount} 狀態`);
+
+                // 測試理論預期：RC電路時間常數 τ = RC = 1000 * 1e-6 = 1ms
+                const R = 1000;
+                const C = 1e-6;
+                const tau = R * C;
+                log(`理論時間常數: τ = RC = ${tau * 1000}ms`);
+
+                // 預期最終電壓應該接近 5V（穩態）
+                log('⚡ 執行時間步測試...');
+
+                const voltages = [];
+                for (let i = 0; i < 5; i++) {
+                    const result = await solver.solveTimeStep();
+                    const voltage = result.nodeVoltages.n1 || 0;
+                    voltages.push(voltage);
+
+                    const pathType = result.fastPath ? '🚀 快速路徑' : '🐌 GPU路徑';
+                    log(`步驟 ${i+1}: ${pathType}, V_C = ${voltage.toFixed(6)}V`, 
+                        result.fastPath ? 'success' : 'log');
+
+                    // 檢查數值穩定性
+                    if (Math.abs(voltage) > 100 || isNaN(voltage)) {
+                        log(`❌ 數值不穩定！電壓值異常: ${voltage}`, 'error');
+                        return;
+                    }
+                }
+
+                // 分析結果
+                const finalVoltage = voltages[voltages.length - 1];
+                const expectedSteadyState = 5.0;
+                const error = Math.abs(finalVoltage - expectedSteadyState) / expectedSteadyState * 100;
+
+                log('📊 結果分析:');
+                log(`最終電壓: ${finalVoltage.toFixed(6)}V`);
+                log(`理論穩態: ${expectedSteadyState}V`);
+                log(`相對誤差: ${error.toFixed(3)}%`);
+
+                if (error < 50) { // 允許較大誤差，因為時間步很短
+                    log('✅ 修復成功！數值穩定，結果合理', 'success');
+                } else {
+                    log('⚠️ 仍需改進，但比之前好多了', 'log');
+                }
+
+                // 檢查電壓趨勢
+                if (voltages.length >= 2) {
+                    const trend = voltages[voltages.length - 1] - voltages[0];
+                    log(`電壓變化趨勢: ${trend > 0 ? '上升' : '下降'} ${Math.abs(trend).toFixed(6)}V`);
+                    
+                    if (trend > 0 && trend < 10) {
+                        log('✅ 電壓趨勢符合RC充電預期', 'success');
+                    }
+                }
+
+            } catch (error) {
+                log(`❌ 測試失敗: ${error.message}`, 'error');
+                console.error('Test error:', error);
+            }
+        };
+    </script>
+</body>
+</html>

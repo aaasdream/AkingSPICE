@@ -26,7 +26,7 @@ export class Capacitor extends LinearTwoTerminal {
         this.updateTemperatureCoefficient();
         
         // 顯式方法相關 - 電容被視為電壓源
-        this.largeAdmittance = 1e6;  // 用於近似理想電壓源的大導納（降低以避免數值問題）
+        this.largeAdmittance = 1e3;  // 降低大導納以避免數值問題（從1e6降到1e3）
     }
 
     /**

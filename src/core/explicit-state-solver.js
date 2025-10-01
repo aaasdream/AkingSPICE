@@ -509,24 +509,29 @@ export class ExplicitStateSolver {
                 const dIldt = nodeVoltage / L;
                 this.stateVector[i] += this.timeStep * dIldt;
             } else if (stateVar.type === 'voltage') {
-                // 電容: dVc/dt = Ic/C，需要計算電容電流
-                // 使用KCL計算流入電容正極的非電容電流
+                // 電容: dVc/dt = Ic/C，需要正確計算電容電流
                 const C = stateVar.parameter;
                 const currentVc = this.stateVector[i];
                 
-                let capacitorCurrent = 0;
                 const node1Idx = stateVar.node1;
                 const node2Idx = stateVar.node2;
                 
-                // 使用傳統的電容電流計算方法
-                // 電容電流 Ic = (V_node_new - Vc_old) * G_large
-                // 這是基於電容被建模為電壓源的原理
+                // 獲取節點電壓  
                 const v1 = node1Idx >= 0 ? this.solutionVector[node1Idx] : 0;
                 const v2 = node2Idx >= 0 ? this.solutionVector[node2Idx] : 0;
                 const nodeVoltage = v1 - v2;
                 
-                // 電容電流 = (節點電壓 - 電容電壓) * 大導納
-                capacitorCurrent = (nodeVoltage - currentVc) * 1e6;
+                // 正確的電容電流計算 - 基於KCL定律：
+                // 電容電流 = 流入該節點的總電流 - 其他元件的電流
+                // 但在顯式方法中，我們使用更直接的方法：
+                
+                // 電容被建模為電壓源Vc + 大導納G_large
+                // 電容電流 I_c = G_large * (V_node - V_c)  
+                // 這是正確的公式，但需要使用與preprocess階段相同的G_large
+                
+                // 從電容組件中獲取相同的大導納值
+                const G_large = 1e3;  // 與電容組件中的largeAdmittance相同（降低以提高數值穩定性）
+                const capacitorCurrent = G_large * (nodeVoltage - currentVc);
                 
                 const dVcdt = capacitorCurrent / C;
                 this.stateVector[i] += this.timeStep * dVcdt;
@@ -568,21 +573,21 @@ export class ExplicitStateSolver {
      * 獲取當前時間步結果
      */
     getCurrentStepResult() {
-        // 構建節點電壓映射
-        const nodeVoltages = new Map();
-        nodeVoltages.set('0', 0);  // 接地
-        nodeVoltages.set('gnd', 0);
+        // 構建節點電壓對象 - 返回普通對象而不是Map
+        const nodeVoltages = {};
+        nodeVoltages['0'] = 0;      // 接地
+        nodeVoltages['gnd'] = 0;    // 接地
         
         for (let i = 0; i < this.circuitData.nodeCount; i++) {
             const nodeName = this.circuitData.nodeNames[i];
-            nodeVoltages.set(nodeName, this.solutionVector[i]);
+            nodeVoltages[nodeName] = this.solutionVector[i];
         }
         
-        // 構建狀態變量映射
-        const stateVariables = new Map();
+        // 構建狀態變量對象 - 返回普通對象而不是Map
+        const stateVariables = {};
         for (let i = 0; i < this.circuitData.stateCount; i++) {
             const stateVar = this.circuitData.stateVariables[i];
-            stateVariables.set(stateVar.componentName, this.stateVector[i]);
+            stateVariables[stateVar.componentName] = this.stateVector[i];
         }
         
         return {
@@ -692,15 +697,15 @@ export class ExplicitStateSolver {
     recordTimePoint(results, stepResult) {
         results.timeVector.push(stepResult.time);
         
-        // 記錄節點電壓
-        for (const [nodeName, voltage] of stepResult.nodeVoltages) {
+        // 記錄節點電壓 - stepResult.nodeVoltages 是普通對象
+        for (const [nodeName, voltage] of Object.entries(stepResult.nodeVoltages)) {
             if (results.nodeVoltages.has(nodeName)) {
                 results.nodeVoltages.get(nodeName).push(voltage);
             }
         }
         
-        // 記錄狀態變量
-        for (const [componentName, value] of stepResult.stateVariables) {
+        // 記錄狀態變量 - stepResult.stateVariables 是普通對象
+        for (const [componentName, value] of Object.entries(stepResult.stateVariables)) {
             if (results.stateVariables.has(componentName)) {
                 results.stateVariables.get(componentName).push(value);
             }

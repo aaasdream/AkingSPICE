@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>電壓分壓器計算測試</title>
+</head>
+<body>
+    <h1>電壓分壓器計算測試</h1>
+    <div id="output"></div>
+
+    <script>
+        const output = document.getElementById('output');
+        
+        function log(message) {
+            output.innerHTML += message + '<br>';
+        }
+        
+        // 測試電壓分壓器計算
+        function testVoltageDivider() {
+            const vin = 400;  // 400V 輸入
+            const vout_target = 48;  // 48V 目標
+            
+            // 計算分壓電阻值
+            const voltageRatio = vout_target / vin;  // 0.12
+            log(`目標電壓比: ${voltageRatio.toFixed(3)} (${vout_target}V / ${vin}V)`);
+            
+            const R1_base = 1000;  // 1kΩ 基準電阻
+            
+            let R1, R2;
+            if (voltageRatio > 0.5) {
+                R2 = R1_base;
+                R1 = R2 * (1 - voltageRatio) / voltageRatio;
+            } else {
+                R1 = R1_base;
+                R2 = R1 * voltageRatio / (1 - voltageRatio);
+            }
+            
+            log(`計算得到: R1 = ${R1.toFixed(1)}Ω, R2 = ${R2.toFixed(1)}Ω`);
+            
+            // 驗證分壓結果
+            const actual_vout = vin * R2 / (R1 + R2);
+            log(`實際輸出電壓: ${actual_vout.toFixed(2)}V`);
+            log(`誤差: ${Math.abs(actual_vout - vout_target).toFixed(2)}V`);
+            
+            return { R1, R2, actual_vout };
+        }
+        
+        testVoltageDivider();
+    </script>
+</body>
+</html>

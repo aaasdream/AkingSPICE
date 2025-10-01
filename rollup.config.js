@@ -9,6 +9,7 @@ export default defineConfig([
       format: 'umd',
       name: 'AkingSPICE',
       sourcemap: true,
+      exports: 'named', // 修復混合導出警告
       globals: {
         // Add any external dependencies here
       }

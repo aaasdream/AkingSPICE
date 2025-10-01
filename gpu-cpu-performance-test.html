@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AkingSPICE - GPU vs CPU 性能對比測試</title>
+    <style>
+        body {
+            font-family: 'Courier New', monospace;
+            background: #1a1a1a;
+            color: #00ff00;
+            margin: 0;
+            padding: 20px;
+            line-height: 1.4;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 10px;
+            border: 2px solid #444;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #444;
+            padding-bottom: 20px;
+        }
+        
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            background: #333;
+            border-radius: 8px;
+            border-left: 4px solid #00ff00;
+        }
+        
+        .controls {
+            margin: 20px 0;
+            text-align: center;
+        }
+        
+        button {
+            background: #444;
+            color: #00ff00;
+            border: 2px solid #00ff00;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        
+        button:hover {
+            background: #00ff00;
+            color: #000;
+        }
+        
+        button:disabled {
+            background: #666;
+            color: #999;
+            border-color: #666;
+            cursor: not-allowed;
+        }
+        
+        .output {
+            background: #000;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+            max-height: 400px;
+            overflow-y: auto;
+            font-size: 12px;
+        }
+        
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        
+        .status.success {
+            background: #0a4a0a;
+            border: 1px solid #00ff00;
+        }
+        
+        .status.error {
+            background: #4a0a0a;
+            border: 1px solid #ff0000;
+            color: #ff4444;
+        }
+        
+        .status.warning {
+            background: #4a4a0a;
+            border: 1px solid #ffff00;
+            color: #ffff44;
+        }
+        
+        .results-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        
+        .results-table th,
+        .results-table td {
+            border: 1px solid #444;
+            padding: 10px;
+            text-align: left;
+        }
+        
+        .results-table th {
+            background: #444;
+            color: #fff;
+        }
+        
+        .performance-chart {
+            margin: 20px 0;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 AkingSPICE GPU vs CPU 性能對比測試</h1>
+            <p>測試相同電路在 GPU 和 CPU 求解器上的性能差異</p>
+        </div>
+        
+        <div class="controls">
+            <button id="startTest" onclick="runAllTests()">🧪 開始所有測試</button>
+            <button id="testRC" onclick="runSingleTest('rc')">📊 測試RC電路</button>
+            <button id="testRLC" onclick="runSingleTest('rlc')">📊 測試RLC電路</button>
+            <button id="testMulti" onclick="runSingleTest('multi')">📊 測試複雜電路</button>
+            <button onclick="clearOutput()">🗑️ 清除輸出</button>
+        </div>
+        
+        <div class="status" id="status" style="display: none;"></div>
+        
+        <div class="test-section">
+            <h3>📋 測試輸出</h3>
+            <div class="output" id="output"></div>
+        </div>
+        
+        <div class="test-section" id="resultsSection" style="display: none;">
+            <h3>📊 測試結果</h3>
+            <table class="results-table" id="resultsTable">
+                <thead>
+                    <tr>
+                        <th>電路</th>
+                        <th>CPU 性能 (步/秒)</th>
+                        <th>GPU 性能 (步/秒)</th>
+                        <th>加速比</th>
+                        <th>精度誤差</th>
+                        <th>評級</th>
+                    </tr>
+                </thead>
+                <tbody id="resultsBody">
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="performance-chart" id="chartSection" style="display: none;">
+            <h3>📈 性能圖表</h3>
+            <canvas id="performanceChart" width="800" height="400"></canvas>
+        </div>
+    </div>
+
+    <!-- 載入 AkingSPICE 庫 -->
+    <script type="module">
+        import { 
+            ExplicitStateSolver,
+            GPUExplicitStateSolver,
+            VoltageSource, 
+            Resistor, 
+            Capacitor, 
+            Inductor 
+        } from './lib-dist/AkingSPICE.es.js';
+        
+        // 將類別設為全局可用
+        window.ExplicitStateSolver = ExplicitStateSolver;
+        window.GPUExplicitStateSolver = GPUExplicitStateSolver;
+        window.VoltageSource = VoltageSource;
+        window.Resistor = Resistor;
+        window.Capacitor = Capacitor;
+        window.Inductor = Inductor;
+        
+        // 強制刷新緩存提示
+        console.log(`📦 AkingSPICE 版本檢查: ${new Date().toISOString()}`);
+        
+        // 測試電路配置
+        window.TEST_CIRCUITS = {
+            rc: {
+                name: 'RC電路 (小規模)',
+                description: '5V → 1kΩ → 1μF',
+                components: () => [
+                    new VoltageSource('V1', ['vin', 'gnd'], 5.0),
+                    new Resistor('R1', ['vin', 'vout'], 1000),
+                    new Capacitor('C1', ['vout', 'gnd'], 1e-6, { ic: 0 })
+                ],
+                outputNode: 'vout',
+                timeStep: 2e-6,     // 2μs
+                testTime: 2e-3,     // 2ms
+                expectedSteps: 1000
+            },
+
+            rlc: {
+                name: 'RLC電路 (中等規模)', 
+                description: '12V → 50Ω → 100μH → 1μF',
+                components: () => [
+                    new VoltageSource('V1', ['vin', 'gnd'], 12.0),
+                    new Resistor('R1', ['vin', 'n1'], 50),
+                    new Inductor('L1', ['n1', 'n2'], 100e-6),
+                    new Capacitor('C1', ['n2', 'gnd'], 1e-6)
+                ],
+                outputNode: 'n2',
+                timeStep: 1e-6,     // 1μs
+                testTime: 1e-3,     // 1ms
+                expectedSteps: 1000
+            },
+
+            multi: {
+                name: '多級RLC電路 (大規模)',
+                description: '複雜多節點電路',
+                components: () => [
+                    new VoltageSource('V1', ['vin', 'gnd'], 10.0),
+                    // 第一級 RLC
+                    new Resistor('R1', ['vin', 'n1'], 100),
+                    new Inductor('L1', ['n1', 'n2'], 50e-6),
+                    new Capacitor('C1', ['n2', 'gnd'], 0.5e-6),
+                    // 第二級 RLC
+                    new Resistor('R2', ['n2', 'n3'], 200),
+                    new Inductor('L2', ['n3', 'n4'], 75e-6),
+                    new Capacitor('C2', ['n4', 'gnd'], 0.8e-6),
+                    // 第三級 RLC
+                    new Resistor('R3', ['n4', 'n5'], 150),
+                    new Inductor('L3', ['n5', 'vout'], 60e-6),
+                    new Capacitor('C3', ['vout', 'gnd'], 1.2e-6)
+                ],
+                outputNode: 'vout',
+                timeStep: 0.5e-6,   // 0.5μs
+                testTime: 0.5e-3,   // 0.5ms
+                expectedSteps: 1000
+            }
+        };
+        
+        console.log('✅ AkingSPICE 庫載入完成');
+        updateStatus('✅ 系統準備就緒，點擊按鈕開始測試', 'success');
+    </script>
+
+    <script>
+        let allResults = {};
+        
+        function log(message) {
+            const output = document.getElementById('output');
+            const timestamp = new Date().toLocaleTimeString();
+            output.innerHTML += `[${timestamp}] ${message}<br>`;
+            output.scrollTop = output.scrollHeight;
+            console.log(message);
+        }
+        
+        function updateStatus(message, type = 'success') {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${type}`;
+            status.style.display = 'block';
+        }
+        
+        function clearOutput() {
+            document.getElementById('output').innerHTML = '';
+            document.getElementById('status').style.display = 'none';
+            document.getElementById('resultsSection').style.display = 'none';
+            allResults = {};
+        }
+        
+        async function testSolver(solverName, SolverClass, components, config, iterations = 2) {
+            log(`🔧 測試 ${solverName} 求解器`);
+            log(`📋 電路: ${config.description}`);
+            log(`⏱️  步長: ${(config.timeStep * 1e6).toFixed(1)}μs, 時間: ${(config.testTime * 1000).toFixed(1)}ms, 步數: ${config.expectedSteps}`);
+            
+            const results = [];
+            
+            for (let i = 0; i < iterations; i++) {
+                const solver = new SolverClass();
+                
+        try {
+            // 啟用調試模式（僅對 GPU 求解器）
+            if (solverName === 'GPU' && solver.gpuOptions) {
+                solver.gpuOptions.debug = true;
+                if (solver.webgpuSolver) {
+                    solver.webgpuSolver.debug = true;
+                }
+            }
+            
+            // 初始化（有超時）
+            const initStart = performance.now();
+            const initPromise = solver.initialize(components(), config.timeStep);
+            const initResult = await Promise.race([
+                initPromise,
+                new Promise((_, reject) => setTimeout(() => reject(new Error('初始化超時（30秒）')), 30000))
+            ]);
+            const initTime = performance.now() - initStart;                    // 執行仿真（有超時）
+                    const simStart = performance.now();
+                    const simPromise = solver.run(0, config.testTime);
+                    const simResult = await Promise.race([
+                        simPromise,
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('仿真超時（60秒）')), 60000))
+                    ]);
+                    const simTime = performance.now() - simStart;
+                    
+                    // 計算性能指標
+                    const totalTime = initTime + simTime;
+                    const stepsPerSecond = config.expectedSteps / (simTime / 1000);
+                    
+                    // 獲取最終電壓
+                    let finalVoltage = 0;
+                    if (simResult.nodeVoltages && simResult.nodeVoltages[config.outputNode]) {
+                        const voltageData = simResult.nodeVoltages[config.outputNode];
+                        if (Array.isArray(voltageData)) {
+                            finalVoltage = voltageData[voltageData.length - 1];
+                        } else {
+                            finalVoltage = voltageData;
+                        }
+                    }
+                        
+                    results.push({
+                        iteration: i + 1,
+                        initTime,
+                        simTime,
+                        totalTime,
+                        stepsPerSecond,
+                        finalVoltage,
+                        success: true
+                    });
+                    
+                    log(`  第${i+1}次: 初始化${initTime.toFixed(1)}ms + 仿真${simTime.toFixed(1)}ms = 總計${totalTime.toFixed(1)}ms`);
+                    log(`         性能: ${Math.round(stepsPerSecond).toLocaleString()} 步/秒, 最終電壓: ${finalVoltage.toFixed(4)}V`);
+                    
+                } catch (error) {
+                    log(`  第${i+1}次: ❌ 失敗 - ${error.message}`);
+                    results.push({
+                        iteration: i + 1,
+                        error: error.message,
+                        success: false
+                    });
+                }
+            }
+            
+            // 計算統計結果
+            const successfulResults = results.filter(r => r.success);
+            if (successfulResults.length === 0) {
+                return { 
+                    solverName, 
+                    success: false, 
+                    error: '所有測試都失敗了' 
+                };
+            }
+            
+            const avgInitTime = successfulResults.reduce((sum, r) => sum + r.initTime, 0) / successfulResults.length;
+            const avgSimTime = successfulResults.reduce((sum, r) => sum + r.simTime, 0) / successfulResults.length;
+            const avgTotalTime = successfulResults.reduce((sum, r) => sum + r.totalTime, 0) / successfulResults.length;
+            const avgStepsPerSecond = successfulResults.reduce((sum, r) => sum + r.stepsPerSecond, 0) / successfulResults.length;
+            const avgFinalVoltage = successfulResults.reduce((sum, r) => sum + r.finalVoltage, 0) / successfulResults.length;
+            
+            log(`📊 平均結果: 初始化${avgInitTime.toFixed(1)}ms + 仿真${avgSimTime.toFixed(1)}ms = 總計${avgTotalTime.toFixed(1)}ms`);
+            log(`📈 平均性能: ${Math.round(avgStepsPerSecond).toLocaleString()} 步/秒`);
+            log(`🎯 平均電壓: ${avgFinalVoltage.toFixed(4)}V`);
+            
+            return {
+                solverName,
+                success: true,
+                avgInitTime,
+                avgSimTime,
+                avgTotalTime,
+                avgStepsPerSecond,
+                avgFinalVoltage,
+                successRate: successfulResults.length / results.length * 100
+            };
+        }
+        
+        function compareResults(cpuResult, gpuResult) {
+            if (!cpuResult.success && !gpuResult.success) {
+                log('❌ 兩個求解器都失敗了');
+                return null;
+            }
+            
+            if (!cpuResult.success) {
+                log('❌ CPU求解器失敗，無法對比');
+                return null;
+            }
+            
+            if (!gpuResult.success) {
+                log('❌ GPU求解器失敗，無法對比');
+                return null;
+            }
+            
+            log('');
+            log('📊 性能對比結果');
+            log('-'.repeat(50));
+            
+            // 速度對比
+            const speedRatio = gpuResult.avgStepsPerSecond / cpuResult.avgStepsPerSecond;
+            log(`🚀 仿真性能:`);
+            log(`   CPU: ${Math.round(cpuResult.avgStepsPerSecond).toLocaleString()} 步/秒`);
+            log(`   GPU: ${Math.round(gpuResult.avgStepsPerSecond).toLocaleString()} 步/秒`);
+            
+            if (speedRatio > 1.1) {
+                log(`   🎉 GPU比CPU快 ${speedRatio.toFixed(1)}x`);
+            } else if (speedRatio < 0.9) {
+                log(`   ⚠️  GPU比CPU慢 ${(1/speedRatio).toFixed(1)}x`);
+            } else {
+                log(`   ⚖️  性能相近 (差異 ${Math.abs(speedRatio - 1) * 100}.toFixed(1)%)`);
+            }
+            
+            // 精度對比
+            const voltageError = Math.abs(gpuResult.avgFinalVoltage - cpuResult.avgFinalVoltage);
+            const voltageErrorPercent = voltageError / Math.max(Math.abs(cpuResult.avgFinalVoltage), 1e-10) * 100;
+            
+            log(`🎯 精度對比:`);
+            log(`   CPU最終電壓: ${cpuResult.avgFinalVoltage.toFixed(6)}V`);
+            log(`   GPU最終電壓: ${gpuResult.avgFinalVoltage.toFixed(6)}V`);
+            log(`   絕對誤差: ${voltageError.toFixed(6)}V`);
+            log(`   相對誤差: ${voltageErrorPercent.toFixed(3)}%`);
+            
+            let accuracyGrade;
+            if (voltageErrorPercent < 0.1) {
+                log(`   ✅ 精度優秀 (< 0.1%)`);
+                accuracyGrade = 'A+';
+            } else if (voltageErrorPercent < 1.0) {
+                log(`   ✅ 精度良好 (< 1%)`);
+                accuracyGrade = 'A';
+            } else if (voltageErrorPercent < 5.0) {
+                log(`   ⚠️  精度一般 (< 5%)`);
+                accuracyGrade = 'B';
+            } else {
+                log(`   ❌ 精度較差 (> 5%)`);
+                accuracyGrade = 'C';
+            }
+            
+            return {
+                speedRatio,
+                voltageError,
+                voltageErrorPercent,
+                accuracyGrade
+            };
+        }
+        
+        async function runSingleTest(circuitKey) {
+            if (!window.TEST_CIRCUITS || !window.TEST_CIRCUITS[circuitKey]) {
+                updateStatus(`❌ 找不到電路配置: ${circuitKey}`, 'error');
+                return;
+            }
+            
+            const config = window.TEST_CIRCUITS[circuitKey];
+            
+            // 禁用按鈕
+            const buttons = document.querySelectorAll('button');
+            buttons.forEach(btn => btn.disabled = true);
+            
+            updateStatus(`🧪 正在測試 ${config.name}...`, 'warning');
+            
+            try {
+                log('='.repeat(60));
+                log(`🧪 測試電路: ${config.name}`);
+                
+                // 測試CPU求解器
+                const cpuResult = await testSolver('CPU', window.ExplicitStateSolver, config.components, config);
+                
+                // 測試GPU求解器  
+                const gpuResult = await testSolver('GPU', window.GPUExplicitStateSolver, config.components, config);
+                
+                // 對比結果
+                const comparison = compareResults(cpuResult, gpuResult);
+                
+                allResults[circuitKey] = {
+                    config,
+                    cpuResult,
+                    gpuResult,
+                    comparison
+                };
+                
+                updateResultsTable();
+                
+                if (comparison) {
+                    updateStatus(`✅ ${config.name} 測試完成 - GPU加速 ${comparison.speedRatio.toFixed(1)}x`, 'success');
+                } else {
+                    updateStatus(`⚠️ ${config.name} 測試完成但有錯誤`, 'warning');
+                }
+                
+            } catch (error) {
+                log(`❌ 測試失敗: ${error.message}`);
+                updateStatus(`❌ ${config.name} 測試失敗`, 'error');
+            } finally {
+                // 重新啟用按鈕
+                buttons.forEach(btn => btn.disabled = false);
+            }
+        }
+        
+        async function runAllTests() {
+            log('🚀 開始所有GPU vs CPU性能對比測試');
+            
+            for (const circuitKey of Object.keys(window.TEST_CIRCUITS)) {
+                await runSingleTest(circuitKey);
+                // 在測試之間稍作停頓
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+            
+            generateFinalReport();
+        }
+        
+        function updateResultsTable() {
+            const tbody = document.getElementById('resultsBody');
+            const resultsSection = document.getElementById('resultsSection');
+            
+            tbody.innerHTML = '';
+            
+            for (const [key, result] of Object.entries(allResults)) {
+                const row = tbody.insertRow();
+                
+                // 電路名稱
+                row.insertCell(0).textContent = result.config.name;
+                
+                // CPU 性能
+                if (result.cpuResult.success) {
+                    row.insertCell(1).textContent = Math.round(result.cpuResult.avgStepsPerSecond).toLocaleString();
+                } else {
+                    row.insertCell(1).textContent = '失敗';
+                }
+                
+                // GPU 性能
+                if (result.gpuResult.success) {
+                    row.insertCell(2).textContent = Math.round(result.gpuResult.avgStepsPerSecond).toLocaleString();
+                } else {
+                    row.insertCell(2).textContent = '失敗';
+                }
+                
+                // 加速比
+                if (result.comparison) {
+                    row.insertCell(3).textContent = `${result.comparison.speedRatio.toFixed(2)}x`;
+                    row.insertCell(4).textContent = `${result.comparison.voltageErrorPercent.toFixed(2)}%`;
+                    row.insertCell(5).textContent = result.comparison.accuracyGrade;
+                } else {
+                    row.insertCell(3).textContent = 'N/A';
+                    row.insertCell(4).textContent = 'N/A';
+                    row.insertCell(5).textContent = 'N/A';
+                }
+            }
+            
+            resultsSection.style.display = 'block';
+        }
+        
+        function generateFinalReport() {
+            log('');
+            log('='.repeat(60));
+            log('📋 總結報告');
+            log('='.repeat(60));
+            
+            const successfulComparisons = Object.values(allResults).filter(r => 
+                r.cpuResult.success && r.gpuResult.success && r.comparison
+            );
+            
+            if (successfulComparisons.length > 0) {
+                const avgSpeedup = successfulComparisons.reduce((sum, r) => sum + r.comparison.speedRatio, 0) / successfulComparisons.length;
+                const avgAccuracy = successfulComparisons.reduce((sum, r) => sum + r.comparison.voltageErrorPercent, 0) / successfulComparisons.length;
+                
+                log(`🎯 總體評估:`);
+                log(`   平均GPU加速比: ${avgSpeedup.toFixed(2)}x`);
+                log(`   平均精度誤差: ${avgAccuracy.toFixed(2)}%`);
+                log(`   成功測試: ${successfulComparisons.length}/${Object.keys(allResults).length}`);
+                
+                let recommendation;
+                if (avgSpeedup > 2 && avgAccuracy < 1) {
+                    recommendation = '💎 推薦使用GPU求解器 - 高性能且高精度';
+                } else if (avgSpeedup > 1.5) {
+                    recommendation = '🚀 建議使用GPU求解器 - 性能提升顯著';
+                } else if (avgSpeedup > 0.8) {
+                    recommendation = '⚖️  CPU和GPU性能相近 - 可根據場景選擇';
+                } else {
+                    recommendation = '🔄 建議使用CPU求解器 - 更穩定可靠';
+                }
+                
+                log(`   建議: ${recommendation}`);
+                updateStatus(recommendation, avgSpeedup > 1.2 ? 'success' : 'warning');
+            } else {
+                log('❌ 沒有成功的對比測試');
+                updateStatus('❌ 測試未能正常完成', 'error');
+            }
+        }
+        
+        // 檢查 WebGPU 支援
+        window.addEventListener('load', () => {
+            if (!navigator.gpu) {
+                updateStatus('⚠️ 瀏覽器不支援 WebGPU，GPU測試將會失敗', 'warning');
+                log('⚠️ WebGPU 不可用。請使用支援 WebGPU 的瀏覽器（Chrome 113+, Edge 113+）');
+            } else {
+                log('✅ WebGPU 可用，準備進行 GPU 測試');
+            }
+        });
+    </script>
+</body>
+</html>

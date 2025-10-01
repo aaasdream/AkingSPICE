@@ -83,6 +83,12 @@ export class WebGPUSolver {
                         maxStorageBufferBindingSize: 134217728, // 128MB
                     }
                 });
+                
+                // 添加設備丟失監聽器
+                this.device.lost.then((info) => {
+                    console.error('WebGPU設備丟失:', info.reason, info.message);
+                    this.device = null;
+                });
             }
             
             if (this.debug) {
@@ -302,8 +308,16 @@ export class WebGPUSolver {
      * 創建GPU緩衝區
      */
     createBuffers() {
+        if (!this.device) {
+            throw new Error('無法創建緩衝區：WebGPU設備未初始化');
+        }
+        
         const nodeCount = this.nodeCount;
         const stateCount = this.stateCount;
+        
+        if (this.debug) {
+            console.log(`  創建GPU緩衝區: 節點${nodeCount}, 狀態${stateCount}`);
+        }
         
         // G矩陣 (nodeCount x nodeCount)
         const matrixSize = nodeCount * nodeCount * 4; // Float32 = 4 bytes
@@ -355,6 +369,13 @@ export class WebGPUSolver {
         const gMatrix = this.circuitData.gMatrix.getDenseMatrix();
         const initialState = this.circuitData.initialStateVector;
         
+        if (this.debug) {
+            console.log('📊 GPU數據上傳調試:');
+            console.log(`  G矩陣維度: ${gMatrix.length}x${gMatrix[0]?.length || 0}`);
+            console.log(`  G矩陣內容:`, gMatrix.flat().slice(0, 10));
+            console.log(`  初始狀態:`, initialState);
+        }
+        
         // 上傳G矩陣
         this.device.queue.writeBuffer(
             this.gMatrixBuffer, 
@@ -382,11 +403,25 @@ export class WebGPUSolver {
     async solveLinearSystem(rhsVector, initialGuess = null) {
         const startTime = performance.now();
         
+        // 快速檢查核心組件（僅在調試模式下輸出）
+        if (!this.device || !this.gMatrixBuffer || !this.rhsBuffer || !this.solutionBuffer || !this.tempBuffer || !this.solverPipeline) {
+            throw new Error('[GPU錯誤] WebGPU組件未正確初始化');
+        }
+        
+        if (this.debug) {
+            console.log(`      WebGPU求解開始: RHS長度=${rhsVector.length}`);
+        }
+        
         // 上傳RHS向量 (保持更高精度轉換)
         const rhsFloat32 = new Float32Array(rhsVector.length);
         for (let i = 0; i < rhsVector.length; i++) {
             rhsFloat32[i] = rhsVector[i];
         }
+        
+        if (this.debug) {
+            console.log(`      上傳RHS到GPU...`);
+        }
+        
         this.device.queue.writeBuffer(this.rhsBuffer, 0, rhsFloat32);
         
         // 設置初始猜測 (如果沒有提供，使用零向量)
@@ -398,6 +433,9 @@ export class WebGPUSolver {
         this.device.queue.writeBuffer(this.solutionBuffer, 0, initFloat32);
         
         // Jacobi迭代求解
+        if (this.debug) {
+            console.log(`      開始Jacobi迭代求解...`);
+        }
         await this.runJacobiIterations();
         
         // 讀取結果
@@ -416,9 +454,13 @@ export class WebGPUSolver {
     }
 
     /**
-     * 執行Jacobi迭代
+     * 執行Jacobi迭代 - 增加收斂檢查以避免無用的固定迭代
      */
     async runJacobiIterations() {
+        if (this.debug) {
+            console.log(`        Jacobi迭代開始: 節點數=${this.nodeCount}`);
+        }
+        
         // 創建參數緩衝區
         const paramsData = new Uint32Array([
             this.nodeCount,
@@ -435,63 +477,92 @@ export class WebGPUSolver {
         
         this.device.queue.writeBuffer(paramsBuffer, 0, paramsData);
         
-        // 迭代求解 (根據矩陣大小調整迭代次數)
-        // 由於f32精度限制，需要更多迭代來達到收斂
-        let actualIterations;
-        if (this.nodeCount <= 2) {
-            // 小矩陣：使用極多迭代以補償32位精度限制
-            actualIterations = Math.min(this.maxIterations, 1500);
-        } else if (this.nodeCount <= 10) {
-            // 中等矩陣：保證精度
-            actualIterations = Math.min(this.maxIterations, 1000);
-        } else {
-            // 大矩陣：平衡性能和精度
-            actualIterations = Math.min(this.maxIterations, 500);
-        }
+        // 收斂檢查變量
+        let converged = false;
+        let lastSolution = null;
+        let iterCount = 0;
+        const convergenceCheckInterval = 5; // 每5次迭代檢查一次收斂
+        const tolerance = this.tolerance || 1e-6;
         
         if (this.debug) {
-            console.log(`  雅可比迭代: ${actualIterations} 次`);
-        }
-        for (let iter = 0; iter < actualIterations; iter++) {
-            // 創建綁定組
-            const bindGroup = this.device.createBindGroup({
-                layout: this.solverPipeline.getBindGroupLayout(0),
-                entries: [
-                    { binding: 0, resource: { buffer: this.gMatrixBuffer } },
-                    { binding: 1, resource: { buffer: this.rhsBuffer } },
-                    { binding: 2, resource: { buffer: this.solutionBuffer } }, // x_old
-                    { binding: 3, resource: { buffer: this.tempBuffer } },     // x_new
-                    { binding: 4, resource: { buffer: paramsBuffer } },
-                ],
-            });
-            
-            // 執行計算
-            const commandEncoder = this.device.createCommandEncoder();
-            const computePass = commandEncoder.beginComputePass();
-            
-            computePass.setPipeline(this.solverPipeline);
-            computePass.setBindGroup(0, bindGroup);
-            computePass.dispatchWorkgroups(Math.ceil(this.nodeCount / this.workgroupSize));
-            computePass.end();
-            
-            // 交換緩衝區 (x_new -> x_old)
-            commandEncoder.copyBufferToBuffer(
-                this.tempBuffer, 0,
-                this.solutionBuffer, 0,
-                this.nodeCount * 4
-            );
-            
-            this.device.queue.submit([commandEncoder.finish()]);
-            
-            // 等待GPU完成計算 (減少同步頻率)
-            if (iter % 25 === 24) {
-                await this.device.queue.onSubmittedWorkDone();
-            }
-            
-            this.stats.totalIterations++;
+            console.log(`  開始Jacobi迭代 (收斂容差: ${tolerance})`);
         }
         
-        this.stats.averageIterations = this.stats.totalIterations / (this.stats.totalIterations > 0 ? 1 : 1);
+        for (iterCount = 0; iterCount < this.maxIterations && !converged; iterCount++) {
+            // 執行單次 Jacobi 迭代
+            await this.runSingleJacobiIteration(paramsBuffer);
+            
+            // 定期檢查收斂 (避免每次都讀取GPU數據)
+            if (iterCount % convergenceCheckInterval === 0 || iterCount >= this.maxIterations - 5) {
+                const currentSolution = await this.readSolutionVector();
+                
+                if (lastSolution) {
+                    let maxError = 0;
+                    let relativeError = 0;
+                    
+                    for (let i = 0; i < this.nodeCount; i++) {
+                        const diff = Math.abs(currentSolution[i] - lastSolution[i]);
+                        const rel = Math.abs(currentSolution[i]) > 1e-12 ? diff / Math.abs(currentSolution[i]) : diff;
+                        maxError = Math.max(maxError, diff);
+                        relativeError = Math.max(relativeError, rel);
+                    }
+                    
+                    if (maxError < tolerance || relativeError < tolerance) {
+                        converged = true;
+                        if (this.debug) {
+                            console.log(`  ✓ Jacobi收斂於第 ${iterCount + 1} 次迭代 (誤差: ${maxError.toExponential(2)}, 相對誤差: ${relativeError.toExponential(2)})`);
+                        }
+                        break;
+                    }
+                }
+                
+                lastSolution = new Float32Array(currentSolution);
+            }
+        }
+        
+        if (!converged) {
+            console.warn(`⚠️ Jacobi在 ${this.maxIterations} 次迭代後未收斂 (節點數: ${this.nodeCount})`);
+        }
+        
+        this.stats.totalIterations = (this.stats.totalIterations || 0) + iterCount;
+    }
+
+    /**
+     * 執行單次Jacobi迭代
+     */
+    async runSingleJacobiIteration(paramsBuffer) {
+        // 創建綁定組
+        const bindGroup = this.device.createBindGroup({
+            layout: this.solverPipeline.getBindGroupLayout(0),
+            entries: [
+                { binding: 0, resource: { buffer: this.gMatrixBuffer } },
+                { binding: 1, resource: { buffer: this.rhsBuffer } },
+                { binding: 2, resource: { buffer: this.solutionBuffer } }, // x_old
+                { binding: 3, resource: { buffer: this.tempBuffer } },     // x_new
+                { binding: 4, resource: { buffer: paramsBuffer } },
+            ],
+        });
+        
+        // 執行計算
+        const commandEncoder = this.device.createCommandEncoder();
+        const computePass = commandEncoder.beginComputePass();
+        
+        computePass.setPipeline(this.solverPipeline);
+        computePass.setBindGroup(0, bindGroup);
+        computePass.dispatchWorkgroups(Math.ceil(this.nodeCount / this.workgroupSize));
+        computePass.end();
+        
+        // 交換緩衝區 (x_new -> x_old)
+        commandEncoder.copyBufferToBuffer(
+            this.tempBuffer, 0,
+            this.solutionBuffer, 0,
+            this.nodeCount * 4
+        );
+        
+        this.device.queue.submit([commandEncoder.finish()]);
+        
+        // 等待這次迭代完成
+        await this.device.queue.onSubmittedWorkDone();
     }
 
     /**
@@ -512,12 +583,26 @@ export class WebGPUSolver {
         
         this.device.queue.submit([commandEncoder.finish()]);
         
-        await readBuffer.mapAsync(GPUMapMode.READ);
-        const result = new Float32Array(readBuffer.getMappedRange());
-        const copy = new Float32Array(result);
-        readBuffer.unmap();
-        
-        return copy;
+        // 添加超時處理防止卡死
+        try {
+            await Promise.race([
+                readBuffer.mapAsync(GPUMapMode.READ),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('GPU讀取超時')), 5000))
+            ]);
+            
+            const result = new Float32Array(readBuffer.getMappedRange());
+            const copy = new Float32Array(result);
+            readBuffer.unmap();
+            
+            return copy;
+        } catch (error) {
+            try {
+                readBuffer.destroy();
+            } catch (e) {
+                // 忽略清理錯誤
+            }
+            throw new Error(`GPU結果讀取失敗: ${error.message}`);
+        }
     }
 
     /**

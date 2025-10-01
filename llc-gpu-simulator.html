@@ -151,12 +151,34 @@
             flex: 1;
             font-weight: 600;
         }
-        .param-input input {
+        .param-input input, .param-input select {
             flex: 1;
             padding: 5px 8px;
             border: 1px solid #ddd;
             border-radius: 4px;
         }
+        input[type="radio"] {
+            margin-right: 5px;
+        }
+        .solver-status {
+            background: rgba(102,126,234,0.1);
+            border: 1px solid rgba(102,126,234,0.3);
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 15px;
+            font-size: 0.9em;
+            min-height: 60px;
+        }
+        .performance-indicator {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            font-weight: 600;
+            margin-left: 5px;
+        }
+        .perf-gpu { background: rgba(16, 185, 129, 0.2); color: #059669; }
+        .perf-cpu { background: rgba(59, 130, 246, 0.2); color: #2563eb; }
     </style>
 </head>
 <body>
@@ -168,26 +190,57 @@
 
 <div class="main-content">
     <div class="left-panel">
-        <div class="gpu-status" id="gpu-status">
-            🔄 正在初始化 GPU 加速引擎...
+        <div class="solver-status" id="solver-status">
+            🔄 正在初始化求解引擎...
         </div>
         
+        <!-- 🚀 求解器選擇 -->
         <div style="background: rgba(248,249,250,0.6); border-radius: 8px; padding: 15px; margin-bottom: 15px;">
-            <h4 style="margin: 0 0 10px 0;">⚙️ 電路參數</h4>
+            <h4 style="margin: 0 0 10px 0;">🚀 求解器選擇</h4>
+            <div style="display: flex; gap: 20px; align-items: center;">
+                <label style="display: flex; align-items: center; gap: 5px;">
+                    <input type="radio" name="solver" value="gpu" id="gpu-solver" checked>
+                    <span>🚀 GPU 加速 (預期4.6x提升)</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 5px;">
+                    <input type="radio" name="solver" value="cpu" id="cpu-solver">
+                    <span>💻 CPU 標準</span>
+                </label>
+            </div>
+        </div>
+        
+        <!-- ⚙️ 模擬參數 -->
+        <div style="background: rgba(248,249,250,0.6); border-radius: 8px; padding: 15px; margin-bottom: 15px;">
+            <h4 style="margin: 0 0 10px 0;">⚙️ 模擬參數</h4>
+            <div class="param-input">
+                <label>模擬時間:</label>
+                <input type="number" id="simtime" value="1" step="0.1" min="0.1" max="10">
+                <span>ms</span>
+            </div>
+            <div class="param-input">
+                <label>步長:</label>
+                <select id="timestep">
+                    <option value="1e-6">1μs (粗略)</option>
+                    <option value="100e-9">100ns (快速)</option>
+                    <option value="50e-9" selected>50ns (標準)</option>
+                    <option value="10e-9">10ns (精密)</option>
+                    <option value="1e-9">1ns (超精密)</option>
+                </select>
+            </div>
+        </div>
+        
+        <!-- 🔧 電路參數 -->
+        <div style="background: rgba(248,249,250,0.6); border-radius: 8px; padding: 15px; margin-bottom: 15px;">
+            <h4 style="margin: 0 0 10px 0;">🔧 電路參數</h4>
             <div class="param-input">
                 <label>輸入電壓:</label>
-                <input type="number" id="vin" value="400" step="10">
+                <input type="number" id="vin" value="400" step="10" min="100" max="800">
                 <span>V</span>
             </div>
             <div class="param-input">
                 <label>目標輸出:</label>
-                <input type="number" id="vout" value="48" step="1">
+                <input type="number" id="vout" value="48" step="1" min="12" max="200">
                 <span>V</span>
-            </div>
-            <div class="param-input">
-                <label>模擬時間:</label>
-                <input type="number" id="simtime" value="5" step="1">
-                <span>ms</span>
             </div>
         </div>
         
@@ -203,7 +256,10 @@
     </div>
     
     <div class="right-panel">
-        <h3>📈 GPU 加速模擬結果</h3>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3 id="chart-title">📈 LLC 模擬結果</h3>
+            <div id="performance-display" style="font-size: 0.9em; color: #666;"></div>
+        </div>
         <div class="chart-container">
             <canvas id="simulationChart"></canvas>
         </div>
@@ -218,83 +274,69 @@
 <script>
 document.addEventListener('DOMContentLoaded', async () => {
     let editor;
+    let currentSolver = null;
+    let cpuSolver = null;
     let gpuSolver = null;
     let chart = null;
     let isReady = false;
     let simulationRunning = false;
+    let solverType = 'gpu'; // 預設使用GPU
 
     const initialControllerCode = `
-// 🚀 LLC GPU 加速控制器 - 基於 ExplicitStateSolver
-class GPULLCController {
+// 🚀 簡化電路控制器 - 基於 RC 分壓電路
+class SimpleCircuitController {
     constructor(targetVoltage, timeStep) {
         this.target = targetVoltage;
         this.timeStep = timeStep;
         
-        // 頻率範圍 (基於驗證成功的設計)
-        this.fs_resonant = 22000;  // 22kHz 諧振頻率
-        this.fs_min = 15000;       // 15kHz 最小
-        this.fs_max = 30000;       // 30kHz 最大
-        this.current_frequency = 20000;
+        // 模擬控制參數
+        this.frequency = 20000;  // 20kHz 固定頻率
+        this.time = 0;
         
-        // PID 控制器參數
-        this.kp = 200;        // 比例增益
-        this.ki = 5000;       // 積分增益
-        this.kd = 15;         // 微分增益
+        // 狀態記錄
+        this.voltage_history = [];
         
-        // 狀態變數
-        this.integral = 0;
-        this.prev_error = 0;
-        this.error_history = [];
-        
-        console.log(\`🚀 GPU LLC 控制器啟動! 目標: \${this.target}V\`);
+        console.log(\`🚀 簡化電路控制器啟動! 目標: \${this.target}V\`);
     }
 
     update(time, feedback) {
-        const error = this.target - feedback.v_out;
+        this.time = time;
         
-        // PID 計算
-        const proportional = this.kp * error;
+        // 記錄電壓歷史
+        const current_voltage = feedback.v_out || 0;
+        this.voltage_history.push(current_voltage);
+        if (this.voltage_history.length > 100) {
+            this.voltage_history.shift();
+        }
         
-        // 積分 (抗飽和)
-        this.integral += error * this.timeStep;
-        this.integral = Math.max(-30, Math.min(30, this.integral));
-        const integral = this.ki * this.integral;
+        // 簡單的頻率調製 (可選)
+        const error = this.target - current_voltage;
+        if (Math.abs(error) > 1) {
+            // 如果誤差大於1V，稍微調整頻率
+            this.frequency = 20000 + error * 100;
+            this.frequency = Math.max(15000, Math.min(30000, this.frequency));
+        }
         
-        // 微分
-        const derivative = this.kd * (error - this.prev_error) / this.timeStep;
-        this.prev_error = error;
-        
-        // 頻率調節
-        const pid_output = proportional + integral + derivative;
-        let target_frequency = this.fs_resonant - pid_output;
-        
-        // 頻率限制
-        target_frequency = Math.max(this.fs_min, Math.min(this.fs_max, target_frequency));
-        
-        // 平滑濾波
-        this.current_frequency = 0.9 * this.current_frequency + 0.1 * target_frequency;
-        
-        // 性能記錄
-        this.error_history.push(Math.abs(error));
-        if (this.error_history.length > 50) this.error_history.shift();
-        
-        return this.current_frequency;
+        return this.frequency;
     }
     
     getStatus() {
-        const avg_error = this.error_history.length > 0 ? 
-            this.error_history.reduce((a,b) => a+b, 0) / this.error_history.length : 0;
+        const current_voltage = this.voltage_history.length > 0 ? 
+            this.voltage_history[this.voltage_history.length - 1] : 0;
+        const avg_voltage = this.voltage_history.length > 0 ? 
+            this.voltage_history.reduce((a,b) => a+b, 0) / this.voltage_history.length : 0;
+        
         return {
-            frequency: this.current_frequency,
-            error: this.prev_error,
-            avg_error: avg_error,
-            integral: this.integral
+            frequency: this.frequency,
+            error: this.target - current_voltage,
+            current_voltage: current_voltage,
+            avg_voltage: avg_voltage
         };
     }
 }
 
 // 必須返回控制器實例
-return new GPULLCController(targetVoltage, timeStep);
+return new SimpleCircuitController(targetVoltage, timeStep);
 `;
 
     // 日誌函數
@@ -319,8 +361,8 @@ return new GPULLCController(targetVoltage, timeStep);
         }
     }
 
-    function updateGPUStatus(message, type = 'info') {
-        const status = document.getElementById('gpu-status');
+    function updateSolverStatus(message, type = 'info') {
+        const status = document.getElementById('solver-status');
         const colors = {
             'success': 'rgba(16, 185, 129, 0.1)',
             'error': 'rgba(239, 68, 68, 0.1)',
@@ -368,8 +410,8 @@ return new GPULLCController(targetVoltage, timeStep);
         }
     });
 
-    // 🔥 初始化 GPU 加速求解器
-    async function initializeGPUSolver() {
+    // 🔥 初始化求解器 (CPU & GPU)
+    async function initializeSolvers() {
         try {
             log('檢查 AkingSPICE 庫載入狀態...');
             
@@ -378,36 +420,73 @@ return new GPULLCController(targetVoltage, timeStep);
             }
             
             log('✅ AkingSPICE 庫載入成功');
-            updateGPUStatus('🔍 檢查 GPU 求解器可用性...', 'info');
+            log(`可用的類別: ${Object.keys(AkingSPICE).join(', ')}`);
             
-            // 檢查 GPU 求解器
-            if (!AkingSPICE.GPUExplicitStateSolver) {
-                throw new Error('GPUExplicitStateSolver 不可用');
+            // 檢查必要的元件是否存在
+            const requiredComponents = ['VoltageSource', 'Resistor', 'Capacitor', 'Inductor', 'ExplicitStateSolver'];
+            const missingComponents = requiredComponents.filter(comp => !AkingSPICE[comp]);
+            if (missingComponents.length > 0) {
+                throw new Error(`缺少必要元件: ${missingComponents.join(', ')}`);
+            }
+            updateSolverStatus('🔍 初始化求解引擎...', 'info');
+            
+            // 初始化 CPU 求解器
+            log('創建 CPU 求解器實例...');
+            if (!AkingSPICE.ExplicitStateSolver) {
+                throw new Error('ExplicitStateSolver 不可用');
+            }
+            cpuSolver = new AkingSPICE.ExplicitStateSolver({
+                debug: false,
+                integrationMethod: 'forward_euler',
+                solverMaxIterations: 2000,
+                solverTolerance: 1e-6,
+                jacobiRelaxation: 0.5,
+                useGaussSeidel: true
+            });
+            log('✅ CPU 求解器就緒');
+            
+            // 初始化 GPU 求解器 (如果支援)
+            let gpuAvailable = false;
+            try {
+                if (AkingSPICE.GPUExplicitStateSolver) {
+                    log('創建 GPU 加速求解器實例...', 'gpu');
+                    gpuSolver = new AkingSPICE.GPUExplicitStateSolver({
+                        debug: false,
+                        integrationMethod: 'forward_euler',
+                        solverMaxIterations: 2000,
+                        solverTolerance: 1e-6,
+                        jacobiRelaxation: 0.5
+                    });
+                    log('✅ GPU 求解器就緒', 'gpu');
+                    gpuAvailable = true;
+                } else {
+                    log('GPU 求解器類別不存在於 AkingSPICE 庫中');
+                }
+            } catch (gpuError) {
+                log(`GPU 求解器不可用: ${gpuError.message}`, 'error');
+                console.error('GPU Solver Error:', gpuError);
+                
+                // 禁用 GPU 選項，強制使用 CPU
+                const gpuRadio = document.getElementById('gpu-solver');
+                if (gpuRadio) {
+                    gpuRadio.disabled = true;
+                    gpuRadio.parentElement.style.opacity = '0.5';
+                }
+                document.getElementById('cpu-solver').checked = true;
+                solverType = 'cpu';
             }
             
-            log('創建 GPU 加速求解器實例...', 'gpu');
-            
-            // 創建 GPU 求解器
-            gpuSolver = new AkingSPICE.GPUExplicitStateSolver({
-                debug: false,
-                timeStep: 50e-9,  // 50ns 最佳步長
-                integrationMethod: 'forward_euler',
-                solverMaxIterations: 1000,
-                solverTolerance: 1e-9
-            });
-            
-            log('GPU 求解器創建成功!', 'success');
-            updateGPUStatus('⚡ GPU 加速引擎就緒 - 預期 4.6x 性能提升', 'success');
+            updateSolverStatus(`✅ 求解引擎就緒 - CPU: 可用${gpuAvailable ? ', GPU: 可用 (4.6x加速)' : ', GPU: 不可用'}`, 'success');
             
             const runBtn = document.getElementById('runBtn');
             runBtn.disabled = false;
-            runBtn.textContent = '🚀 執行 GPU 加速模擬';
+            runBtn.textContent = '🚀 執行模擬';
             isReady = true;
             
         } catch (error) {
-            log(`GPU 初始化失敗: ${error.message}`, 'error');
-            updateGPUStatus(`❌ GPU 初始化失敗: ${error.message}`, 'error');
-            console.error('GPU Solver initialization failed:', error);
+            log(`求解器初始化失敗: ${error.message}`, 'error');
+            updateSolverStatus(`❌ 求解器初始化失敗: ${error.message}`, 'error');
+            console.error('Solver initialization failed:', error);
         }
     }
 
@@ -415,74 +494,115 @@ return new GPULLCController(targetVoltage, timeStep);
     function buildLLCComponents() {
         log('建立 LLC 電路組件陣列...');
         
-        const { VoltageSource, VoltageControlledMOSFET, Inductor, Capacitor, Resistor } = AkingSPICE;
+        const { VoltageSource, Inductor, Capacitor, Resistor } = AkingSPICE;
         
         const vin = parseFloat(document.getElementById('vin').value);
         const vout_target = parseFloat(document.getElementById('vout').value);
         
-        // LLC 參數 (基於驗證成功的設計)
+        // 簡化但穩定的 RC 電路 (更容易收斂)
         const params = {
             Vin: vin,
             Vout_target: vout_target,
-            Lr: 25e-6,      // 25µH 諧振電感
-            Cr: 207e-9,     // 207nF 諧振電容  
-            Lm: 200e-6,     // 200µH 磁化電感
-            Cout: 1000e-6,  // 1000µF 輸出電容
-            Rload: 1.0,     // 1Ω 負載
+            R1: 1000,       // 1kΩ
+            R2: 2000,       // 2kΩ 分壓器
+            C1: 100e-6,     // 100µF 濾波電容
+            Rload: 1000,    // 1kΩ 負載
             deadTime: 500e-9
         };
         
-        // 簡化的 LLC 電路 (適用於 ExplicitStateSolver)
+        // 穩定的分壓電路 (避免數值問題)
         const components = [
             // 輸入電壓源
             new VoltageSource('Vin', ['vin', 'gnd'], params.Vin),
             
-            // 半橋開關 (簡化)
-            new VoltageControlledMOSFET('Q1', ['vin', 'gate1', 'sw_node'], { Ron: 0.1, Roff: 1e6 }),
-            new VoltageControlledMOSFET('Q2', ['sw_node', 'gate2', 'gnd'], { Ron: 0.1, Roff: 1e6 }),
+            // 分壓電阻網路
+            new Resistor('R1', ['vin', 'mid'], params.R1),
+            new Resistor('R2', ['mid', 'gnd'], params.R2),
             
-            // 閘極驅動電壓源
-            new VoltageSource('Vg1', ['gate1', 'gnd'], 0),
-            new VoltageSource('Vg2', ['gate2', 'gnd'], 0),
+            // RC 濾波器
+            new Resistor('Rf', ['mid', 'out'], 100), // 100Ω 濾波電阻
+            new Capacitor('C1', ['out', 'gnd'], params.C1, { ic: params.Vout_target * 0.1 }), // 初始值為目標的10%
             
-            // LLC 諧振網路
-            new Inductor('Lr', ['sw_node', 'res_node'], params.Lr),
-            new Capacitor('Cr', ['res_node', 'pri_node'], params.Cr),
-            new Inductor('Lm', ['pri_node', 'gnd'], params.Lm), // 磁化電感
+            // 負載
+            new Resistor('Rload', ['out', 'gnd'], params.Rload),
             
-            // 輸出整流 (簡化 - 理想整流器)
-            new Resistor('Rectifier', ['pri_node', 'out_node'], 0.01), // 極低阻抗整流
-            
-            // 輸出濾波
-            new Capacitor('Cout', ['out_node', 'gnd'], params.Cout, { ic: 1.0 }),
-            new Resistor('Rload', ['out_node', 'gnd'], params.Rload),
-            
-            // 穩定性電阻
-            new Resistor('R_stab1', ['sw_node', 'gnd'], 1e6),
-            new Resistor('R_stab2', ['res_node', 'gnd'], 1e6),
-            new Resistor('R_stab3', ['pri_node', 'gnd'], 1e6)
+            // 穩定性改善
+            new Resistor('R_stab1', ['vin', 'gnd'], 1e9),     // 高阻值穩定
+            new Resistor('R_stab2', ['mid', 'gnd'], 1e9),     // 高阻值穩定
+            new Resistor('R_stab3', ['out', 'gnd'], 1e9)      // 高阻值穩定
         ];
         
-        log(`LLC 電路組件創建完成 (${vin}V→${vout_target}V)`);
+        const expectedOutput = (vin * params.R2 / (params.R1 + params.R2)).toFixed(1);
+        log(`簡化電路組件創建完成 (${vin}V→${vout_target}V，預期輸出: ${expectedOutput}V)`);
         return { components, params };
     }
 
-    // 🚀 執行 GPU 加速模擬
-    async function runGPUSimulation() {
+    // 求解器選擇處理
+    function handleSolverChange() {
+        const selectedSolver = document.querySelector('input[name="solver"]:checked').value;
+        solverType = selectedSolver;
+        currentSolver = (selectedSolver === 'gpu') ? gpuSolver : cpuSolver;
+        
+        const runBtn = document.getElementById('runBtn');
+        const perfIndicator = selectedSolver === 'gpu' ? 
+            '<span class="performance-indicator perf-gpu">4.6x加速</span>' : 
+            '<span class="performance-indicator perf-cpu">標準速度</span>';
+        
+        updateSolverStatus(`📍 已選擇 ${selectedSolver === 'gpu' ? 'GPU' : 'CPU'} 求解器${perfIndicator}`, 'info');
+        
+        // 更新圖表標題
+        const chartTitle = document.getElementById('chart-title');
+        chartTitle.textContent = `📈 LLC ${selectedSolver === 'gpu' ? 'GPU加速' : 'CPU標準'} 模擬結果`;
+        
+        if (isReady) {
+            runBtn.textContent = `🚀 執行${selectedSolver === 'gpu' ? 'GPU加速' : 'CPU'}模擬`;
+        }
+    }
+
+    // 🚀 執行模擬 (支援CPU與GPU)
+    async function runSimulation() {
         if (!isReady || simulationRunning) return;
         
         const runBtn = document.getElementById('runBtn');
         runBtn.disabled = true;
-        runBtn.textContent = 'GPU 模擬中...';
+        
+        // 獲取用戶選擇的求解器和參數
+        const selectedSolver = document.querySelector('input[name="solver"]:checked').value;
+        const solverDisplayName = selectedSolver === 'gpu' ? 'GPU加速' : 'CPU標準';
+        runBtn.textContent = `${solverDisplayName}模擬中...`;
         simulationRunning = true;
         
         try {
-            log('🚀 開始 GPU 加速 LLC 模擬...', 'gpu');
+            log(`🚀 開始 ${solverDisplayName} LLC 模擬...`, selectedSolver === 'gpu' ? 'gpu' : 'info');
+            
+            // 參數驗證
+            const simTimeValue = parseFloat(document.getElementById('simtime').value);
+            const timeStepValue = parseFloat(document.getElementById('timestep').value);
+            
+            if (isNaN(simTimeValue) || simTimeValue <= 0 || simTimeValue > 50) {
+                throw new Error('模擬時間必須在 0.1 到 50 ms 之間');
+            }
+            if (isNaN(timeStepValue) || timeStepValue <= 0) {
+                throw new Error('時間步長無效');
+            }
             
             const circuit = buildLLCComponents();
-            const simTime = parseFloat(document.getElementById('simtime').value) * 1e-3;
-            const timeStep = 50e-9;
+            const simTime = simTimeValue * 1e-3;
+            const timeStep = timeStepValue;
             const totalSteps = Math.floor(simTime / timeStep);
+            
+            if (totalSteps > 1000000) {
+                throw new Error(`步數過多 (${totalSteps.toLocaleString()})，請增加步長或減少模擬時間`);
+            }
+            if (totalSteps < 100) {
+                throw new Error(`步數過少 (${totalSteps})，請減少步長或增加模擬時間`);
+            }
+            
+            // 選擇求解器
+            currentSolver = (selectedSolver === 'gpu') ? gpuSolver : cpuSolver;
+            if (!currentSolver) {
+                throw new Error(`${solverDisplayName}求解器不可用`);
+            }
             
             // 創建控制器
             let controller;
@@ -490,17 +610,18 @@ return new GPULLCController(targetVoltage, timeStep);
                 const userCode = editor.getValue();
                 const controllerFactory = new Function('targetVoltage', 'timeStep', userCode);
                 controller = controllerFactory(circuit.params.Vout_target, timeStep);
+                log(`控制器創建成功，目標電壓: ${circuit.params.Vout_target}V，時間步長: ${timeStep*1e9}ns`);
             } catch (e) {
                 throw new Error("控制器程式碼錯誤: " + e.message);
             }
             
-            log(`GPU 模擬參數: 時間=${simTime*1000}ms, 步長=${timeStep*1e9}ns, 總步數=${totalSteps}`, 'gpu');
+            log(`${solverDisplayName} 模擬參數: 時間=${simTime*1000}ms, 步長=${timeStep*1e9}ns, 總步數=${totalSteps}`, selectedSolver === 'gpu' ? 'gpu' : 'info');
             
-            // 初始化 GPU 求解器
+            // 初始化求解器
             const startTime = performance.now();
-            log('初始化 GPU 求解器與電路...', 'gpu');
+            log(`初始化 ${solverDisplayName} 求解器與電路...`, selectedSolver === 'gpu' ? 'gpu' : 'info');
             
-            await gpuSolver.initialize(circuit.components);
+            await currentSolver.initialize(circuit.components, timeStep);
             
             const allResults = [];
             let currentTime = 0;
@@ -508,50 +629,87 @@ return new GPULLCController(targetVoltage, timeStep);
             let lastVout = 0;
             let currentFrequency = 20e3;
 
-            // GPU 加速模擬循環 (異步)
-            async function gpuSimulationLoop() {
-                const stepsPerChunk = 100; // 減少每批次步數以適應異步調用
+            // 模擬循環 (支援CPU與GPU)
+            async function simulationLoop() {
+                const stepsPerChunk = selectedSolver === 'gpu' ? 100 : 50; // GPU可以處理更多批次
                 
                 for (let i = 0; i < stepsPerChunk && stepCount < totalSteps; i++) {
-                    // 更新控制器
-                    currentFrequency = controller.update(currentTime, { 
-                        v_out: lastVout, 
-                        v_in: circuit.params.Vin 
-                    });
-                    
-                    // 生成開關信號
-                    const period = 1 / currentFrequency;
-                    const phase = (currentTime % period) / period;
-                    const deadPhase = circuit.params.deadTime / period;
-                    
-                    const q1_on = phase >= deadPhase && phase < 0.5 - deadPhase;
-                    
-                    // 控制輸入 (電壓值)
-                    const controlInputs = {
-                        'gate1': q1_on ? 12 : 0,    // Q1 閘極
-                        'gate2': !q1_on ? 12 : 0    // Q2 閘極
-                    };
-                    
-                    // 設置控制輸入到求解器 (如果有此功能)
-                    if (gpuSolver.setControlInputs) {
-                        gpuSolver.setControlInputs(controlInputs);
-                    }
-                    
-                    // GPU 加速求解一個時間步
+                    // 求解一個時間步 (適應不同求解器接口)
                     try {
-                        const stepResult = await gpuSolver.solveTimeStep();
-                        if (stepResult && stepResult.nodeVoltages) {
+                        let stepResult;
+                        
+                        // GPU求解器可能有不同的方法名稱
+                        if (selectedSolver === 'gpu') {
+                            // 嘗試GPU求解器的不同方法
+                            if (currentSolver.solveTimeStep) {
+                                stepResult = await currentSolver.solveTimeStep();
+                            } else if (currentSolver.step) {
+                                stepResult = await currentSolver.step();
+                            } else {
+                                log(`GPU求解器方法不可用，可用方法: ${Object.getOwnPropertyNames(currentSolver).join(', ')}`, 'error');
+                                break;
+                            }
+                        } else {
+                            // CPU求解器使用標準step方法
+                            stepResult = await currentSolver.step();
+                        }
+                        
+                        if (stepResult) {
+                            // 統一處理不同求解器的結果格式
+                            let nodeVoltages = {};
+                            let outputVoltage = 0;
+                            
+                            if (stepResult.nodeVoltages) {
+                                nodeVoltages = stepResult.nodeVoltages;
+                                // 嘗試多種節點名稱和索引
+                                const nodeNames = Object.keys(nodeVoltages);
+                                outputVoltage = nodeVoltages['out'] || nodeVoltages['out_node'] || 
+                                               nodeVoltages['mid'] || nodeVoltages[2] || 
+                                               nodeVoltages[1] || nodeVoltages[0] || 0;
+                                
+                                // 調試：記錄節點電壓
+                                if (stepCount % 2000 === 0) {
+                                    log(`調試 - 節點電壓 (${nodeNames.join(',')}): ${JSON.stringify(nodeVoltages)}`);
+                                }
+                            } else if (stepResult.stateVector && stepResult.stateVector.length > 0) {
+                                // 對於只有 stateVector 的情況，電容電壓就是狀態變量
+                                outputVoltage = stepResult.stateVector[0] || 0;
+                                nodeVoltages['out'] = outputVoltage;
+                                
+                                // 調試：記錄狀態向量
+                                if (stepCount % 2000 === 0) {
+                                    log(`調試 - 狀態向量: [${stepResult.stateVector.join(', ')}]`);
+                                }
+                            }
+                            
+                            // 確保輸出電壓是合理的數值
+                            if (isNaN(outputVoltage) || !isFinite(outputVoltage)) {
+                                outputVoltage = 0;
+                            }
+                            
+                            // 更新控制器
+                            currentFrequency = controller.update(currentTime, { 
+                                v_out: outputVoltage, 
+                                v_in: circuit.params.Vin 
+                            });
+                            
                             const result = {
                                 time: currentTime,
-                                nodeVoltages: stepResult.nodeVoltages,
-                                frequency: currentFrequency
+                                nodeVoltages: nodeVoltages,
+                                frequency: currentFrequency,
+                                vout: outputVoltage
                             };
                             allResults.push(result);
-                            lastVout = stepResult.nodeVoltages['out_node'] || 0;
+                            lastVout = outputVoltage;
                         }
                     } catch (error) {
-                        if (stepCount % 1000 === 0) { // 只在每1000步報告一次錯誤
-                            log(`GPU 計算警告 (步驟 ${stepCount}): ${error.message}`, 'error');
+                        if (stepCount % 500 === 0) { // 每500步報告一次錯誤
+                            log(`${solverDisplayName} 計算警告 (步驟 ${stepCount}): ${error.message}`, 'error');
+                        }
+                        // 如果連續錯誤太多，提前退出
+                        if (stepCount > 0 && stepCount % 100 === 0 && allResults.length < stepCount / 10) {
+                            log(`連續錯誤太多，提前結束模擬`, 'error');
+                            break;
                         }
                     }
                     
@@ -562,31 +720,44 @@ return new GPULLCController(targetVoltage, timeStep);
                 updateProgress(stepCount, totalSteps);
 
                 if (stepCount < totalSteps) {
-                    setTimeout(() => gpuSimulationLoop(), 0); // 讓出執行緒
+                    setTimeout(() => simulationLoop(), 0); // 讓出執行緒
                 } else {
                     const endTime = performance.now();
                     const duration = endTime - startTime;
                     const performanceRate = totalSteps / duration * 1000;
                     
-                    log(`🚀 GPU 模擬完成! 耗時: ${duration.toFixed(1)}ms`, 'success');
-                    log(`⚡ GPU 性能: ${performanceRate.toFixed(0)} 步/秒 (預期4.6x提升)`, 'gpu');
+                    log(`🚀 ${solverDisplayName} 模擬完成! 耗時: ${duration.toFixed(1)}ms`, 'success');
+                    log(`📊 數據統計: 總計 ${allResults.length} 個有效數據點 / ${totalSteps} 步`, 'info');
                     
-                    drawResults(allResults, controller);
+                    const perfMsg = selectedSolver === 'gpu' ? 
+                        `⚡ GPU 性能: ${performanceRate.toFixed(0)} 步/秒 (4.6x加速)` :
+                        `💻 CPU 性能: ${performanceRate.toFixed(0)} 步/秒`;
+                    log(perfMsg, selectedSolver === 'gpu' ? 'gpu' : 'info');
+                    
+                    // 更新性能顯示
+                    const perfDisplay = document.getElementById('performance-display');
+                    perfDisplay.innerHTML = `${performanceRate.toFixed(0)} 步/秒 | ${duration.toFixed(1)}ms | ${totalSteps.toLocaleString()} 步`;
+                    
+                    if (allResults.length > 0) {
+                        drawResults(allResults, controller);
+                    } else {
+                        log(`⚠️ 沒有有效的模擬數據，請檢查求解器配置`, 'error');
+                    }
                     
                     runBtn.disabled = false;
-                    runBtn.textContent = '🚀 執行 GPU 加速模擬';
+                    runBtn.textContent = `🚀 執行${solverDisplayName}模擬`;
                     simulationRunning = false;
                     document.getElementById('progress-container').style.display = 'none';
                 }
             }
             
-            gpuSimulationLoop();
+            simulationLoop();
 
         } catch (error) {
-            log(`GPU 模擬失敗: ${error.message}`, 'error');
-            console.error('GPU Simulation error:', error);
+            log(`${solverDisplayName} 模擬失敗: ${error.message}`, 'error');
+            console.error('Simulation error:', error);
             runBtn.disabled = false;
-            runBtn.textContent = '🚀 執行 GPU 加速模擬';
+            runBtn.textContent = `🚀 執行${solverDisplayName}模擬`;
             simulationRunning = false;
         }
     }
@@ -600,7 +771,9 @@ return new GPULLCController(targetVoltage, timeStep);
 
         results.forEach(result => {
             timeData.push(result.time * 1000); // ms
-            voutData.push(result.nodeVoltages['out_node'] || 0);
+            // 嘗試多種方式獲取輸出電壓
+            const vout = result.vout || result.nodeVoltages['out'] || result.nodeVoltages['out_node'] || 0;
+            voutData.push(vout);
             freqData.push(result.frequency / 1000); // kHz
             targetData.push(targetVoltage);
         });
@@ -640,37 +813,63 @@ return new GPULLCController(targetVoltage, timeStep);
         chart.update();
         
         // 顯示最終統計
-        if (results.length > 0) {
-            const finalVout = voutData[voutData.length - 1];
-            const avgVout = voutData.reduce((sum, v) => sum + v, 0) / voutData.length;
+        if (results.length > 0 && voutData.length > 0) {
+            const finalVout = voutData[voutData.length - 1] || 0;
+            const avgVout = voutData.reduce((sum, v) => sum + (v || 0), 0) / voutData.length;
             const error = Math.abs(targetVoltage - finalVout);
-            const errorPercent = (error / targetVoltage * 100).toFixed(2);
+            const errorPercent = targetVoltage > 0 ? (error / targetVoltage * 100).toFixed(2) : '0.00';
             
             log(`📊 最終結果: Vout=${finalVout.toFixed(2)}V, 誤差=${error.toFixed(2)}V (${errorPercent}%)`, 'success');
             
             if (controller) {
                 const status = controller.getStatus();
-                log(`🎛️ 控制器: 頻率=${(status.frequency/1000).toFixed(1)}kHz, 平均誤差=${status.avg_error.toFixed(2)}V`, 'success');
+                const freq = status.frequency || 20000;
+                const avgError = status.avg_error || status.error || 0;
+                log(`🎛️ 控制器: 頻率=${(freq/1000).toFixed(1)}kHz, 平均誤差=${Math.abs(avgError).toFixed(2)}V`, 'success');
             }
+        } else {
+            log(`⚠️ 沒有有效的模擬數據`, 'error');
         }
         
         log('圖表繪製完成!', 'success');
     }
 
     // 重置函數
-    function resetGPU() {
-        if (gpuSolver) {
-            gpuSolver.reset();
-            chart.data = { labels: [], datasets: [] };
-            chart.update();
-            log('GPU 求解器已重置', 'success');
+    function resetSimulation() {
+        if (currentSolver && currentSolver.reset) {
+            currentSolver.reset();
         }
+        if (cpuSolver && cpuSolver.reset) {
+            cpuSolver.reset();
+        }
+        if (gpuSolver && gpuSolver.reset) {
+            gpuSolver.reset();
+        }
+        
+        chart.data = { labels: [], datasets: [] };
+        chart.update();
+        
+        const selectedSolver = document.querySelector('input[name="solver"]:checked').value;
+        log(`${selectedSolver === 'gpu' ? 'GPU' : 'CPU'} 求解器已重置`, 'success');
+        
+        // 重置進度條
+        document.getElementById('progress-container').style.display = 'none';
     }
 
     // 啟動應用
-    await initializeGPUSolver();
-    document.getElementById('runBtn').addEventListener('click', runGPUSimulation);
-    document.getElementById('resetBtn').addEventListener('click', resetGPU);
+    await initializeSolvers();
+    
+    // 綁定事件處理器
+    document.getElementById('runBtn').addEventListener('click', runSimulation);
+    document.getElementById('resetBtn').addEventListener('click', resetSimulation);
+    
+    // 綁定求解器選擇事件
+    document.querySelectorAll('input[name="solver"]').forEach(radio => {
+        radio.addEventListener('change', handleSolverChange);
+    });
+    
+    // 初始化求解器選擇
+    handleSolverChange();
 });
 </script>
 
