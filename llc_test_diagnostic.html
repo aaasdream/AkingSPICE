@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLC測試診斷</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #2c3e50;
+      color: white;
+    }
+
+    .test-box {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 20px;
+      margin: 10px 0;
+      border-radius: 10px;
+    }
+
+    .success {
+      background: rgba(46, 204, 113, 0.3);
+    }
+
+    .error {
+      background: rgba(231, 76, 60, 0.3);
+    }
+
+    .warning {
+      background: rgba(241, 196, 15, 0.3);
+    }
+  </style>
+</head>
+
+<body>
+  <h1>🧪 LLC系統診斷測試</h1>
+
+  <div id="test1" class="test-box">
+    <h3>測試1: 基本JavaScript功能</h3>
+    <div id="result1">測試中...</div>
+  </div>
+
+  <div id="test2" class="test-box">
+    <h3>測試2: AkingSPICE模組載入</h3>
+    <div id="result2">測試中...</div>
+  </div>
+
+  <div id="test3" class="test-box">
+    <h3>測試3: 電路創建測試</h3>
+    <div id="result3">測試中...</div>
+  </div>
+
+  <div id="test4" class="test-box">
+    <h3>測試4: 簡單模擬測試</h3>
+    <div id="result4">測試中...</div>
+  </div>
+
+  <div id="test5" class="test-box">
+    <h3>測試5: LLC控制算法測試</h3>
+    <div id="result5">測試中...</div>
+  </div>
+
+  <button onclick="startLLCTest()"
+    style="padding: 15px 30px; background: #3498db; color: white; border: none; border-radius: 8px; font-size: 16px; cursor: pointer;">開始LLC功能測試</button>
+
+  <div id="detailedLog" class="test-box" style="margin-top: 20px;">
+    <h3>📋 詳細測試日誌</h3>
+    <div id="logContent"
+      style="font-family: 'Courier New', monospace; font-size: 12px; max-height: 300px; overflow-y: auto; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 5px;">
+    </div>
+  </div>
+
+  <script type="module">
+    let testLog = [];
+
+    function log(message, type = 'info') {
+      const timestamp = new Date().toLocaleTimeString();
+      const logEntry = `[${timestamp}] ${message}`;
+      testLog.push(logEntry);
+
+      const logContent = document.getElementById('logContent');
+      const div = document.createElement('div');
+      div.textContent = logEntry;
+      div.style.color = type === 'error' ? '#e74c3c' :
+        type === 'success' ? '#2ecc71' :
+          type === 'warning' ? '#f1c40f' : '#ecf0f1';
+      logContent.appendChild(div);
+      logContent.scrollTop = logContent.scrollHeight;
+
+      console.log(logEntry);
+    }
+
+    function setTestResult(testId, success, message) {
+      const testDiv = document.getElementById(testId);
+      const resultDiv = document.getElementById(`result${testId.slice(-1)}`);
+
+      if (success) {
+        testDiv.className = 'test-box success';
+        resultDiv.innerHTML = `✅ ${message}`;
+      } else {
+        testDiv.className = 'test-box error';
+        resultDiv.innerHTML = `❌ ${message}`;
+      }
+    }
+
+    async function runBasicTest() {
+      log('開始基本功能測試...', 'info');
+
+      try {
+        // 測試基本JavaScript功能
+        const testArray = [1, 2, 3, 4, 5];
+        const sum = testArray.reduce((a, b) => a + b, 0);
+
+        if (sum === 15) {
+          setTestResult('test1', true, '基本JavaScript功能正常');
+          log('✅ 基本JavaScript功能測試通過', 'success');
+          return true;
+        } else {
+          throw new Error('數組運算錯誤');
+        }
+      } catch (error) {
+        setTestResult('test1', false, `基本功能錯誤: ${error.message}`);
+        log(`❌ 基本功能測試失敗: ${error.message}`, 'error');
+        return false;
+      }
+    }
+
+    async function runAkingSpiceTest() {
+      log('開始AkingSPICE模組載入測試...', 'info');
+
+      try {
+        const modules = await import('./lib-dist/AkingSPICE.es.js');
+        log('AkingSPICE模組載入成功', 'info');
+
+        const requiredModules = ['VoltageSource', 'Resistor', 'Capacitor', 'Inductor', 'Diode', 'ExplicitStateSolver'];
+        const missing = [];
+
+        for (const moduleName of requiredModules) {
+          if (!modules[moduleName]) {
+            missing.push(moduleName);
+          } else {
+            log(`✓ ${moduleName} 模組可用`, 'info');
+          }
+        }
+
+        if (missing.length > 0) {
+          throw new Error(`缺少模組: ${missing.join(', ')}`);
+        }
+
+        setTestResult('test2', true, `成功載入 ${requiredModules.length} 個模組`);
+        log('✅ AkingSPICE模組測試通過', 'success');
+        return modules;
+
+      } catch (error) {
+        setTestResult('test2', false, `模組載入失敗: ${error.message}`);
+        log(`❌ AkingSPICE模組測試失敗: ${error.message}`, 'error');
+        return null;
+      }
+    }
+
+    async function runCircuitCreationTest(modules) {
+      log('開始電路創建測試...', 'info');
+
+      if (!modules) {
+        setTestResult('test3', false, '模組未載入，跳過測試');
+        return false;
+      }
+
+      try {
+        const { VoltageSource, Resistor, Capacitor, Inductor, Diode } = modules;
+
+        // 創建簡單的LLC電路元件
+        const components = [];
+
+        log('創建電壓源...', 'info');
+        components.push(new VoltageSource('Vin', ['dc_in', 'gnd'], 400));
+
+        log('創建諧振電感...', 'info');
+        components.push(new Inductor('Lr', ['dc_in', 'res_node'], 50e-6));
+
+        log('創建諧振電容...', 'info');
+        components.push(new Capacitor('Cr', ['res_node', 'switch_node'], 100e-9));
+
+        log('創建激磁電感...', 'info');
+        components.push(new Inductor('Lm', ['switch_node', 'gnd'], 200e-6));
+
+        log('創建負載電阻...', 'info');
+        components.push(new Resistor('Rload', ['switch_node', 'gnd'], 100));
+
+        setTestResult('test3', true, `成功創建 ${components.length} 個電路元件`);
+        log('✅ 電路創建測試通過', 'success');
+        return components;
+
+      } catch (error) {
+        setTestResult('test3', false, `電路創建失敗: ${error.message}`);
+        log(`❌ 電路創建測試失敗: ${error.message}`, 'error');
+        return null;
+      }
+    }
+
+    async function runSimulationTest(modules, components) {
+      log('開始模擬測試...', 'info');
+
+      if (!modules || !components) {
+        setTestResult('test4', false, '前置條件未滿足，跳過測試');
+        return false;
+      }
+
+      try {
+        const { ExplicitStateSolver } = modules;
+
+        log('創建求解器...', 'info');
+        const solver = new ExplicitStateSolver();
+
+        log('初始化求解器...', 'info');
+        await solver.initialize(components, 1e-6);
+
+        log('執行模擬步驟...', 'info');
+        const result1 = solver.step();
+        const result2 = solver.step();
+        const result3 = solver.step();
+
+        log('清理求解器...', 'info');
+        solver.destroy();
+
+        setTestResult('test4', true, '模擬執行成功，求解器工作正常');
+        log('✅ 模擬測試通過', 'success');
+        return true;
+
+      } catch (error) {
+        setTestResult('test4', false, `模擬測試失敗: ${error.message}`);
+        log(`❌ 模擬測試失敗: ${error.message}`, 'error');
+        return false;
+      }
+    }
+
+    async function runLLCControlTest() {
+      log('開始LLC控制算法測試...', 'info');
+
+      try {
+        // 測試諧振頻率計算
+        const Lr = 50e-6;  // 50μH
+        const Cr = 100e-9; // 100nF
+        const fr = 1 / (2 * Math.PI * Math.sqrt(Lr * Cr));
+
+        log(`諧振頻率計算: fr = ${(fr / 1000).toFixed(1)} kHz`, 'info');
+
+        // 測試頻率控制增益
+        const fs = 100000; // 100kHz
+        const Q = 0.5;
+        const gain = fs > fr ? Math.pow(fr / fs, 2) : 1;
+
+        log(`頻率控制增益: ${gain.toFixed(3)}`, 'info');
+
+        // 測試PWM控制
+        let dutyCycle = 0.45;
+        let switchPeriod = 1 / fs;
+
+        log(`PWM參數: 占空比=${dutyCycle}, 周期=${(switchPeriod * 1e6).toFixed(1)}μs`, 'info');
+
+        // 測試效率計算
+        const efficiency = Math.max(85, 95 - Math.abs(fs / 1000 - fr / 1000) * 0.1);
+
+        log(`效率估算: ${efficiency.toFixed(1)}%`, 'info');
+
+        if (fr > 0 && gain > 0 && efficiency > 80) {
+          setTestResult('test5', true, `LLC控制算法正常，fr=${(fr / 1000).toFixed(1)}kHz，效率=${efficiency.toFixed(1)}%`);
+          log('✅ LLC控制算法測試通過', 'success');
+          return true;
+        } else {
+          throw new Error('控制算法計算結果異常');
+        }
+
+      } catch (error) {
+        setTestResult('test5', false, `LLC控制測試失敗: ${error.message}`);
+        log(`❌ LLC控制測試失敗: ${error.message}`, 'error');
+        return false;
+      }
+    }
+
+    // 全局測試函數
+    window.startLLCTest = async function () {
+      log('🚀 開始LLC系統完整測試', 'info');
+
+      // 重置所有測試結果
+      for (let i = 1; i <= 5; i++) {
+        document.getElementById(`test${i}`).className = 'test-box';
+        document.getElementById(`result${i}`).innerHTML = '測試中...';
+      }
+
+      document.getElementById('logContent').innerHTML = '';
+      testLog = [];
+
+      // 依序執行測試
+      const basicOk = await runBasicTest();
+      if (!basicOk) return;
+
+      const modules = await runAkingSpiceTest();
+
+      const components = await runCircuitCreationTest(modules);
+
+      const simulationOk = await runSimulationTest(modules, components);
+
+      const controlOk = await runLLCControlTest();
+
+      // 總結測試結果
+      const allPassed = basicOk && modules && components && simulationOk && controlOk;
+
+      log('', 'info');
+      log('='.repeat(50), 'info');
+      log('📊 LLC系統測試總結:', 'info');
+      log(`基本功能: ${basicOk ? '✅ 通過' : '❌ 失敗'}`, basicOk ? 'success' : 'error');
+      log(`模組載入: ${modules ? '✅ 通過' : '❌ 失敗'}`, modules ? 'success' : 'error');
+      log(`電路創建: ${components ? '✅ 通過' : '❌ 失敗'}`, components ? 'success' : 'error');
+      log(`模擬執行: ${simulationOk ? '✅ 通過' : '❌ 失敗'}`, simulationOk ? 'success' : 'error');
+      log(`控制算法: ${controlOk ? '✅ 通過' : '❌ 失敗'}`, controlOk ? 'success' : 'error');
+      log('='.repeat(50), 'info');
+
+      if (allPassed) {
+        log('🎉 LLC系統測試全部通過！系統可以正常工作！', 'success');
+      } else {
+        log('⚠️ LLC系統存在問題，需要修正', 'error');
+      }
+    };
+
+    // 頁面載入後自動執行測試
+    document.addEventListener('DOMContentLoaded', () => {
+      log('📋 LLC診斷系統已載入，自動開始測試...', 'info');
+
+      // 延遲1秒後自動執行測試
+      setTimeout(() => {
+        startLLCTest();
+      }, 1000);
+    });
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>簡單測試2</title>
+</head>
+
+<body>
+  <h1>簡單測試2</h1>
+  <div id="output"></div>
+
+  <!-- 先加載AkingSPICE -->
+  <script src="lib-dist/AkingSPICE.umd.js"></script>
+
+  <script type="module">
+    let output = document.getElementById('output');
+
+    function log(message) {
+      console.log(message);
+      output.innerHTML += message + '<br>';
+    }
+
+    try {
+      log('開始測試...');
+
+      if (!window.AkingSPICE) {
+        log('❌ AkingSPICE未加載');
+        return;
+      }
+
+      log('✅ AkingSPICE已加載');
+      log('可用類: ' + Object.keys(window.AkingSPICE).join(', '));
+
+      const { VoltageSource, Resistor, ExplicitStateSolver } = window.AkingSPICE;
+
+      // 只測試元件創建
+      const v1 = new VoltageSource('V1', ['n1', 'gnd'], 5);
+      log(`✅ 電壓源: nodes=${v1.nodes}, value=${v1.value}`);
+
+      const r1 = new Resistor('R1', ['n1', 'gnd'], 10);
+      log(`✅ 電阻: nodes=${r1.nodes}, value=${r1.value}`);
+
+      // 測試求解器創建
+      const solver = new ExplicitStateSolver([v1, r1]);
+      log('✅ 求解器創建完成');
+
+      // 執行求解
+      solver.step(1e-6);
+      log('✅ 求解步驟完成');
+
+      const result = solver.getNodeVoltages();
+      log('結果: ' + JSON.stringify(result));
+
+    } catch (error) {
+      log('❌ 錯誤: ' + error.message);
+      console.error(error);
+    }
+  </script>
+</body>
+
+</html>

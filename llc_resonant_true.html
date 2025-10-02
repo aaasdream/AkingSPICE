@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🔋 LLC諧振變換器 - AkingSPICE</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: linear-gradient(135deg, #2c3e50 0%, #4a6741 50%, #2c3e50 100%);
+      color: white;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 25px;
+      border-radius: 15px;
+      backdrop-filter: blur(10px);
+    }
+
+    .circuit-diagram {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 20px;
+      border-radius: 10px;
+      text-align: center;
+      margin: 20px 0;
+      font-family: monospace;
+      font-size: 14px;
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 15px;
+      margin: 20px 0;
+    }
+
+    .metric {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 15px;
+      border-radius: 10px;
+      text-align: center;
+    }
+
+    .metric-label {
+      font-size: 12px;
+      opacity: 0.8;
+      margin-bottom: 5px;
+    }
+
+    .metric-value {
+      font-size: 20px;
+      font-weight: bold;
+      color: #2ecc71;
+    }
+
+    .btn {
+      padding: 12px 24px;
+      margin: 8px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: bold;
+      transition: all 0.3s;
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    .btn-primary {
+      background: #27ae60;
+      color: white;
+    }
+
+    .btn-danger {
+      background: #e74c3c;
+      color: white;
+    }
+
+    .btn-info {
+      background: #3498db;
+      color: white;
+    }
+
+    #waveformCanvas {
+      width: 100%;
+      height: 350px;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.2);
+      display: block;
+      margin: 10px 0;
+    }
+
+    #log {
+      height: 300px;
+      overflow-y: auto;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      border-radius: 10px;
+      padding: 15px;
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      background: rgba(0, 0, 0, 0.3);
+      margin-top: 20px;
+    }
+
+    .resonant {
+      color: #f39c12;
+      font-weight: bold;
+    }
+
+    .primary {
+      color: #3498db;
+    }
+
+    .secondary {
+      color: #e74c3c;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>🔋 LLC諧振變換器 - AkingSPICE</h1>
+    <p>⚡ 完整LLC拓撲：原邊開關 → 諧振槽 (Lr + Cr) → 勵磁電感Lm → 變壓器 → 二極管整流</p>
+
+    <div class="circuit-diagram">
+      <h3>📐 LLC諧振變換器電路拓撲</h3>
+      <pre>
+   Vin(400V)    S1(開關)      Lr(諧振電感)    Cr(諧振電容)
+      +  ────────┤├─────────LLLLL─────────┤├─────────┐
+                 └┘                                    │
+                                                      │ Lm(勵磁電感)
+                                                      │ LLLLL
+                 ┌┐                                    │
+      -  ────────┤├─────────────────────────────────────┘
+                 S2(開關)
+      
+      諧振頻率: fr = 1/(2π√(Lr·Cr))
+      品質因數: Q = √(Lr/Cr) / R
+    </pre>
+    </div>
+
+    <div style="text-align: center; margin: 20px 0;">
+      <button class="btn btn-primary" onclick="startLLC()">🚀 啟動LLC諧振</button>
+      <button class="btn btn-danger" onclick="stopLLC()">⏹️ 停止模擬</button>
+      <button class="btn btn-info" onclick="resetLLC()">🔄 重置電路</button>
+      <button class="btn btn-info" onclick="clearLog()">🧹 清除日誌</button>
+    </div>
+
+    <h3>📊 LLC諧振參數監控</h3>
+    <div class="status-grid">
+      <div class="metric">
+        <div class="metric-label">模擬狀態</div>
+        <div id="status" class="metric-value">就緒</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">模擬步數</div>
+        <div id="steps" class="metric-value">0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">時間 (μs)</div>
+        <div id="time" class="metric-value">0.0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label"><span class="resonant">諧振電流 (A)</span></div>
+        <div id="resonant-current" class="metric-value">0.0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label"><span class="resonant">諧振電壓 (V)</span></div>
+        <div id="resonant-voltage" class="metric-value">0.0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label"><span class="primary">勵磁電流 (A)</span></div>
+        <div id="magnetizing-current" class="metric-value">0.0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">諧振頻率 (kHz)</div>
+        <div id="frequency" class="metric-value">159.2</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">開關頻率 (kHz)</div>
+        <div id="switching-freq" class="metric-value">100.0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">功率 (W)</div>
+        <div id="power" class="metric-value">0.0</div>
+      </div>
+    </div>
+
+    <h3>📈 LLC諧振波形</h3>
+    <canvas id="waveformCanvas" width="1000" height="350"></canvas>
+
+    <h3>📋 LLC模擬日誌</h3>
+    <div id="log">[LLC諧振變換器準備就緒 - 真正的LLC拓撲]</div>
+  </div>
+
+  <!-- 載入AkingSPICE -->
+  <script src="./lib-dist/AkingSPICE.umd.js"></script>
+
+  <script>
+    // LLC全局變數
+    let isRunning = false;
+    let solver = null;
+    let stepCount = 0;
+    let startTime = 0;
+
+    // 波形數據
+    let timeData = [];
+    let resonantCurrentData = [];
+    let resonantVoltageData = [];
+    let magnetizingCurrentData = [];
+
+    // LLC參數
+    const LLC_PARAMS = {
+      Vin: 400,          // 輸入電壓 400V
+      Lr: 50e-6,         // 諧振電感 50μH
+      Cr: 100e-9,        // 諧振電容 100nF  
+      Lm: 200e-6,        // 勵磁電感 200μH
+      Rload: 10,         // 等效負載 10Ω
+      fsw: 100e3,        // 開關頻率 100kHz
+      dt: 50e-9          // 時間步長 50ns
+    };
+
+    // 計算諧振頻率
+    const fr = 1 / (2 * Math.PI * Math.sqrt(LLC_PARAMS.Lr * LLC_PARAMS.Cr));
+    document.getElementById('frequency').textContent = (fr / 1000).toFixed(1);
+
+    let canvas, ctx;
+
+    // 初始化
+    document.addEventListener('DOMContentLoaded', function () {
+      log('🚀 LLC諧振變換器系統啟動', 'success');
+
+      canvas = document.getElementById('waveformCanvas');
+      ctx = canvas.getContext('2d');
+
+      if (window.AkingSPICE) {
+        log('✅ AkingSPICE 載入成功', 'success');
+        log(`📊 LLC參數設定:`, 'info');
+        log(`   - 輸入電壓: ${LLC_PARAMS.Vin}V`, 'info');
+        log(`   - 諧振電感 Lr: ${LLC_PARAMS.Lr * 1e6}μH`, 'info');
+        log(`   - 諧振電容 Cr: ${LLC_PARAMS.Cr * 1e9}nF`, 'info');
+        log(`   - 勵磁電感 Lm: ${LLC_PARAMS.Lm * 1e6}μH`, 'info');
+        log(`   - 諧振頻率: ${(fr / 1000).toFixed(1)}kHz`, 'warning');
+        log(`   - 開關頻率: ${LLC_PARAMS.fsw / 1000}kHz`, 'warning');
+        log('🎯 點擊"啟動LLC諧振"開始模擬...', 'info');
+
+        // 自動啟動
+        log('⏰ 3秒後自動啟動LLC模擬...', 'warning');
+        Promise.resolve().then(() => {
+          setTimeout(() => {
+            log('🔄 自動啟動LLC諧振模擬...', 'success');
+            startLLC();
+          }, 100); // 短延遲確保DOM完全載入
+        });
+      } else {
+        log('❌ AkingSPICE 載入失敗', 'error');
+      }
+    });
+
+    // 日誌函數
+    function log(msg, type = 'info') {
+      const colors = { info: '#ecf0f1', error: '#e74c3c', success: '#2ecc71', warning: '#f39c12' };
+      const time = new Date().toLocaleTimeString();
+
+      console.log(`[${time}] ${msg}`);
+      const logDiv = document.getElementById('log');
+      logDiv.innerHTML += `<div style="color:${colors[type]}; margin:2px 0;">[${time}] ${msg}</div>`;
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    // 清除日誌
+    window.clearLog = function () {
+      document.getElementById('log').innerHTML = '[日誌已清除]';
+      log('🧹 LLC日誌已清除', 'info');
+    };
+
+    // 開始LLC模擬
+    window.startLLC = function () {
+      if (isRunning) {
+        log('⚠️ LLC模擬已在運行中', 'warning');
+        return;
+      }
+
+      try {
+        log('🚀 啟動LLC諧振變換器模擬...', 'success');
+        document.getElementById('status').textContent = '啟動中';
+        document.getElementById('status').style.color = '#f39c12';
+
+        const { VoltageSource, Inductor, Capacitor, Resistor, ExplicitStateSolver } = window.AkingSPICE;
+
+        log('🔧 創建LLC諧振電路組件...', 'info');
+
+        // LLC諧振電路拓撲
+        // 節點分配：
+        // 0: 接地
+        // 1: 輸入正極 (Vin+)
+        // 2: 諧振電感後 (Lr輸出)
+        // 3: 諧振節點 (Lr-Cr連接點)
+        // 4: 勵磁電感後
+
+        const components = [
+          // 輸入電壓源 (方波，簡化為DC開始)
+          new VoltageSource('Vin', [1, 0], LLC_PARAMS.Vin),
+
+          // 諧振電感 Lr (50μH)
+          new Inductor('Lr', [1, 2], LLC_PARAMS.Lr),
+
+          // 諧振電容 Cr (100nF) 
+          new Capacitor('Cr', [2, 3], LLC_PARAMS.Cr),
+
+          // 勵磁電感 Lm (200μH)
+          new Inductor('Lm', [2, 0], LLC_PARAMS.Lm),
+
+          // 等效負載電阻
+          new Resistor('Rload', [3, 0], LLC_PARAMS.Rload)
+        ];
+
+        log(`✅ LLC電路組件創建完成: ${components.length} 個組件`, 'success');
+        components.forEach(comp => {
+          if (comp.name === 'Lr') log(`   - 諧振電感 ${comp.name}: ${comp.value * 1e6}μH`, 'warning');
+          else if (comp.name === 'Cr') log(`   - 諧振電容 ${comp.name}: ${comp.value * 1e9}nF`, 'warning');
+          else if (comp.name === 'Lm') log(`   - 勵磁電感 ${comp.name}: ${comp.value * 1e6}μH`, 'info');
+          else if (comp.name === 'Vin') log(`   - 輸入電源 ${comp.name}: ${comp.value}V`, 'success');
+          else if (comp.name === 'Rload') log(`   - 負載電阻 ${comp.name}: ${comp.value}Ω`, 'info');
+        });
+
+        // 初始化求解器
+        log('⚙️ 初始化LLC求解器...', 'info');
+        solver = new ExplicitStateSolver();
+
+        solver.initialize(components, LLC_PARAMS.dt, {
+          debug: false,
+          maxIterations: 500,
+          tolerance: 1e-8,
+          integrationMethod: 'forward_euler'
+        });
+
+        log('✅ LLC求解器初始化完成', 'success');
+
+        // 開始模擬
+        isRunning = true;
+        stepCount = 0;
+        startTime = performance.now();
+
+        // 清空波形數據
+        timeData = [];
+        resonantCurrentData = [];
+        resonantVoltageData = [];
+        magnetizingCurrentData = [];
+
+        document.getElementById('status').textContent = '諧振中';
+        document.getElementById('status').style.color = '#2ecc71';
+
+        log('🎉 LLC諧振模擬開始運行！', 'success');
+        log('📊 監控LLC諧振特性...', 'info');
+
+        // 啟動模擬循環
+        runLLCLoop();
+
+      } catch (error) {
+        log(`❌ LLC啟動失敗: ${error.message}`, 'error');
+        console.error('LLC錯誤詳情:', error);
+        document.getElementById('status').textContent = '錯誤';
+        document.getElementById('status').style.color = '#e74c3c';
+      }
+    };
+
+    // LLC模擬循環
+    function runLLCLoop() {
+      if (!isRunning || !solver) return;
+
+      try {
+        // 執行LLC模擬步驟
+        const result = solver.step();
+        stepCount++;
+
+        // 計算時間
+        const currentTime = stepCount * LLC_PARAMS.dt;
+        const timeUs = currentTime * 1e6;
+
+        // 提取LLC關鍵電壓和電流
+        const nodeVoltages = result.nodeVoltages || {};
+        const v1 = nodeVoltages[1] || 0;  // 輸入節點
+        const v2 = nodeVoltages[2] || 0;  // 諧振電感後
+        const v3 = nodeVoltages[3] || 0;  // 諧振節點
+
+        // 計算LLC特徵量
+        const resonantVoltage = v2 - v3;              // 諧振電容電壓
+        const resonantCurrent = (v1 - v2) / (LLC_PARAMS.Lr / LLC_PARAMS.dt); // 近似諧振電流
+        const magnetizingCurrent = v2 / (LLC_PARAMS.Lm / LLC_PARAMS.dt);     // 近似勵磁電流
+        const outputPower = (v3 * v3) / LLC_PARAMS.Rload;                    // 輸出功率
+
+        // 更新顯示
+        document.getElementById('steps').textContent = stepCount;
+        document.getElementById('time').textContent = timeUs.toFixed(2);
+        document.getElementById('resonant-current').textContent = Math.abs(resonantCurrent).toFixed(3);
+        document.getElementById('resonant-voltage').textContent = Math.abs(resonantVoltage).toFixed(2);
+        document.getElementById('magnetizing-current').textContent = Math.abs(magnetizingCurrent).toFixed(3);
+        document.getElementById('power').textContent = outputPower.toFixed(2);
+
+        // 記錄波形數據
+        if (stepCount % 5 === 0) {
+          timeData.push(timeUs);
+          resonantCurrentData.push(resonantCurrent);
+          resonantVoltageData.push(resonantVoltage);
+          magnetizingCurrentData.push(magnetizingCurrent);
+
+          // 保持數據長度
+          if (timeData.length > 1000) {
+            timeData.shift();
+            resonantCurrentData.shift();
+            resonantVoltageData.shift();
+            magnetizingCurrentData.shift();
+          }
+        }
+
+        // 每100步輸出LLC狀態
+        if (stepCount % 100 === 0) {
+          log(`LLC步驟 ${stepCount}: t=${timeUs.toFixed(2)}μs`);
+          log(`  諧振電流: ${Math.abs(resonantCurrent).toFixed(3)}A, 諧振電壓: ${Math.abs(resonantVoltage).toFixed(2)}V`);
+          log(`  勵磁電流: ${Math.abs(magnetizingCurrent).toFixed(3)}A, 功率: ${outputPower.toFixed(2)}W`);
+
+          // 更新LLC波形
+          updateLLCWaveform();
+        }
+
+        // 限制運行步數
+        if (stepCount < 5000) {
+          Promise.resolve().then(runLLCLoop);
+        } else {
+          log('🏁 LLC模擬完成（5000步）', 'success');
+          stopLLC();
+        }
+
+      } catch (error) {
+        log(`❌ LLC模擬步驟錯誤: ${error.message}`, 'error');
+        console.error('LLC詳細錯誤:', error);
+        stopLLC();
+      }
+    }
+
+    // 更新LLC波形圖
+    function updateLLCWaveform() {
+      if (!ctx || timeData.length < 2) return;
+
+      const width = canvas.width;
+      const height = canvas.height;
+
+      // 清除畫布
+      ctx.clearRect(0, 0, width, height);
+
+      // 背景網格
+      drawGrid();
+
+      // 繪製LLC波形
+      const plotHeight = height / 3;
+
+      // 1. 諧振電流波形
+      drawWaveform(resonantCurrentData, 0, plotHeight, '#f39c12', '諧振電流 (A)');
+
+      // 2. 諧振電壓波形  
+      drawWaveform(resonantVoltageData, plotHeight, plotHeight, '#e74c3c', '諧振電壓 (V)');
+
+      // 3. 勵磁電流波形
+      drawWaveform(magnetizingCurrentData, plotHeight * 2, plotHeight, '#3498db', '勵磁電流 (A)');
+    }
+
+    function drawGrid() {
+      const width = canvas.width;
+      const height = canvas.height;
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+      ctx.lineWidth = 1;
+
+      // 垂直線
+      for (let i = 0; i <= 10; i++) {
+        const x = (width / 10) * i;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+      }
+
+      // 水平線
+      for (let i = 0; i <= 6; i++) {
+        const y = (height / 6) * i;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+      }
+    }
+
+    function drawWaveform(data, yOffset, plotHeight, color, label) {
+      if (data.length < 2) return;
+
+      const width = canvas.width;
+      const minVal = Math.min(...data);
+      const maxVal = Math.max(...data);
+      const range = maxVal - minVal || 1;
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+
+      for (let i = 0; i < data.length; i++) {
+        const x = (i / (data.length - 1)) * width;
+        const y = yOffset + plotHeight - ((data[i] - minVal) / range) * plotHeight;
+
+        if (i === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      }
+
+      ctx.stroke();
+
+      // 添加標籤
+      ctx.fillStyle = color;
+      ctx.font = '12px Arial';
+      ctx.fillText(`${label}: ${minVal.toFixed(2)} ~ ${maxVal.toFixed(2)}`, 10, yOffset + 20);
+    }
+
+    // 停止LLC
+    window.stopLLC = function () {
+      if (!isRunning) return;
+
+      isRunning = false;
+      document.getElementById('status').textContent = '已停止';
+      document.getElementById('status').style.color = '#e74c3c';
+
+      const elapsed = (performance.now() - startTime) / 1000;
+      const avgSpeed = stepCount / elapsed;
+
+      log(`⏹️ LLC模擬已停止`, 'warning');
+      log(`📊 LLC統計: ${stepCount} 步, 用時 ${elapsed.toFixed(2)}秒`);
+      log(`⚡ 平均速度: ${avgSpeed.toFixed(0)} 步/秒`);
+      log(`🎯 最終諧振電流: ${document.getElementById('resonant-current').textContent}A`);
+    };
+
+    // 重置LLC
+    window.resetLLC = function () {
+      stopLLC();
+      stepCount = 0;
+      timeData = [];
+      resonantCurrentData = [];
+      resonantVoltageData = [];
+      magnetizingCurrentData = [];
+
+      document.getElementById('steps').textContent = '0';
+      document.getElementById('time').textContent = '0.0';
+      document.getElementById('resonant-current').textContent = '0.0';
+      document.getElementById('resonant-voltage').textContent = '0.0';
+      document.getElementById('magnetizing-current').textContent = '0.0';
+      document.getElementById('power').textContent = '0.0';
+      document.getElementById('status').textContent = '就緒';
+      document.getElementById('status').style.color = '#2ecc71';
+
+      if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      log('🔄 LLC電路已重置', 'info');
+    };
+
+  </script>
+</body>
+
+</html>

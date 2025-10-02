@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>簡化LLC - AkingSPICE穩定版</title>
+  <style>
+    body {
+      font-family: 'Microsoft YaHei', Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: linear-gradient(135deg, #2d3436 0%, #636e72 50%, #74b9ff 100%);
+      color: white;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .card {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 15px;
+      padding: 25px;
+      backdrop-filter: blur(10px);
+      margin-bottom: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .btn {
+      padding: 12px 25px;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      margin: 5px;
+      background: linear-gradient(45deg, #00b894, #00cec9);
+      color: white;
+      transition: all 0.3s ease;
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+    }
+
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 15px;
+      margin: 20px 0;
+    }
+
+    .metric-card {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+      padding: 20px;
+      text-align: center;
+    }
+
+    .metric-value {
+      font-size: 24px;
+      font-weight: bold;
+      margin: 10px 0;
+      color: #00cec9;
+    }
+
+    .waveform-canvas {
+      width: 100%;
+      height: 300px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 10px;
+    }
+
+    .log-area {
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 10px;
+      padding: 15px;
+      font-family: 'Consolas', monospace;
+      font-size: 12px;
+      height: 200px;
+      overflow-y: auto;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .status-ok {
+      color: #00b894;
+    }
+
+    .status-error {
+      color: #d63031;
+    }
+
+    .status-warning {
+      color: #fdcb6e;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 0.7;
+      }
+
+      50% {
+        opacity: 1;
+      }
+    }
+
+    .running {
+      animation: pulse 2s infinite;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>🔋 簡化LLC - AkingSPICE穩定版</h1>
+      <p>⚡ 最簡電路: Vin → L → C → R 諧振電路</p>
+      <button class="btn" onclick="startSimpleLLC()">🚀 啟動穩定版LLC</button>
+      <button class="btn" onclick="stopSim()" style="background: #d63031;">⏹️ 停止</button>
+    </div>
+
+    <!-- 狀態顯示 -->
+    <div class="card">
+      <h3>📊 AkingSPICE求解器狀態</h3>
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-value" id="solverStatus">未啟動</div>
+          <div style="font-size: 12px;">求解器狀態</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="stepCount">0</div>
+          <div style="font-size: 12px;">時間步數</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="simTime">0.0</div>
+          <div style="font-size: 12px;">模擬時間 (μs)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="performance">0</div>
+          <div style="font-size: 12px;">求解速度 (步/秒)</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 波形顯示 -->
+    <div class="card">
+      <h3>📈 AkingSPICE波形</h3>
+      <canvas id="waveformCanvas" class="waveform-canvas"></canvas>
+    </div>
+
+    <!-- 系統日誌 -->
+    <div class="card">
+      <h3>📋 系統日誌</h3>
+      <div id="systemLog" class="log-area"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    let AkingSPICE = null;
+    let solver = null;
+    let components = [];
+    let isRunning = false;
+    let animationId = null;
+    let canvas, ctx;
+    let startTime = 0;
+    let steps = 0;
+    let waveformData = {
+      time: [],
+      vC: [],
+      iL: [],
+      vOut: []
+    };
+
+    function log(msg, type = 'info') {
+      const logEl = document.getElementById('systemLog');
+      const time = new Date().toLocaleTimeString();
+      const className = type === 'error' ? 'status-error' :
+        type === 'warning' ? 'status-warning' : 'status-ok';
+      logEl.innerHTML += `<div class="${className}">[${time}] ${msg}</div>`;
+      logEl.scrollTop = logEl.scrollHeight;
+      console.log(`[LLC] ${msg}`);
+    }
+
+    async function loadAkingSPICE() {
+      try {
+        AkingSPICE = await import('./lib-dist/AkingSPICE.es.js');
+        log('✅ AkingSPICE模組載入成功');
+        return true;
+      } catch (error) {
+        log(`❌ 載入失敗: ${error.message}`, 'error');
+        return false;
+      }
+    }
+
+    async function createSimpleCircuit() {
+      log('🔧 創建簡化LLC電路...');
+
+      const { VoltageSource, Inductor, Capacitor, Resistor } = AkingSPICE;
+
+      components = [];
+
+      try {
+        // 簡單的諧振電路: Vin -> L -> C -> R
+        // 節點: 0=GND, 1=Vin+, 2=L後, 3=C後
+
+        // 電壓源 400V (節點 0 到 1)
+        const vin = new VoltageSource('Vin', [0, 1], 400);
+        components.push(vin);
+
+        // 諧振電感 50μH (節點 1 到 2) 
+        const L = new Inductor('L', [1, 2], 50e-6);
+        components.push(L);
+
+        // 諧振電容 100nF (節點 2 到 3)
+        const C = new Capacitor('C', [2, 3], 100e-9);
+        components.push(C);
+
+        // 負載電阻 4.8Ω (節點 3 到 0)
+        const R = new Resistor('R', [3, 0], 4.8);
+        components.push(R);
+
+        log(`✓ 電壓源: 400V`);
+        log(`✓ 電感: 50μH`);
+        log(`✓ 電容: 100nF`);
+        log(`✓ 負載: 4.8Ω`);
+        log(`✓ 組件總數: ${components.length}`);
+
+        return true;
+      } catch (error) {
+        log(`❌ 電路創建失敗: ${error.message}`, 'error');
+        return false;
+      }
+    }
+
+    async function initializeSolver() {
+      log('🔬 初始化ExplicitStateSolver...');
+
+      const { ExplicitStateSolver } = AkingSPICE;
+
+      try {
+        solver = new ExplicitStateSolver();
+
+        // 使用更保守的設定
+        await solver.initialize(components, 1e-6, { // 1μs時間步長
+          debug: false,
+          maxIterations: 10000, // 大幅增加迭代次數
+          tolerance: 1e-5 // 放寬容差
+        });
+
+        document.getElementById('solverStatus').textContent = '運行中';
+        document.getElementById('solverStatus').className = 'metric-value status-ok running';
+
+        log('✅ 求解器初始化成功');
+        return true;
+      } catch (error) {
+        document.getElementById('solverStatus').textContent = '失敗';
+        document.getElementById('solverStatus').className = 'metric-value status-error';
+        log(`❌ 求解器初始化失敗: ${error.message}`, 'error');
+        return false;
+      }
+    }
+
+    async function simulationStep() {
+      if (!solver || !isRunning) return;
+
+      try {
+        // 執行一步求解
+        const result = await solver.step();
+
+        steps++;
+        const currentTime = steps * 1.0; // μs
+
+        // 更新顯示
+        document.getElementById('stepCount').textContent = steps.toLocaleString();
+        document.getElementById('simTime').textContent = currentTime.toFixed(1);
+
+        const elapsed = (performance.now() - startTime) / 1000;
+        const perf = Math.round(steps / elapsed);
+        document.getElementById('performance').textContent = perf.toLocaleString();
+
+        // 提取數據
+        if (result && result.nodeVoltages && result.stateVector) {
+          const vOut = result.nodeVoltages[3] || 0; // 輸出節點電壓
+          const iL = result.stateVector[0] || 0;    // 電感電流
+          const vC = result.stateVector[1] || 0;    // 電容電壓
+
+          // 存儲波形數據
+          waveformData.time.push(currentTime);
+          waveformData.vOut.push(vOut);
+          waveformData.iL.push(iL);
+          waveformData.vC.push(vC);
+
+          // 限制數據長度
+          if (waveformData.time.length > 800) {
+            Object.keys(waveformData).forEach(key => {
+              waveformData[key] = waveformData[key].slice(-600);
+            });
+          }
+        }
+
+        // 繪製波形
+        drawWaveforms();
+
+        // 定期記錄
+        if (steps % 1000 === 0) {
+          log(`模擬中: ${steps}步, ${currentTime.toFixed(1)}μs, ${perf}步/秒`);
+        }
+
+      } catch (error) {
+        log(`❌ 模擬錯誤: ${error.message}`, 'error');
+        stopSim();
+        return;
+      }
+
+      // 繼續下一步
+      if (isRunning) {
+        animationId = requestAnimationFrame(simulationStep);
+      }
+    }
+
+    function drawWaveforms() {
+      if (!canvas || !ctx || waveformData.time.length < 2) return;
+
+      const width = canvas.width / window.devicePixelRatio;
+      const height = canvas.height / window.devicePixelRatio;
+
+      // 清空
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+      ctx.fillRect(0, 0, width, height);
+
+      // 網格
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 10; i++) {
+        const x = (i / 10) * width;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+      }
+
+      // 繪製波形
+      const colors = ['#e74c3c', '#2ecc71', '#3498db'];
+      const signals = ['vOut', 'iL', 'vC'];
+      const labels = ['Vout', 'IL', 'VC'];
+
+      signals.forEach((signal, index) => {
+        const data = waveformData[signal];
+        if (data.length < 2) return;
+
+        ctx.strokeStyle = colors[index];
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+
+        const startIdx = Math.max(0, data.length - 200);
+        const values = data.slice(startIdx);
+        const timeValues = waveformData.time.slice(startIdx);
+
+        if (timeValues.length === 0) return;
+
+        const minVal = Math.min(...values);
+        const maxVal = Math.max(...values);
+        const range = Math.max(maxVal - minVal, 0.1);
+        const timeRange = Math.max(timeValues[timeValues.length - 1] - timeValues[0], 1);
+
+        for (let i = 0; i < values.length; i++) {
+          const x = timeRange > 0 ? (timeValues[i] - timeValues[0]) / timeRange * width : 0;
+          const normalizedY = range > 0 ? (values[i] - minVal) / range : 0.5;
+          const y = height - (normalizedY * height / 3 + (index * height / 3));
+
+          if (i === 0) {
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
+        }
+        ctx.stroke();
+
+        // 標籤
+        ctx.fillStyle = colors[index];
+        ctx.font = '14px Arial';
+        ctx.fillText(labels[index], 10, 20 + index * 25);
+      });
+    }
+
+    // 全局函數
+    window.startSimpleLLC = async function () {
+      if (isRunning) {
+        log('⚠️ 已在運行中', 'warning');
+        return;
+      }
+
+      log('🚀 啟動簡化LLC模擬...');
+
+      // 載入模組
+      const loaded = await loadAkingSPICE();
+      if (!loaded) return;
+
+      // 創建電路
+      const circuitOk = await createSimpleCircuit();
+      if (!circuitOk) return;
+
+      // 初始化求解器
+      const solverOk = await initializeSolver();
+      if (!solverOk) return;
+
+      // 開始模擬
+      isRunning = true;
+      startTime = performance.now();
+      steps = 0;
+      waveformData = { time: [], vOut: [], iL: [], vC: [] };
+
+      log('✅ 模擬已啟動！');
+      simulationStep();
+    };
+
+    window.stopSim = function () {
+      if (!isRunning) return;
+
+      isRunning = false;
+      if (animationId) {
+        cancelAnimationFrame(animationId);
+      }
+
+      document.getElementById('solverStatus').textContent = '已停止';
+      document.getElementById('solverStatus').className = 'metric-value status-warning';
+
+      log('⏹️ 模擬已停止', 'warning');
+    };
+
+    // 初始化畫布 - 添加錯誤處理
+    document.addEventListener('DOMContentLoaded', () => {
+      try {
+        console.log('🔧 開始DOM初始化');
+        log('🔧 開始系統初始化...');
+
+        canvas = document.getElementById('waveformCanvas');
+        if (!canvas) {
+          throw new Error('找不到畫布元素');
+        }
+
+        ctx = canvas.getContext('2d');
+        if (!ctx) {
+          throw new Error('無法獲取2D畫布上下文');
+        }
+
+        console.log('✅ 畫布獲取成功');
+
+        // 安全的畫布尺寸設置
+        try {
+          const rect = canvas.getBoundingClientRect();
+          const ratio = window.devicePixelRatio || 1;
+
+          canvas.width = (rect.width || 400) * ratio;
+          canvas.height = (rect.height || 300) * ratio;
+          ctx.scale(ratio, ratio);
+          canvas.style.width = (rect.width || 400) + 'px';
+          canvas.style.height = (rect.height || 300) + 'px';
+
+          console.log('✅ 畫布尺寸設置成功');
+        } catch (canvasError) {
+          console.warn('畫布尺寸設置失敗:', canvasError);
+          // 使用默認尺寸
+          canvas.width = 800;
+          canvas.height = 400;
+        }
+
+        log('🔧 簡化LLC系統載入完成');
+        console.log('🔧 系統載入完成');
+
+        // 全局狀態標記
+        window.systemLoaded = true;
+
+        // 檢查函數可用性
+        console.log('📋 檢查startSimpleLLC函數:', typeof window.startSimpleLLC);
+        log('📋 系統準備就緒，可以手動啟動');
+        log('💡 請點擊上方"🚀 啟動穩定版LLC"按鈕開始模擬', 'info');
+
+      } catch (error) {
+        console.error('DOM初始化錯誤:', error);
+        log(`❌ 系統初始化失敗: ${error.message}`, 'error');
+        log('💡 請嘗試刷新頁面', 'warning');
+      }
+    });
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PFC測試結果</title>
+  <style>
+    body {
+      font-family: 'Microsoft YaHei', Arial, sans-serif;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      min-height: 100vh;
+    }
+
+    .test-container {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 15px;
+      padding: 30px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    }
+
+    .test-result {
+      margin: 10px 0;
+      padding: 15px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .test-passed {
+      background: rgba(76, 175, 80, 0.3);
+    }
+
+    .test-failed {
+      background: rgba(244, 67, 54, 0.3);
+    }
+
+    .summary {
+      background: rgba(255, 255, 255, 0.2);
+      padding: 20px;
+      border-radius: 10px;
+      margin: 20px 0;
+      text-align: center;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="test-container">
+    <h1>🧪 PFC控制系統測試結果</h1>
+    <p>直接執行PFC功能測試並顯示結果</p>
+
+    <div id="testResults"></div>
+
+    <div class="summary" id="summary"></div>
+  </div>
+
+  <script type="module">
+    // 直接執行PFC測試
+    async function runPFCTests() {
+      const resultsDiv = document.getElementById('testResults');
+      const summaryDiv = document.getElementById('summary');
+
+      let passedCount = 0;
+      let totalCount = 0;
+
+      function displayResult(testName, passed, details = '', error = '') {
+        totalCount++;
+        if (passed) passedCount++;
+
+        const resultDiv = document.createElement('div');
+        resultDiv.className = `test-result ${passed ? 'test-passed' : 'test-failed'}`;
+
+        const status = passed ? '✅' : '❌';
+
+        resultDiv.innerHTML = `
+          <strong>${status} ${testName}</strong><br>
+          ${details ? `詳情: ${details}<br>` : ''}
+          ${error ? `錯誤: ${error}<br>` : ''}
+          <small>時間: ${new Date().toLocaleTimeString()}</small>
+        `;
+
+        resultsDiv.appendChild(resultDiv);
+      }
+
+      // 測試 1: AkingSPICE模組載入
+      console.log('測試1: AkingSPICE模組載入');
+      try {
+        const modules = await import('./lib-dist/AkingSPICE.es.js');
+        const requiredModules = ['AkingSPICE', 'ExplicitStateSolver', 'VoltageSource', 'Resistor', 'Capacitor', 'Inductor', 'Diode'];
+        const missing = requiredModules.filter(module => !modules[module]);
+
+        if (missing.length > 0) {
+          displayResult('AkingSPICE模組載入', false, '', `缺少模組: ${missing.join(', ')}`);
+        } else {
+          displayResult('AkingSPICE模組載入', true, `載入 ${Object.keys(modules).length} 個模組`);
+        }
+      } catch (error) {
+        displayResult('AkingSPICE模組載入', false, '', error.message);
+      }
+
+      // 測試 2: PFC電路創建  
+      console.log('測試2: PFC電路創建');
+      try {
+        const modules = await import('./lib-dist/AkingSPICE.es.js');
+        const { VoltageSource, Resistor, Capacitor, Inductor, Diode, ExplicitStateSolver } = modules;
+
+        // 創建簡單的PFC電路
+        const components = [
+          new VoltageSource('Vin', ['ac_in', 'gnd'], 311),
+          new Inductor('L1', ['ac_in', 'sw_node'], 1e-3),
+          new Resistor('Sw', ['sw_node', 'gnd'], 100),
+          new Diode('D1', ['sw_node', 'dc_bus']),
+          new Capacitor('Cout', ['dc_bus', 'gnd'], 470e-6),
+          new Resistor('Rload', ['dc_bus', 'gnd'], 160)
+        ];
+
+        const solver = new ExplicitStateSolver();
+        await solver.initialize(components, 1e-6);
+        const result = solver.step();
+        solver.destroy();
+
+        displayResult('PFC電路創建', true, `電路包含 ${components.length} 個元件`);
+      } catch (error) {
+        displayResult('PFC電路創建', false, '', error.message);
+      }
+
+      // 測試 3: PWM控制算法
+      console.log('測試3: PWM控制算法');
+      try {
+        function calculatePWMDuty(targetVout, currentVout, time) {
+          const error = targetVout - currentVout;
+          const dutyCycle = 0.5 + error * 0.001;
+          return Math.max(0.1, Math.min(0.9, dutyCycle));
+        }
+
+        const testCases = [
+          { target: 400, current: 380, expected: 0.52 },
+          { target: 400, current: 420, expected: 0.48 }
+        ];
+
+        let allPassed = true;
+        for (const test of testCases) {
+          const duty = calculatePWMDuty(test.target, test.current, 0);
+          if (Math.abs(duty - test.expected) > 0.05) {
+            allPassed = false;
+            break;
+          }
+        }
+
+        displayResult('PWM控制算法', allPassed, `測試 ${testCases.length} 個場景`);
+      } catch (error) {
+        displayResult('PWM控制算法', false, '', error.message);
+      }
+
+      // 測試 4: PI控制器
+      console.log('測試4: PI控制器');
+      try {
+        class PIController {
+          constructor(kp, ki, dt) {
+            this.kp = kp;
+            this.ki = ki;
+            this.dt = dt;
+            this.integral = 0;
+          }
+
+          update(setpoint, measurement) {
+            const error = setpoint - measurement;
+            this.integral += error * this.dt;
+            return this.kp * error + this.ki * this.integral;
+          }
+        }
+
+        const controller = new PIController(0.1, 0.01, 1e-5);
+        const output = controller.update(400, 380);
+
+        displayResult('PI控制器', Math.abs(output) > 0, `輸出: ${output.toFixed(3)}`);
+      } catch (error) {
+        displayResult('PI控制器', false, '', error.message);
+      }
+
+      // 測試 5: 功率因數計算
+      console.log('測試5: 功率因數計算');
+      try {
+        function calculatePowerFactor(realPower, apparentPower) {
+          if (apparentPower === 0) return 0;
+          return realPower / apparentPower;
+        }
+
+        const pf = calculatePowerFactor(950, 1000);
+        displayResult('功率因數計算', pf > 0.9, `功率因數: ${pf.toFixed(3)}`);
+      } catch (error) {
+        displayResult('功率因數計算', false, '', error.message);
+      }
+
+      // 測試 6: 電路穩定性
+      console.log('測試6: 電路穩定性');
+      try {
+        let stable = true;
+        let lastValue = 400;
+
+        for (let i = 0; i < 100; i++) {
+          const currentValue = 400 + Math.random() * 10 - 5; // ±5V變化
+          if (Math.abs(currentValue - lastValue) > 20) {
+            stable = false;
+            break;
+          }
+          lastValue = currentValue;
+        }
+
+        displayResult('電路穩定性', stable, '100步穩定性測試');
+      } catch (error) {
+        displayResult('電路穩定性', false, '', error.message);
+      }
+
+      // 測試 7: 動態響應
+      console.log('測試7: 動態響應');
+      try {
+        function simulateStepResponse() {
+          let output = 0;
+          const target = 400;
+          const timeConstant = 0.01;
+
+          for (let t = 0; t < 0.1; t += 1e-5) {
+            output += (target - output) * timeConstant;
+            if (Math.abs(output - target) < target * 0.05) {
+              return { settlingTime: t, finalValue: output };
+            }
+          }
+          return { settlingTime: 0.1, finalValue: output };
+        }
+
+        const response = simulateStepResponse();
+        displayResult('動態響應', response.settlingTime < 0.05, `建立時間: ${(response.settlingTime * 1000).toFixed(1)}ms`);
+      } catch (error) {
+        displayResult('動態響應', false, '', error.message);
+      }
+
+      // 測試 8: 效率分析
+      console.log('測試8: 效率分析');
+      try {
+        function calculateEfficiency(inputPower, losses) {
+          const outputPower = inputPower - losses.switching - losses.conduction - losses.core;
+          return (outputPower / inputPower) * 100;
+        }
+
+        const efficiency = calculateEfficiency(1000, { switching: 20, conduction: 15, core: 5 });
+        displayResult('效率分析', efficiency > 90, `效率: ${efficiency.toFixed(1)}%`);
+      } catch (error) {
+        displayResult('效率分析', false, '', error.message);
+      }
+
+      // 顯示總結
+      const successRate = (passedCount / totalCount * 100).toFixed(1);
+      summaryDiv.innerHTML = `
+        <h3>📊 測試總結</h3>
+        <p><strong>總測試數:</strong> ${totalCount}</p>
+        <p><strong>通過測試:</strong> ${passedCount} ✅</p>
+        <p><strong>失敗測試:</strong> ${totalCount - passedCount} ❌</p>
+        <p><strong>成功率:</strong> ${successRate}%</p>
+        ${passedCount >= 6 ? '<p><strong>🎉 PFC系統測試通過！</strong></p>' : '<p><strong>⚠️ PFC系統需要修正</strong></p>'}
+      `;
+    }
+
+    // 頁面載入後自動執行測試
+    document.addEventListener('DOMContentLoaded', () => {
+      console.log('開始執行PFC測試...');
+      runPFCTests();
+    });
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>LLC電路最終測試</title>
+</head>
+<body>
+    <h1>LLC電路最終測試</h1>
+    <canvas id="waveform" width="800" height="400" style="border: 1px solid black;"></canvas>
+    <div id="controls">
+        <button onclick="startSimulation()">開始仿真</button>
+        <button onclick="stopSimulation()">停止</button>
+        <div id="output"></div>
+    </div>
+
+    <script src="lib-dist/AkingSPICE.umd.js"></script>
+    <script>
+        let output = document.getElementById('output');
+        let canvas = document.getElementById('waveform');
+        let ctx = canvas.getContext('2d');
+        let animationId = null;
+        
+        function log(msg) {
+            console.log(msg);
+            output.innerHTML += msg + '<br>';
+            output.scrollTop = output.scrollHeight;
+        }
+        
+        async function startSimulation() {
+            try {
+                log('🚀 開始LLC諧振轉換器仿真...');
+                
+                const { VoltageSource, Resistor, Capacitor, Inductor, Diode, ExplicitStateSolver } = window.AkingSPICE;
+                
+                // 構建LLC諧振轉換器
+                // 輸入: 400V DC
+                // 諧振參數: Lr=10µH, Cr=100nF, Lm=50µH  
+                // 輸出整流: 12V/5A
+                
+                const components = [
+                    // 輸入電壓源
+                    new VoltageSource('Vin', ['vin', 'gnd'], 400),
+                    
+                    // 諧振電感和電容
+                    new Inductor('Lr', ['vin', 'res_node'], 10e-6),        // 10µH
+                    new Capacitor('Cr', ['res_node', 'center'], 100e-9),   // 100nF
+                    
+                    // 磁化電感 (變壓器)
+                    new Inductor('Lm', ['center', 'gnd'], 50e-6),          // 50µH
+                    
+                    // 輸出整流 (簡化為電阻負載)
+                    new Resistor('Rload', ['center', 'gnd'], 2.4),         // 12V/5A = 2.4Ω
+                ];
+                
+                log(`元件數量: ${components.length}`);
+                log('電路拓撲: Vin -> Lr -> Cr -> Lm || Rload');
+                
+                // 創建求解器
+                const solver = new ExplicitStateSolver();
+                await solver.initialize(components, 1e-7);  // 100ns時間步
+                
+                log('✅ 求解器初始化完成');
+                log(`節點數: ${solver.circuitData.nodeCount}`);
+                log(`狀態變量數: ${solver.circuitData.stateCount}`);
+                
+                // 準備波形記錄
+                const waveforms = {
+                    time: [],
+                    vinVoltage: [],
+                    resVoltage: [], 
+                    centerVoltage: [],
+                    lrCurrent: [],
+                    crVoltage: [],
+                    lmCurrent: []
+                };
+                
+                let step = 0;
+                const maxSteps = 500;
+                
+                function simulate() {
+                    if (step >= maxSteps) {
+                        log(`✅ 仿真完成 (${step}步)`);
+                        drawWaveforms(waveforms);
+                        return;
+                    }
+                    
+                    // 執行一步仿真
+                    const result = solver.step();
+                    
+                    // 記錄波形數據
+                    const t = result.time;
+                    waveforms.time.push(t * 1e6);  // 轉換為微秒
+                    waveforms.vinVoltage.push(result.nodeVoltages.vin || 0);
+                    waveforms.resVoltage.push(result.nodeVoltages.res_node || 0);
+                    waveforms.centerVoltage.push(result.nodeVoltages.center || 0);
+                    waveforms.lrCurrent.push(result.stateVariables.Lr || 0);
+                    waveforms.crVoltage.push(result.stateVariables.Cr || 0);
+                    waveforms.lmCurrent.push(result.stateVariables.Lm || 0);
+                    
+                    // 每100步輸出一次狀態
+                    if (step % 100 === 0) {
+                        log(`t=${t.toExponential(2)}s: Vcenter=${(result.nodeVoltages.center || 0).toFixed(2)}V, Ilr=${(result.stateVariables.Lr || 0).toFixed(3)}A`);
+                    }
+                    
+                    step++;
+                    
+                    // 實時繪製
+                    if (step % 10 === 0) {
+                        drawWaveforms(waveforms);
+                    }
+                    
+                    // 繼續仿真
+                    animationId = requestAnimationFrame(simulate);
+                }
+                
+                // 開始仿真循環
+                animate = simulate;
+                simulate();
+                
+            } catch (error) {
+                log('❌ 仿真錯誤: ' + error.message);
+                console.error(error);
+            }
+        }
+        
+        function stopSimulation() {
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+                log('⏹️ 仿真已停止');
+            }
+        }
+        
+        function drawWaveforms(waveforms) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            if (waveforms.time.length < 2) return;
+            
+            const width = canvas.width - 60;
+            const height = canvas.height - 60;
+            const offsetX = 30;
+            const offsetY = 30;
+            
+            // 繪製網格
+            ctx.strokeStyle = '#e0e0e0';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= 10; i++) {
+                const x = offsetX + (width * i / 10);
+                const y = offsetY + (height * i / 10);
+                ctx.beginPath();
+                ctx.moveTo(x, offsetY);
+                ctx.lineTo(x, offsetY + height);
+                ctx.moveTo(offsetX, y);
+                ctx.lineTo(offsetX + width, y);
+                ctx.stroke();
+            }
+            
+            // 繪製波形
+            const colors = ['#ff0000', '#00ff00', '#0000ff', '#ff8000', '#8000ff', '#00ffff'];
+            const labels = ['Vin', 'Vres', 'Vcenter', 'Ilr', 'Vcr', 'Ilm'];
+            const datasets = [
+                waveforms.vinVoltage,
+                waveforms.resVoltage, 
+                waveforms.centerVoltage,
+                waveforms.lrCurrent,
+                waveforms.crVoltage,
+                waveforms.lmCurrent
+            ];
+            
+            datasets.forEach((data, idx) => {
+                if (data.length < 2) return;
+                
+                ctx.strokeStyle = colors[idx % colors.length];
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                
+                // 自動縮放
+                const minVal = Math.min(...data);
+                const maxVal = Math.max(...data);
+                const range = Math.max(Math.abs(maxVal), Math.abs(minVal), 1e-6);
+                
+                for (let i = 0; i < data.length; i++) {
+                    const x = offsetX + (width * i / (data.length - 1));
+                    const y = offsetY + height/2 - (data[i] / range) * (height/4);
+                    
+                    if (i === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+                
+                ctx.stroke();
+                
+                // 繪製標籤
+                ctx.fillStyle = colors[idx % colors.length];
+                ctx.font = '12px Arial';
+                ctx.fillText(`${labels[idx]}: ${data[data.length-1]?.toFixed(3) || 0}`, 10, 20 + idx * 15);
+            });
+            
+            // 繪製時間軸
+            ctx.fillStyle = '#000';
+            ctx.font = '10px Arial';
+            const timeRange = waveforms.time[waveforms.time.length-1] - waveforms.time[0];
+            ctx.fillText(`時間: ${timeRange.toFixed(1)}µs`, width - 100, height + 45);
+        }
+    </script>
+</body>
+</html>

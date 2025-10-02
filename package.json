@@ -27,6 +27,7 @@
     "dev:api": "node tools/ai-dev-helper.js api",
     "dev:example": "node tools/ai-dev-helper.js example",
     "dev:cheatsheet": "node tools/ai-dev-helper.js cheatsheet",
+    "ai:onboard": "echo '🤖 AI Onboarding Guide: AI_ONBOARDING_GUIDE.md' && echo '⚡ Quick Start: AI_ASSISTANT_CONFIG.md' && echo '📚 Full Docs: docs/ folder' && echo '🧪 Run Tests: npm test'",
     "docs:serve": "echo 'Documentation available in docs/ folder'"
   },
   "keywords": [

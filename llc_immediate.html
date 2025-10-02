@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+  <meta charset="UTF-8">
+  <title>🔋 LLC立即執行版 - AkingSPICE</title>
+  <style>
+    body {
+      font-family: Arial;
+      padding: 15px;
+      background: #2c3e50;
+      color: white;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 15px;
+      border-radius: 8px;
+    }
+
+    .status {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 15px 0;
+    }
+
+    .metric {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 8px;
+      border-radius: 4px;
+      text-align: center;
+      min-width: 100px;
+    }
+
+    .metric-label {
+      font-size: 10px;
+      opacity: 0.8;
+    }
+
+    .metric-value {
+      font-size: 16px;
+      font-weight: bold;
+      color: #2ecc71;
+      margin-top: 2px;
+    }
+
+    #log {
+      height: 250px;
+      overflow-y: auto;
+      background: rgba(0, 0, 0, 0.3);
+      padding: 8px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 10px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>🔋 LLC立即執行版</h1>
+    <p>⚡ 載入後立即運行，無需等待</p>
+
+    <div class="status">
+      <div class="metric">
+        <div class="metric-label">狀態</div>
+        <div id="status" class="metric-value">載入中</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">步數</div>
+        <div id="steps" class="metric-value">0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">時間(μs)</div>
+        <div id="time" class="metric-value">0.0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">諧振電流(A)</div>
+        <div id="current" class="metric-value">0.0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">輸出電壓(V)</div>
+        <div id="voltage" class="metric-value">0.0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">功率(W)</div>
+        <div id="power" class="metric-value">0.0</div>
+      </div>
+    </div>
+
+    <h3>📋 LLC執行日誌</h3>
+    <div id="log">正在載入LLC執行系統...<br></div>
+  </div>
+
+  <script src="./lib-dist/AkingSPICE.umd.js"></script>
+
+  <script>
+    let stepCount = 0;
+
+    function log(msg, color = '#ecf0f1') {
+      const time = new Date().toLocaleTimeString();
+      document.getElementById('log').innerHTML += `<span style="color:${color};">[${time}] ${msg}</span><br>`;
+      document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+      console.log(`[${time}] ${msg}`);
+    }
+
+    // 立即執行LLC - 不使用setTimeout
+    document.addEventListener('DOMContentLoaded', function () {
+      log('🚀 LLC立即執行版啟動', '#2ecc71');
+
+      if (!window.AkingSPICE) {
+        log('❌ AkingSPICE未載入', '#e74c3c');
+        document.getElementById('status').textContent = '錯誤';
+        return;
+      }
+
+      log('✅ AkingSPICE載入成功', '#2ecc71');
+      document.getElementById('status').textContent = '初始化';
+
+      try {
+        const { VoltageSource, Resistor, Capacitor, Inductor, ExplicitStateSolver } = window.AkingSPICE;
+
+        log('🔧 創建LLC電路...', '#3498db');
+
+        // 最簡單的諧振電路
+        const components = [
+          new VoltageSource('V1', [1, 0], 12.0),        // 12V
+          new Inductor('L1', [1, 2], 100e-6),          // 100μH
+          new Capacitor('C1', [2, 3], 1e-6),           // 1μF
+          new Resistor('R1', [3, 0], 10.0)             // 10Ω
+        ];
+
+        log('✅ 組件創建完成', '#2ecc71');
+        log('   V1: 12V 電壓源', '#3498db');
+        log('   L1: 100μH 電感', '#f39c12');
+        log('   C1: 1μF 電容', '#f39c12');
+        log('   R1: 10Ω 負載', '#3498db');
+
+        // 計算諧振頻率
+        const fr = 1 / (2 * Math.PI * Math.sqrt(100e-6 * 1e-6));
+        log(`📊 理論諧振頻率: ${(fr / 1000).toFixed(1)} kHz`, '#f39c12');
+
+        log('⚙️ 初始化求解器...', '#3498db');
+        const solver = new ExplicitStateSolver();
+
+        // 使用大時間步長避免收斂問題
+        solver.initialize(components, 5e-6, {  // 5μs
+          debug: false,
+          maxIterations: 20,
+          tolerance: 1e-3
+        });
+
+        log('✅ 求解器初始化成功', '#2ecc71');
+        document.getElementById('status').textContent = '運行中';
+        document.getElementById('status').style.color = '#2ecc71';
+
+        log('🎉 開始LLC諧振模擬！', '#2ecc71');
+
+        // 立即執行模擬循環
+        executeLLCSteps(solver);
+
+      } catch (error) {
+        log(`❌ LLC初始化失敗: ${error.message}`, '#e74c3c');
+        console.error('詳細錯誤:', error);
+        document.getElementById('status').textContent = '失敗';
+        document.getElementById('status').style.color = '#e74c3c';
+      }
+    });
+
+    function executeLLCSteps(solver) {
+      log('▶️ 執行LLC模擬步驟...', '#2ecc71');
+
+      for (let i = 0; i < 100; i++) {
+        try {
+          const result = solver.step();
+          stepCount++;
+
+          const timeUs = stepCount * 5.0; // 5μs per step
+
+          // 提取電壓
+          const nodeVoltages = result.nodeVoltages || {};
+          const v1 = nodeVoltages[1] || 0;
+          const v2 = nodeVoltages[2] || 0;
+          const v3 = nodeVoltages[3] || 0;
+
+          // 計算電流和功率
+          const current = (v1 - v2) / (100e-6 / 5e-6); // I = ΔV/(L/Δt)
+          const outputVoltage = v3;
+          const power = (outputVoltage * outputVoltage) / 10.0;
+
+          // 更新顯示
+          document.getElementById('steps').textContent = stepCount;
+          document.getElementById('time').textContent = timeUs.toFixed(1);
+          document.getElementById('current').textContent = Math.abs(current).toFixed(3);
+          document.getElementById('voltage').textContent = Math.abs(outputVoltage).toFixed(2);
+          document.getElementById('power').textContent = power.toFixed(2);
+
+          // 每20步報告一次
+          if (stepCount % 20 === 0) {
+            log(`步驟 ${stepCount}: t=${timeUs.toFixed(1)}μs, I=${Math.abs(current).toFixed(3)}A, V=${Math.abs(outputVoltage).toFixed(2)}V, P=${power.toFixed(2)}W`);
+          }
+
+        } catch (error) {
+          log(`❌ 步驟 ${stepCount + 1} 失敗: ${error.message}`, '#e74c3c');
+          document.getElementById('status').textContent = '錯誤';
+          document.getElementById('status').style.color = '#e74c3c';
+          return;
+        }
+      }
+
+      // 成功完成
+      log('🏁 LLC模擬成功完成100步！', '#2ecc71');
+      log(`📊 最終狀態:`, '#f39c12');
+      log(`   電流: ${document.getElementById('current').textContent}A`, '#f39c12');
+      log(`   電壓: ${document.getElementById('voltage').textContent}V`, '#f39c12');
+      log(`   功率: ${document.getElementById('power').textContent}W`, '#f39c12');
+
+      document.getElementById('status').textContent = '完成';
+      document.getElementById('status').style.color = '#f39c12';
+    }
+
+  </script>
+</body>
+
+</html>

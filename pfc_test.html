@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PFC控制系統測試</title>
+  <style>
+    body {
+      font-family: 'Microsoft YaHei', Arial, sans-serif;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      min-height: 100vh;
+    }
+
+    .test-container {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 15px;
+      padding: 30px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    }
+
+    .test-result {
+      margin: 10px 0;
+      padding: 15px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .test-passed {
+      background: rgba(76, 175, 80, 0.3);
+    }
+
+    .test-failed {
+      background: rgba(244, 67, 54, 0.3);
+    }
+
+    .test-running {
+      background: rgba(255, 193, 7, 0.3);
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 20px;
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 10px;
+      overflow: hidden;
+      margin: 20px 0;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #4CAF50, #2196F3);
+      width: 0%;
+      transition: width 0.5s ease;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="test-container">
+    <h1>🧪 PFC控制系統自動測試</h1>
+    <p>測試功率因數校正電路的控制算法和性能</p>
+
+    <div class="progress-bar">
+      <div class="progress-fill" id="progressBar"></div>
+    </div>
+
+    <div id="testResults"></div>
+
+    <button onclick="startPFCTests()"
+      style="padding: 15px 30px; background: #4CAF50; color: white; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; margin-top: 20px;">開始測試</button>
+  </div>
+
+  <script type="module">
+    // PFC控制系統測試客戶端 (簡化版)
+    class PFCTestClient {
+      constructor() {
+        this.akingModules = null;
+        this.pfcSystem = null;
+        this.testResults = [];
+        this.currentTest = 0;
+        this.totalTests = 8;
+      }
+
+      displayResult(testName, passed, details = '', error = '') {
+        const resultsDiv = document.getElementById('testResults');
+        const resultDiv = document.createElement('div');
+        resultDiv.className = `test-result ${passed ? 'test-passed' : 'test-failed'}`;
+
+        const status = passed ? '✅' : '❌';
+        const time = Date.now();
+
+        resultDiv.innerHTML = `
+          <strong>${status} ${testName}</strong><br>
+          ${details ? `詳情: ${details}<br>` : ''}
+          ${error ? `錯誤: ${error}<br>` : ''}
+          <small>時間: ${new Date().toLocaleTimeString()}</small>
+        `;
+
+        resultsDiv.appendChild(resultDiv);
+
+        // 更新進度條
+        this.currentTest++;
+        const progress = (this.currentTest / this.totalTests) * 100;
+        document.getElementById('progressBar').style.width = `${progress}%`;
+      }
+
+      async startTests() {
+        document.getElementById('testResults').innerHTML = '';
+        this.currentTest = 0;
+
+        console.log('🚀 開始PFC控制系統測試');
+
+        const tests = [
+          { name: 'AkingSPICE模組載入', func: () => this.testModuleLoading() },
+          { name: 'PFC電路創建', func: () => this.testPFCCircuitCreation() },
+          { name: 'PWM控制算法', func: () => this.testPWMControl() },
+          { name: 'PI控制器', func: () => this.testPIController() },
+          { name: '功率因數計算', func: () => this.testPowerFactorCalculation() },
+          { name: '電路穩定性', func: () => this.testCircuitStability() },
+          { name: '動態響應', func: () => this.testDynamicResponse() },
+          { name: '效率分析', func: () => this.testEfficiencyAnalysis() }
+        ];
+
+        for (const test of tests) {
+          try {
+            console.log(`執行測試: ${test.name}`);
+            const result = await test.func();
+            this.displayResult(
+              test.name,
+              result.passed,
+              result.details ? JSON.stringify(result.details) : '',
+              result.error || ''
+            );
+
+            // 添加小延遲讓用戶看到測試進展
+            await new Promise(resolve => setTimeout(resolve, 500));
+          } catch (error) {
+            this.displayResult(test.name, false, '', error.message);
+          }
+        }
+
+        console.log('✅ PFC測試完成');
+      }
+
+      async testModuleLoading() {
+        try {
+          this.akingModules = await import('./lib-dist/AkingSPICE.es.js');
+
+          const requiredModules = ['AkingSPICE', 'ExplicitStateSolver', 'VoltageSource',
+            'Resistor', 'Capacitor', 'Inductor', 'Diode'];
+          const missing = requiredModules.filter(module => !this.akingModules[module]);
+
+          if (missing.length > 0) {
+            return { passed: false, error: `缺少模組: ${missing.join(', ')}` };
+          }
+
+          return { passed: true, details: { modulesCount: Object.keys(this.akingModules).length } };
+
+        } catch (error) {
+          return { passed: false, error: error.message };
+        }
+      }
+
+      async testPFCCircuitCreation() {
+        try {
+          if (!this.akingModules) {
+            return { passed: false, error: '模組未載入' };
+          }
+
+          const { VoltageSource, Resistor, Capacitor, Inductor, Diode, ExplicitStateSolver } = this.akingModules;
+
+          // 創建PFC電路
+          const components = [];
+
+          // AC電壓源
+          components.push(new VoltageSource('Vin', ['ac_in', 'gnd'], 311)); // 220V RMS
+
+          // PFC電感
+          components.push(new Inductor('L1', ['ac_in', 'sw_node'], 1e-3)); // 1mH
+
+          // 開關電阻
+          components.push(new Resistor('Sw', ['sw_node', 'gnd'], 100));
+
+          // 整流二極體
+          components.push(new Diode('D1', ['sw_node', 'dc_bus']));
+
+          // 輸出電容
+          components.push(new Capacitor('Cout', ['dc_bus', 'gnd'], 470e-6)); // 470µF
+
+          // 負載電阻
+          components.push(new Resistor('Rload', ['dc_bus', 'gnd'], 160)); // 1kW @ 400V
+
+          // 創建求解器
+          const solver = new ExplicitStateSolver();
+          await solver.initialize(components, 1e-6);
+
+          // 測試一步計算
+          const result = solver.step();
+
+          solver.destroy();
+
+          return {
+            passed: true,
+            details: {
+              componentsCount: components.length,
+              nodeVoltages: Object.keys(result.nodeVoltages || {}).length
+            }
+          };
+
+        } catch (error) {
+          return { passed: false, error: error.message };
+        }
+      }
+
+      async testPWMControl() {
+        try {
+          // 測試PWM控制算法
+          const pwmController = {
+            switchFreq: 50000,
+            targetVout: 400,
+            kp: 0.1,
+
+            calculateDuty: function (vout, time) {
+              const error = this.targetVout - vout;
+              let duty = 0.5 + error * this.kp * 0.001;
+              return Math.max(0.1, Math.min(0.9, duty));
+            }
+          };
+
+          // 測試不同輸出電壓下的占空比
+          const testCases = [
+            { vout: 350, expectedRange: [0.5, 0.9] },
+            { vout: 400, expectedRange: [0.3, 0.7] },
+            { vout: 450, expectedRange: [0.1, 0.5] }
+          ];
+
+          for (const testCase of testCases) {
+            const duty = pwmController.calculateDuty(testCase.vout, 0);
+
+            if (duty < testCase.expectedRange[0] || duty > testCase.expectedRange[1]) {
+              return {
+                passed: false,
+                error: `PWM占空比異常: Vout=${testCase.vout}V, Duty=${duty.toFixed(3)}`
+              };
+            }
+          }
+
+          return {
+            passed: true,
+            details: {
+              testCases: testCases.length,
+              switchFreq: pwmController.switchFreq
+            }
+          };
+
+        } catch (error) {
+          return { passed: false, error: error.message };
+        }
+      }
+
+      async testPIController() {
+        try {
+          // 測試PI控制器
+          class PIController {
+            constructor(kp, ki, dt) {
+              this.kp = kp;
+              this.ki = ki;
+              this.dt = dt;
+              this.integral = 0;
+              this.lastError = 0;
+            }
+
+            update(setpoint, measurement) {
+              const error = setpoint - measurement;
+              this.integral += error * this.dt;
+
+              // 積分限制
+              this.integral = Math.max(-1, Math.min(1, this.integral));
+
+              const output = this.kp * error + this.ki * this.integral;
+              this.lastError = error;
+
+              return output;
+            }
+
+            reset() {
+              this.integral = 0;
+              this.lastError = 0;
+            }
+          }
+
+          const pi = new PIController(0.1, 10, 1e-6);
+
+          // 測試階躍響應
+          let output = 350; // 初始輸出電壓
+          const setpoint = 400; // 目標電壓
+
+          for (let i = 0; i < 1000; i++) {
+            const control = pi.update(setpoint, output);
+            // 簡化的系統響應 - 更強的響應
+            output += control * 0.05;
+          }
+
+          // 檢查是否收斂到設定值
+          const steadyStateError = Math.abs(setpoint - output);
+
+          if (steadyStateError > 5) {
+            return {
+              passed: false,
+              error: `PI控制器未收斂: 誤差=${steadyStateError.toFixed(2)}V`
+            };
+          }
+
+          return {
+            passed: true,
+            details: {
+              finalOutput: output.toFixed(2),
+              steadyStateError: steadyStateError.toFixed(2)
+            }
+          };
+
+        } catch (error) {
+          return { passed: false, error: error.message };
+        }
+      }
+
+      async testPowerFactorCalculation() {
+        try {
+          // 測試功率因數計算
+          function calculatePowerFactor(vRMS, iRMS, realPower) {
+            const apparentPower = vRMS * iRMS;
+            if (apparentPower === 0) return 0;
+
+            const pf = realPower / apparentPower;
+            return Math.max(0, Math.min(1, pf));
+          }
+
+          const testCases = [
+            { vRMS: 220, iRMS: 4.55, realPower: 1000, expected: 1.0 },
+            { vRMS: 220, iRMS: 5.0, realPower: 1000, expected: 0.91 },
+            { vRMS: 220, iRMS: 6.0, realPower: 1000, expected: 0.76 }
+          ];
+
+          for (const testCase of testCases) {
+            const pf = calculatePowerFactor(testCase.vRMS, testCase.iRMS, testCase.realPower);
+            const error = Math.abs(pf - testCase.expected);
+
+            if (error > 0.05) {
+              return {
+                passed: false,
+                error: `功率因數計算錯誤: 期望=${testCase.expected}, 實際=${pf.toFixed(3)}`
+              };
+            }
+          }
+
+          return {
+            passed: true,
+            details: { testCasesCount: testCases.length }
+          };
+
+        } catch (error) {
+          return { passed: false, error: error.message };
+        }
+      }
+
+      async testCircuitStability() {
+        try {
+          if (!this.akingModules) {
+            return { passed: false, error: '模組未載入' };
+          }
+
+          const { VoltageSource, Resistor, Capacitor, Inductor, ExplicitStateSolver } = this.akingModules;
+
+          // 創建簡化的RLC電路來測試數值穩定性
+          const components = [
+            new VoltageSource('V1', ['vin', 'gnd'], 400),
+            new Resistor('R1', ['vin', 'vout'], 100),
+            new Inductor('L1', ['vout', 'node2'], 1e-3),
+            new Capacitor('C1', ['node2', 'gnd'], 470e-6)
+          ];
+
+          const solver = new ExplicitStateSolver();
+          await solver.initialize(components, 1e-6);
+
+          // 運行1000步檢查穩定性
+          let maxVoltage = 0;
+          let unstable = false;
+
+          for (let i = 0; i < 1000; i++) {
+            const result = solver.step();
+
+            // 檢查所有節點電壓
+            for (const [node, voltage] of Object.entries(result.nodeVoltages || {})) {
+              if (isNaN(voltage) || Math.abs(voltage) > 10000) {
+                unstable = true;
+                break;
+              }
+              maxVoltage = Math.max(maxVoltage, Math.abs(voltage));
+            }
+
+            if (unstable) break;
+          }
+
+          solver.destroy();
+
+          if (unstable) {
+            return { passed: false, error: '電路數值不穩定' };
+          }
+
+          return {
+            passed: true,
+            details: {
+              maxVoltage: maxVoltage.toFixed(2),
+              simulationSteps: 1000
+            }
+          };
+
+        } catch (error) {
+          return { passed: false, error: error.message };
+        }
+      }
+
+      async testDynamicResponse() {
+        try {
+          // 測試系統動態響應特性
+          function simulateStepResponse(transferFunction, steps) {
+            const response = [];
+            let y = 0; // 初始輸出
+
+            for (let i = 0; i < steps; i++) {
+              // 簡化的一階系統：y(n+1) = a*y(n) + b*u(n)
+              const u = i > 10 ? 1 : 0; // 階躍輸入
+              y = transferFunction.a * y + transferFunction.b * u;
+              response.push(y);
+            }
+
+            return response;
+          }
+
+          // PFC系統近似為一階系統
+          const pfcSystem = { a: 0.99, b: 0.01 };
+          const response = simulateStepResponse(pfcSystem, 100);
+
+          // 檢查響應特性
+          const finalValue = response[response.length - 1];
+          const settlingTime = response.findIndex(val => Math.abs(val - finalValue) < 0.02 * finalValue);
+
+          if (settlingTime === -1 || settlingTime > 95) {
+            return {
+              passed: false,
+              error: `系統響應過慢: 建立時間=${settlingTime || 'N/A'}步`
+            };
+          }
+
+          return {
+            passed: true,
+            details: {
+              settlingTime: settlingTime,
+              finalValue: finalValue.toFixed(3)
+            }
+          };
+
+        } catch (error) {
+          return { passed: false, error: error.message };
+        }
+      }
+
+      async testEfficiencyAnalysis() {
+        try {
+          // 測試效率分析功能
+          function calculateEfficiency(inputPower, outputPower, losses) {
+            if (inputPower <= 0) return 0;
+
+            const theoreticalOutput = inputPower - losses.switching - losses.conduction - losses.core;
+            const efficiency = (theoreticalOutput / inputPower) * 100;
+
+            return Math.max(0, Math.min(100, efficiency));
+          }
+
+          const testScenarios = [
+            {
+              inputPower: 1000,
+              losses: { switching: 20, conduction: 15, core: 5 },
+              expectedMin: 94
+            },
+            {
+              inputPower: 500,
+              losses: { switching: 15, conduction: 10, core: 3 },
+              expectedMin: 92
+            }
+          ];
+
+          for (const scenario of testScenarios) {
+            const efficiency = calculateEfficiency(scenario.inputPower, 0, scenario.losses);
+
+            if (efficiency < scenario.expectedMin) {
+              return {
+                passed: false,
+                error: `效率過低: ${efficiency.toFixed(1)}% < ${scenario.expectedMin}%`
+              };
+            }
+          }
+
+          return {
+            passed: true,
+            details: {
+              testScenarios: testScenarios.length,
+              averageEfficiency: testScenarios.map(s =>
+                calculateEfficiency(s.inputPower, 0, s.losses)
+              ).reduce((a, b) => a + b) / testScenarios.length
+            }
+          };
+
+        } catch (error) {
+          return { passed: false, error: error.message };
+        }
+      }
+    }
+
+    // 全局變量和函數
+    let pfcTestClient = null;
+
+    window.startPFCTests = async function () {
+      if (!pfcTestClient) {
+        pfcTestClient = new PFCTestClient();
+      }
+      await pfcTestClient.startTests();
+    };
+
+    // 頁面載入完成後初始化並自動開始測試
+    document.addEventListener('DOMContentLoaded', async () => {
+      pfcTestClient = new PFCTestClient();
+      console.log('PFC測試系統已初始化');
+
+      // 自動開始測試（延遲1秒讓頁面完全載入）
+      setTimeout(async () => {
+        console.log('自動開始PFC測試...');
+        await startPFCTests();
+      }, 1000);
+    });
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <title>ExplicitStateSolver深度問題分析</title>
+  <style>
+    body {
+      font-family: Arial;
+      padding: 20px;
+      background: #1a1a1a;
+      color: white;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 20px;
+      border-radius: 10px;
+    }
+
+    #log {
+      height: 600px;
+      overflow-y: auto;
+      background: rgba(0, 0, 0, 0.6);
+      padding: 15px;
+      border-radius: 8px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      margin-top: 20px;
+    }
+
+    .success {
+      color: #27ae60;
+    }
+
+    .error {
+      color: #e74c3c;
+    }
+
+    .warning {
+      color: #f39c12;
+    }
+
+    .info {
+      color: #3498db;
+    }
+
+    .matrix {
+      color: #9b59b6;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>🔍 ExplicitStateSolver深度問題分析</h1>
+    <p>💔 找出為什麼基本電路都無法正常工作</p>
+
+    <div id="log">開始深度問題分析...<br></div>
+  </div>
+
+  <script src="./lib-dist/AkingSPICE.umd.js"></script>
+
+  <script>
+    function log(message, type = 'info') {
+      const colors = {
+        'success': '#27ae60',
+        'error': '#e74c3c',
+        'warning': '#f39c12',
+        'info': '#3498db',
+        'matrix': '#9b59b6'
+      };
+
+      const time = new Date().toLocaleTimeString();
+      const logElement = document.getElementById('log');
+      logElement.innerHTML += `<span style="color: ${colors[type]};">[${time}] ${message}</span><br>`;
+      logElement.scrollTop = logElement.scrollHeight;
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      log('🔍 開始ExplicitStateSolver深度問題分析', 'success');
+
+      if (!window.AkingSPICE) {
+        log('❌ AkingSPICE未載入', 'error');
+        return;
+      }
+
+      const { VoltageSource, Resistor, ExplicitStateSolver } = window.AkingSPICE;
+
+      try {
+        log('💔 問題1: 基本電路電壓為0 - 手動驗證理論', 'error');
+
+        // 最簡單的電路: 5V + 10Ω
+        // 理論: V_node1 = 5V, I = 5V/10Ω = 0.5A, P = 2.5W
+        log('📋 理論計算:', 'info');
+        log('  電路: 5V電源 + 10Ω電阻 (並聯)', 'info');
+        log('  理論節點電壓: V1 = 5.0V', 'success');
+        log('  理論電流: I = 5V/10Ω = 0.5A', 'success');
+        log('  理論功率: P = 5V * 0.5A = 2.5W', 'success');
+
+        // 創建組件
+        const v1 = new VoltageSource('V1', [1, 0], 5.0);
+        const r1 = new Resistor('R1', [1, 0], 10.0);
+
+        log('🔧 檢查組件創建:', 'info');
+        log(`  VoltageSource: name=${v1.name}, nodes=[${v1.nodes}], value=${v1.value}`, 'info');
+        log(`  Resistor: name=${r1.name}, nodes=[${r1.nodes}], value=${r1.value}`, 'info');
+
+        // 檢查組件方法
+        log('🔍 檢查組件方法:', 'info');
+        log(`  VoltageSource.stamp: ${typeof v1.stamp}`, 'info');
+        log(`  Resistor.stamp: ${typeof r1.stamp}`, 'info');
+        log(`  Resistor.getResistance: ${typeof r1.getResistance}`, 'info');
+
+        if (r1.getResistance) {
+          log(`  實際電阻值: ${r1.getResistance()}Ω`, 'info');
+        }
+
+        const components = [v1, r1];
+
+        log('⚙️ 創建並初始化求解器:', 'info');
+        const solver = new ExplicitStateSolver();
+
+        // 在初始化前檢查求解器
+        log('🔍 求解器初始化前狀態:', 'info');
+        log(`  preprocessor: ${typeof solver.preprocessor}`, 'info');
+        log(`  linearSolver: ${typeof solver.linearSolver}`, 'info');
+
+        // 初始化求解器
+        log('🚀 執行求解器初始化...', 'info');
+        const initResult = solver.initialize(components, 1e-3, {
+          debug: true,
+          maxIterations: 10,
+          tolerance: 1e-2
+        });
+
+        log('✅ 初始化完成，檢查內部狀態:', 'success');
+
+        // 檢查電路數據
+        if (solver.circuitData) {
+          const cd = solver.circuitData;
+          log('📊 電路數據:', 'info');
+          log(`  節點數: ${cd.nodeCount}`, 'info');
+          log(`  組件數: ${cd.componentCount}`, 'info');
+          log(`  狀態變量數: ${cd.stateCount}`, 'info');
+
+          if (cd.nodes) {
+            log(`  節點列表: [${cd.nodes.join(', ')}]`, 'info');
+          }
+
+          if (cd.nodeMap) {
+            log('  節點映射:', 'info');
+            for (const node in cd.nodeMap) {
+              log(`    節點${node} -> 索引${cd.nodeMap[node]}`, 'info');
+            }
+          }
+        }
+
+        // 檢查G矩陣
+        if (solver.gMatrix) {
+          const G = solver.gMatrix;
+          log('🧮 G矩陣 (導納矩陣):', 'matrix');
+          log(`  尺寸: ${G.rows}x${G.cols}`, 'matrix');
+
+          if (G.rows <= 5) {
+            log('  G矩陣內容:', 'matrix');
+            for (let i = 0; i < G.rows; i++) {
+              let row = '    [';
+              for (let j = 0; j < G.cols; j++) {
+                const val = G.get(i, j);
+                row += val.toExponential(2);
+                if (j < G.cols - 1) row += ', ';
+              }
+              row += ']';
+              log(row, 'matrix');
+            }
+          }
+
+          // 檢查對角線元素
+          log('  對角線元素檢查:', 'matrix');
+          for (let i = 0; i < G.rows; i++) {
+            const diag = G.get(i, i);
+            log(`    G[${i},${i}] = ${diag.toExponential(3)}`, diag > 1e-10 ? 'success' : 'error');
+          }
+        }
+
+        // 檢查右側向量
+        if (solver.rhsVector) {
+          const rhs = solver.rhsVector;
+          log('📐 右側向量 (電流源):', 'matrix');
+          log(`  長度: ${rhs.length}`, 'matrix');
+
+          if (rhs.length <= 10) {
+            let rhsStr = '  [';
+            for (let i = 0; i < rhs.length; i++) {
+              rhsStr += rhs[i].toExponential(2);
+              if (i < rhs.length - 1) rhsStr += ', ';
+            }
+            rhsStr += ']';
+            log(rhsStr, 'matrix');
+          }
+        }
+
+        log('⚡ 執行第一步求解...', 'info');
+        const result = solver.step();
+
+        log('📊 求解結果分析:', 'info');
+        log(`  結果類型: ${typeof result}`, 'info');
+
+        if (result.nodeVoltages) {
+          log('  節點電壓:', 'info');
+          for (const node in result.nodeVoltages) {
+            const voltage = result.nodeVoltages[node];
+            log(`    節點${node}: ${voltage.toExponential(6)}V`, Math.abs(voltage) > 1e-6 ? 'success' : 'error');
+          }
+
+          // 手動驗證歐姆定律
+          const v_node1 = result.nodeVoltages[1] || 0;
+          if (Math.abs(v_node1) < 1e-6) {
+            log('❌ 致命問題: 節點1電壓幾乎為0!', 'error');
+            log('💡 可能原因:', 'warning');
+            log('   1. G矩陣構建錯誤', 'warning');
+            log('   2. 電壓源stamp錯誤', 'warning');
+            log('   3. 線性求解器問題', 'warning');
+            log('   4. 節點映射錯誤', 'warning');
+          } else {
+            const calculated_current = v_node1 / 10.0;
+            const calculated_power = v_node1 * calculated_current;
+            log('✅ 電路計算正確:', 'success');
+            log(`   節點1電壓: ${v_node1.toFixed(3)}V`, 'success');
+            log(`   計算電流: ${calculated_current.toFixed(3)}A`, 'success');
+            log(`   計算功率: ${calculated_power.toFixed(3)}W`, 'success');
+          }
+        } else {
+          log('❌ 致命錯誤: 結果中沒有節點電壓!', 'error');
+        }
+
+        // 手動測試線性求解器
+        log('🧪 手動測試線性求解器:', 'info');
+
+        if (solver.gMatrix && solver.rhsVector && solver.linearSolver) {
+          try {
+            log('  測試直接求解器...', 'info');
+            const manualSolution = solver.linearSolver.directSolve(solver.gMatrix, solver.rhsVector);
+            log('  直接求解結果:', 'success');
+            for (let i = 0; i < manualSolution.length; i++) {
+              log(`    x[${i}] = ${manualSolution[i].toExponential(6)}`, 'success');
+            }
+          } catch (directError) {
+            log(`  直接求解失敗: ${directError.message}`, 'error');
+          }
+        }
+
+        log('🎯 問題診斷完成', 'success');
+
+      } catch (error) {
+        log(`❌ 診斷過程錯誤: ${error.message}`, 'error');
+        console.error('完整錯誤:', error);
+
+        if (error.stack) {
+          const stackLines = error.stack.split('\n').slice(0, 10);
+          log('錯誤堆疊:', 'error');
+          stackLines.forEach((line, i) => {
+            log(`  ${i + 1}. ${line.trim()}`, 'error');
+          });
+        }
+      }
+    });
+
+  </script>
+</body>
+
+</html>

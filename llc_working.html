@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🔋 LLC成功版 - AkingSPICE</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 20px;
+      border-radius: 15px;
+      backdrop-filter: blur(10px);
+    }
+
+    .btn {
+      padding: 12px 24px;
+      margin: 8px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: bold;
+      transition: all 0.3s;
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin: 20px 0;
+    }
+
+    .metric {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 15px;
+      border-radius: 10px;
+      text-align: center;
+    }
+
+    .metric-label {
+      font-size: 14px;
+      opacity: 0.8;
+      margin-bottom: 5px;
+    }
+
+    .metric-value {
+      font-size: 24px;
+      font-weight: bold;
+    }
+
+    .status-running {
+      color: #2ecc71;
+    }
+
+    .status-stopped {
+      color: #e74c3c;
+    }
+
+    .status-warning {
+      color: #f39c12;
+    }
+
+    #waveformCanvas {
+      width: 100%;
+      height: 300px;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.1);
+    }
+
+    #log {
+      height: 200px;
+      overflow-y: auto;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      border-radius: 10px;
+      padding: 15px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      background: rgba(0, 0, 0, 0.3);
+      margin-top: 20px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>🔋 LLC成功版 - AkingSPICE</h1>
+    <p>⚡ 最簡電路: Vin → L → C → R 諧振電路</p>
+
+    <div style="text-align: center; margin: 20px 0;">
+      <button class="btn" style="background:#27ae60;color:white" onclick="startLLC()">🚀 啟動LLC</button>
+      <button class="btn" style="background:#e74c3c;color:white" onclick="stopLLC()">⏹️ 停止</button>
+    </div>
+
+    <h3>📊 AkingSPICE求解器狀態</h3>
+    <div class="status-grid">
+      <div class="metric">
+        <div class="metric-label">求解器狀態</div>
+        <div id="status" class="metric-value status-stopped">未啟動</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">時間步數</div>
+        <div id="steps" class="metric-value">0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">模擬時間 (μs)</div>
+        <div id="time" class="metric-value">0.0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">求解速度 (步/秒)</div>
+        <div id="speed" class="metric-value">0</div>
+      </div>
+    </div>
+
+    <h3>📈 AkingSPICE波形</h3>
+    <canvas id="canvas"></canvas>
+
+    <h3>📋 系統日誌</h3>
+    <div id="log">正在初始化系統...</div>
+  </div>
+
+  <script type="module">
+    console.log('🚀 腳本開始執行 - Version 2.0');
+
+    // 全局變量
+    let isRunning = false;
+    let steps = 0;
+    let startTime = 0;
+    let solver = null;
+    let AkingSPICE = null;
+
+    // 日誌函數
+    function log(msg, type = 'info') {
+      const colors = { info: '#ecf0f1', error: '#e74c3c', success: '#2ecc71', warning: '#f39c12' };
+      const time = new Date().toLocaleTimeString();
+
+      console.log(`[${time}] ${msg}`);
+
+      const logDiv = document.getElementById('log');
+      logDiv.innerHTML += `<div style="color:${colors[type]}; margin:2px 0;">[${time}] ${msg}</div>`;
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    // 主啟動函數
+    window.startLLC = async function () {
+      if (isRunning) {
+        log('⚠️ 已在運行中');
+        return;
+      }
+
+      try {
+        log('🚀 開始啟動LLC模擬...', 'success');
+
+        // 1. 載入模組
+        log('📦 載入AkingSPICE...');
+        const module = await import('./lib-dist/AkingSPICE.es.js');
+        // AkingSPICE = module.default;  // 不需要這行
+        log('✅ AkingSPICE載入成功');
+
+        // 2. 創建電路
+        log('🔧 創建電路...');
+        const { VoltageSource, Inductor, Capacitor, Resistor } = module;
+        const components = [
+          new VoltageSource('V1', [1, 0], 400.0),
+          new Inductor('L1', [1, 2], 50e-6),
+          new Capacitor('C1', [2, 3], 100e-9),
+          new Resistor('R1', [3, 0], 4.8)
+        ];
+        log('✅ 電路創建成功');
+
+        // 3. 初始化求解器
+        log('⚙️ 初始化求解器...');
+        const { ExplicitStateSolver } = module;
+        solver = new ExplicitStateSolver();
+        await solver.initialize(components, 1e-6);
+        log('✅ 求解器初始化成功');
+
+        // 4. 開始模擬
+        isRunning = true;
+        steps = 0;
+        startTime = performance.now();
+        document.getElementById('status').textContent = '運行中';
+        document.getElementById('status').className = 'metric-value status-running';
+
+        log('🎉 模擬已啟動！', 'success');
+
+        // 運行模擬循環
+        runStep();
+
+      } catch (error) {
+        log(`❌ 啟動失敗: ${error.message}`, 'error');
+        console.error('詳細錯誤:', error);
+      }
+    };
+
+    // 模擬步驟
+    function runStep() {
+      if (!isRunning) return;
+
+      try {
+        const result = solver.step();
+        steps++;
+
+        // 更新狀態
+        document.getElementById('steps').textContent = steps;
+        document.getElementById('time').textContent = (steps * 1e-6 * 1e6).toFixed(1);
+
+        const elapsed = (performance.now() - startTime) / 1000;
+        const speed = elapsed > 0 ? Math.round(steps / elapsed) : 0;
+        document.getElementById('speed').textContent = speed;
+
+        // 每100步輸出一次結果
+        if (steps % 100 === 0) {
+          const vOut = result.nodeVoltages[3] || 0;
+          log(`步驟 ${steps}: V_out = ${vOut.toFixed(3)}V`);
+        }
+
+        // 繼續下一步
+        if (steps < 10000) { // 限制最大步數
+          requestAnimationFrame(runStep);
+        } else {
+          log('🏁 模擬完成（達到最大步數）', 'success');
+          stopLLC();
+        }
+
+      } catch (error) {
+        log(`❌ 模擬錯誤: ${error.message}`, 'error');
+        stopLLC();
+      }
+    }
+
+    // 停止函數
+    window.stopLLC = function () {
+      isRunning = false;
+      document.getElementById('status').textContent = '已停止';
+      document.getElementById('status').className = 'metric-value status-stopped';
+      log('⏹️ 模擬已停止', 'warning');
+    };
+
+    // DOM載入完成後執行
+    document.addEventListener('DOMContentLoaded', function () {
+      console.log('✅ DOM載入完成');
+      log('🔧 系統載入完成', 'success');
+      log('💡 點擊"啟動LLC"按鈕開始模擬');
+
+      // 直接嘗試自動啟動
+      log('🚀 嘗試自動啟動...');
+      startLLC();
+    });
+
+    console.log('📝 腳本設置完成');
+  </script>
+</body>
+
+</html>

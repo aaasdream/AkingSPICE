@@ -14,13 +14,13 @@ export class Resistor extends LinearTwoTerminal {
      */
     constructor(name, nodes, resistance, params = {}) {
         super(name, 'R', nodes, resistance, params);
-        
+
         // 電阻特定參數
         this.tc1 = params.tc1 || 0;      // 一次溫度係數 (1/°C)
         this.tc2 = params.tc2 || 0;      // 二次溫度係數 (1/°C²)
         this.tnom = params.tnom || 27;   // 標稱溫度 (°C)
         this.powerRating = params.power || Infinity; // 額定功率 (W)
-        
+
         // 計算當前溫度下的電阻值
         this.updateTemperatureCoefficient();
     }
@@ -43,7 +43,7 @@ export class Resistor extends LinearTwoTerminal {
     }
 
     // ==================== 顯式狀態更新法接口 ====================
-    
+
     /**
      * 電阻預處理 - 添加導納到G矩陣
      * @param {CircuitPreprocessor} preprocessor 預處理器
@@ -52,10 +52,10 @@ export class Resistor extends LinearTwoTerminal {
         // 獲取節點索引
         const node1 = preprocessor.getNodeIndex(this.nodes[0]);
         const node2 = preprocessor.getNodeIndex(this.nodes[1]);
-        
+
         // 計算電導
         const conductance = this.getConductance();
-        
+
         // 添加到G矩陣: G[i,i] += G, G[j,j] += G, G[i,j] -= G, G[j,i] -= G
         if (node1 >= 0) {
             preprocessor.addConductance(node1, node1, conductance);
@@ -63,7 +63,7 @@ export class Resistor extends LinearTwoTerminal {
                 preprocessor.addConductance(node1, node2, -conductance);
             }
         }
-        
+
         if (node2 >= 0) {
             preprocessor.addConductance(node2, node2, conductance);
             if (node1 >= 0) {
@@ -103,13 +103,25 @@ export class Resistor extends LinearTwoTerminal {
      */
     updateHistory(nodeVoltages, branchCurrents) {
         super.updateHistory(nodeVoltages, branchCurrents);
-        
+
         // 計算並存儲電流
         const current = this.getCurrent(nodeVoltages);
         this.previousValues.set('current', current);
-        
+
         // 計算功耗
         this.operatingPoint.power = this.operatingPoint.voltage * current;
+    }
+
+    /**
+     * 更新RHS向量 - 電阻不貢獻電流源項
+     * @param {Float32Array} rhsVector RHS向量
+     * @param {Float32Array} stateVector 狀態向量
+     * @param {number} time 當前時間
+     * @param {Object} componentData 元件數據
+     */
+    updateRHS(rhsVector, stateVector, time, componentData) {
+        // 電阻不產生電流源，所以不需要修改RHS向量
+        // 這個方法存在是為了滿足ExplicitStateSolver的接口要求
     }
 
     /**
@@ -148,7 +160,7 @@ export class Resistor extends LinearTwoTerminal {
     toString() {
         const resistance = this.getResistance();
         let resistanceStr;
-        
+
         // 格式化電阻值顯示
         if (resistance >= 1e6) {
             resistanceStr = `${(resistance / 1e6).toFixed(2)}MΩ`;
@@ -157,7 +169,7 @@ export class Resistor extends LinearTwoTerminal {
         } else {
             resistanceStr = `${resistance.toFixed(2)}Ω`;
         }
-        
+
         return `${this.name}: ${this.nodes[0]}-${this.nodes[1]} ${resistanceStr}`;
     }
 }
@@ -178,7 +190,7 @@ export class Potentiometer extends Resistor {
         if (nodes.length !== 3) {
             throw new Error('Potentiometer must have exactly 3 nodes');
         }
-        
+
         super(name, [nodes[0], nodes[2]], totalResistance, params);
         this.type = 'POT';
         this.nodes = [...nodes]; // [端子1, 滑動端, 端子2]

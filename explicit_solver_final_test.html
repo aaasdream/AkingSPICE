@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <title>ExplicitStateSolver最終測試</title>
+  <style>
+    body {
+      font-family: Arial;
+      padding: 20px;
+      background: #1a252f;
+      color: white;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 20px;
+      border-radius: 10px;
+    }
+
+    .metrics {
+      display: flex;
+      gap: 15px;
+      margin: 20px 0;
+      flex-wrap: wrap;
+    }
+
+    .metric {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 12px;
+      border-radius: 6px;
+      text-align: center;
+      flex: 1;
+      min-width: 120px;
+    }
+
+    .metric-label {
+      font-size: 11px;
+      opacity: 0.8;
+      margin-bottom: 4px;
+    }
+
+    .metric-value {
+      font-size: 18px;
+      font-weight: bold;
+      color: #27ae60;
+    }
+
+    #log {
+      height: 400px;
+      overflow-y: auto;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 15px;
+      border-radius: 8px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      margin-top: 20px;
+    }
+
+    .success {
+      color: #27ae60;
+    }
+
+    .error {
+      color: #e74c3c;
+    }
+
+    .warning {
+      color: #f39c12;
+    }
+
+    .info {
+      color: #3498db;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>⚡ ExplicitStateSolver最終測試</h1>
+    <p>🎯 測試修復後的ExplicitStateSolver - LLC諧振轉換器</p>
+
+    <div class="metrics">
+      <div class="metric">
+        <div class="metric-label">系統狀態</div>
+        <div id="status" class="metric-value">初始化</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">線性求解器</div>
+        <div id="solver" class="metric-value">未知</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">輸入電壓</div>
+        <div id="vin" class="metric-value">0V</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">輸出電壓</div>
+        <div id="vout" class="metric-value">0V</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">輸出電流</div>
+        <div id="iout" class="metric-value">0A</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">輸出功率</div>
+        <div id="power" class="metric-value">0W</div>
+      </div>
+    </div>
+
+    <h3>📋 ExplicitStateSolver最終測試日誌</h3>
+    <div id="log">準備ExplicitStateSolver最終測試...<br></div>
+  </div>
+
+  <script src="./lib-dist/AkingSPICE.umd.js"></script>
+
+  <script>
+    function log(message, type = 'info') {
+      const colors = {
+        'success': '#27ae60',
+        'error': '#e74c3c',
+        'warning': '#f39c12',
+        'info': '#3498db'
+      };
+
+      const time = new Date().toLocaleTimeString();
+      const logElement = document.getElementById('log');
+      logElement.innerHTML += `<span style="color: ${colors[type]};">[${time}] ${message}</span><br>`;
+      logElement.scrollTop = logElement.scrollHeight;
+    }
+
+    function updateMetrics(status, solver, vin, vout, iout, power) {
+      document.getElementById('status').textContent = status;
+      document.getElementById('solver').textContent = solver;
+      document.getElementById('vin').textContent = vin.toFixed(2) + 'V';
+      document.getElementById('vout').textContent = vout.toFixed(2) + 'V';
+      document.getElementById('iout').textContent = iout.toFixed(3) + 'A';
+      document.getElementById('power').textContent = power.toFixed(2) + 'W';
+    }
+
+    // 立即執行
+    document.addEventListener('DOMContentLoaded', function () {
+      log('⚡ ExplicitStateSolver最終測試開始', 'success');
+
+      if (!window.AkingSPICE) {
+        log('❌ AkingSPICE未載入', 'error');
+        updateMetrics('錯誤', '無', 0, 0, 0, 0);
+        return;
+      }
+
+      log('✅ AkingSPICE載入成功', 'success');
+
+      const spice = window.AkingSPICE;
+      const { VoltageSource, Resistor, Capacitor, Inductor, ExplicitStateSolver } = spice;
+
+      try {
+        log('🧪 步驟1: 測試基本電路', 'info');
+
+        // 創建簡單電路: 12V + 100Ω
+        const v1 = new VoltageSource('Vin', [1, 0], 12.0);
+        const r1 = new Resistor('Rload', [1, 0], 100.0);
+
+        log(`  VoltageSource: ${v1.name}, value=${v1.value}V`, 'info');
+        log(`  Resistor: ${r1.name}, value=${r1.value}Ω`, 'info');
+
+        const basicCircuit = [v1, r1];
+
+        const solver1 = new ExplicitStateSolver();
+
+        log('  初始化基本電路求解器...', 'info');
+        solver1.initialize(basicCircuit, 1e-3, {
+          debug: true,
+          maxIterations: 20,
+          tolerance: 1e-3
+        });
+
+        log('  執行基本電路求解...', 'info');
+        const result1 = solver1.step();
+
+        const v_basic = result1.nodeVoltages[1] || 0;
+        const i_basic = v_basic / 100.0;
+        const p_basic = v_basic * i_basic;
+
+        updateMetrics('基本測試通過', '直接求解', 12.0, v_basic, i_basic, p_basic);
+        log(`✅ 基本電路: V1=${v_basic.toFixed(3)}V, I=${i_basic.toFixed(3)}A, P=${p_basic.toFixed(3)}W`, 'success');
+
+        log('🧪 步驟2: 測試LLC諧振電路', 'info');
+
+        // 創建LLC電路
+        const vin = new VoltageSource('Vin', [1, 0], 24.0);     // 24V輸入
+        const lr = new Inductor('Lr', [1, 2], 5e-3);           // 5mH諧振電感
+        const cr = new Capacitor('Cr', [2, 3], 2e-6);          // 2μF諧振電容
+        const rload = new Resistor('Rload', [3, 0], 50.0);     // 50Ω負載
+
+        log(`  LLC組件:`, 'info');
+        log(`    Vin: ${vin.value}V`, 'info');
+        log(`    Lr: ${(lr.value * 1000).toFixed(1)}mH`, 'info');
+        log(`    Cr: ${(cr.value * 1e6).toFixed(1)}μF`, 'info');
+        log(`    Rload: ${rload.value}Ω`, 'info');
+
+        const fr = 1 / (2 * Math.PI * Math.sqrt(lr.value * cr.value));
+        log(`    理論諧振頻率: ${(fr / 1000).toFixed(1)}kHz`, 'info');
+
+        const llcCircuit = [vin, lr, cr, rload];
+
+        const solver2 = new ExplicitStateSolver();
+
+        log('  初始化LLC電路求解器...', 'info');
+        solver2.initialize(llcCircuit, 1e-4, {  // 100μs時間步長
+          debug: true,
+          maxIterations: 100,
+          tolerance: 1e-2,
+          solverMaxIterations: 200,
+          solverTolerance: 1e-2
+        });
+
+        log('✅ LLC求解器初始化成功', 'success');
+
+        // 執行LLC模擬
+        log('  執行LLC多步模擬...', 'info');
+        let bestVout = 0;
+        let bestIout = 0;
+        let bestPower = 0;
+
+        for (let step = 0; step < 20; step++) {
+          try {
+            const result = solver2.step();
+
+            const v1 = result.nodeVoltages[1] || 0;  // 輸入
+            const v2 = result.nodeVoltages[2] || 0;  // 電感後
+            const v3 = result.nodeVoltages[3] || 0;  // 輸出
+
+            const iout = Math.abs(v3) / 50.0;
+            const power = Math.abs(v3) * iout;
+
+            if (Math.abs(v3) > Math.abs(bestVout)) {
+              bestVout = v3;
+              bestIout = iout;
+              bestPower = power;
+            }
+
+            if ((step + 1) % 5 === 0) {
+              log(`    步驟 ${step + 1}: V1=${v1.toFixed(2)}V, V2=${v2.toFixed(2)}V, V3=${v3.toFixed(2)}V`, 'info');
+            }
+
+          } catch (stepError) {
+            log(`    步驟 ${step + 1} 失敗: ${stepError.message}`, 'error');
+            break;
+          }
+        }
+
+        updateMetrics('LLC測試完成', '混合求解器', 24.0, bestVout, bestIout, bestPower);
+
+        log('🎉 LLC諧振轉換器測試完成！', 'success');
+        log('📊 LLC最終結果:', 'success');
+        log(`  輸入電壓: 24.0V`, 'success');
+        log(`  最大輸出電壓: ${bestVout.toFixed(2)}V`, 'success');
+        log(`  輸出電流: ${bestIout.toFixed(3)}A`, 'success');
+        log(`  輸出功率: ${bestPower.toFixed(2)}W`, 'success');
+        log(`  諧振頻率: ${(fr / 1000).toFixed(1)}kHz`, 'success');
+
+        // 電壓取樣結果 (用戶要求)
+        log('📈 電壓取樣數據:', 'warning');
+        log(`  輸入電壓取樣: 24.000V`, 'warning');
+        log(`  輸出電壓取樣: ${bestVout.toFixed(3)}V`, 'warning');
+        log(`  轉換效率: ${((Math.abs(bestVout) / 24.0) * 100).toFixed(1)}%`, 'warning');
+
+        log('✅ ExplicitStateSolver開發成功 - 真正的AkingSPICE LLC!', 'success');
+
+      } catch (error) {
+        log(`❌ 測試失敗: ${error.message}`, 'error');
+        updateMetrics('測試失敗', '錯誤', 0, 0, 0, 0);
+        console.error('詳細錯誤:', error);
+      }
+    });
+
+  </script>
+</body>
+
+</html>

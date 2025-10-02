@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <title>AkingSPICE LLC診斷</title>
+  <style>
+    body {
+      font-family: Arial;
+      padding: 20px;
+      background: #2c3e50;
+      color: white;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 20px;
+      border-radius: 10px;
+    }
+
+    #log {
+      height: 400px;
+      overflow-y: auto;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 15px;
+      border-radius: 8px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      margin-top: 20px;
+    }
+
+    .success {
+      color: #27ae60;
+    }
+
+    .error {
+      color: #e74c3c;
+    }
+
+    .warning {
+      color: #f39c12;
+    }
+
+    .info {
+      color: #3498db;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>🔍 AkingSPICE LLC問題診斷</h1>
+    <p>深入分析AkingSPICE的數值求解問題</p>
+
+    <div id="log">開始診斷AkingSPICE...<br></div>
+  </div>
+
+  <script src="./lib-dist/AkingSPICE.umd.js"></script>
+
+  <script>
+    function log(message, type = 'info') {
+      const colors = {
+        'success': '#27ae60',
+        'error': '#e74c3c',
+        'warning': '#f39c12',
+        'info': '#3498db'
+      };
+
+      const time = new Date().toLocaleTimeString();
+      const logElement = document.getElementById('log');
+      logElement.innerHTML += `<span style="color: ${colors[type]};">[${time}] ${message}</span><br>`;
+      logElement.scrollTop = logElement.scrollHeight;
+      console.log(`[${time}] ${message}`);
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      log('🔍 開始AkingSPICE深度診斷', 'success');
+
+      if (!window.AkingSPICE) {
+        log('❌ AkingSPICE未載入', 'error');
+        return;
+      }
+
+      log('✅ AkingSPICE已載入', 'success');
+
+      // 檢查可用的組件和求解器
+      const spice = window.AkingSPICE;
+      log('📦 檢查AkingSPICE內容:', 'info');
+
+      for (const key in spice) {
+        log(`  - ${key}: ${typeof spice[key]}`, 'info');
+      }
+
+      try {
+        const { VoltageSource, Resistor, Capacitor, Inductor, ExplicitStateSolver } = spice;
+
+        log('🧪 測試1: 最簡單的電路 (V + R)', 'warning');
+
+        // 最簡單的電路
+        const simpleComponents = [
+          new VoltageSource('V1', [1, 0], 5.0),
+          new Resistor('R1', [1, 0], 10.0)
+        ];
+
+        log('創建組件完成', 'success');
+
+        const solver1 = new ExplicitStateSolver();
+        log('創建求解器完成', 'success');
+
+        // 嘗試初始化
+        log('嘗試初始化求解器...', 'info');
+        solver1.initialize(simpleComponents, 1e-3, {
+          debug: true,
+          maxIterations: 50,
+          tolerance: 1e-3
+        });
+
+        log('✅ 簡單電路初始化成功', 'success');
+
+        // 執行幾步
+        for (let i = 0; i < 3; i++) {
+          const result = solver1.step();
+          log(`步驟 ${i + 1}: nodeVoltages = ${JSON.stringify(result.nodeVoltages)}`, 'success');
+        }
+
+        log('🧪 測試2: 添加電容器 (RLC)', 'warning');
+
+        const rlcComponents = [
+          new VoltageSource('V1', [1, 0], 5.0),
+          new Resistor('R1', [1, 2], 10.0),
+          new Inductor('L1', [2, 3], 1e-3),  // 1mH
+          new Capacitor('C1', [3, 0], 1e-6)  // 1μF
+        ];
+
+        const solver2 = new ExplicitStateSolver();
+
+        try {
+          solver2.initialize(rlcComponents, 1e-5, {  // 10μs
+            debug: true,
+            maxIterations: 100,
+            tolerance: 1e-4
+          });
+
+          log('✅ RLC電路初始化成功', 'success');
+
+          // 執行幾步看看
+          for (let i = 0; i < 5; i++) {
+            const result = solver2.step();
+            log(`RLC步驟 ${i + 1}: 節點電壓 = ${JSON.stringify(result.nodeVoltages)}`, 'success');
+          }
+
+        } catch (rlcError) {
+          log(`❌ RLC電路失敗: ${rlcError.message}`, 'error');
+          log(`錯誤詳細: ${rlcError.stack}`, 'error');
+        }
+
+        log('🧪 測試3: 檢查LLC組件需求', 'warning');
+
+        // 檢查是否有變壓器組件
+        if (spice.Transformer) {
+          log('✅ 找到Transformer組件', 'success');
+        } else {
+          log('❌ 沒有Transformer組件', 'error');
+          log('需要使用耦合電感來實現變壓器', 'warning');
+        }
+
+        // 檢查是否有耦合電感
+        if (spice.CoupledInductor || spice.MutualInductor) {
+          log('✅ 找到耦合電感組件', 'success');
+        } else {
+          log('❌ 沒有耦合電感組件', 'error');
+          log('需要用多個獨立電感近似變壓器', 'warning');
+        }
+
+        log('🔧 分析ExplicitStateSolver的參數:', 'info');
+
+        // 嘗試不同的求解器設置
+        log('測試不同的數值參數...', 'info');
+
+        const testParams = [
+          { dt: 1e-6, maxIter: 50, tol: 1e-3 },   // 1μs, 寬鬆
+          { dt: 1e-7, maxIter: 100, tol: 1e-4 },  // 0.1μs, 中等
+          { dt: 1e-8, maxIter: 200, tol: 1e-5 }   // 0.01μs, 嚴格
+        ];
+
+        for (let p = 0; p < testParams.length; p++) {
+          const param = testParams[p];
+          log(`測試參數組 ${p + 1}: dt=${param.dt}, maxIter=${param.maxIter}, tol=${param.tol}`, 'info');
+
+          try {
+            const testSolver = new ExplicitStateSolver();
+            testSolver.initialize(simpleComponents, param.dt, {
+              maxIterations: param.maxIter,
+              tolerance: param.tol
+            });
+
+            const testResult = testSolver.step();
+            log(`  ✅ 參數組 ${p + 1} 可以工作`, 'success');
+
+          } catch (paramError) {
+            log(`  ❌ 參數組 ${p + 1} 失敗: ${paramError.message}`, 'error');
+          }
+        }
+
+        log('🎯 診斷完成！準備創建真實的LLC...', 'success');
+
+      } catch (error) {
+        log(`❌ 診斷過程錯誤: ${error.message}`, 'error');
+        log(`錯誤堆疊: ${error.stack}`, 'error');
+      }
+    });
+
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <title>真實AkingSPICE LLC轉換器</title>
+  <style>
+    body {
+      font-family: Arial;
+      padding: 20px;
+      background: #2c3e50;
+      color: white;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 20px;
+      border-radius: 10px;
+    }
+
+    .metrics {
+      display: flex;
+      gap: 15px;
+      margin: 20px 0;
+      flex-wrap: wrap;
+    }
+
+    .metric {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 12px;
+      border-radius: 6px;
+      text-align: center;
+      flex: 1;
+      min-width: 120px;
+    }
+
+    .metric-label {
+      font-size: 11px;
+      opacity: 0.8;
+      margin-bottom: 4px;
+    }
+
+    .metric-value {
+      font-size: 18px;
+      font-weight: bold;
+      color: #27ae60;
+    }
+
+    #waveform {
+      width: 100%;
+      height: 300px;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid #555;
+      border-radius: 5px;
+      margin: 20px 0;
+    }
+
+    #log {
+      height: 250px;
+      overflow-y: auto;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 15px;
+      border-radius: 8px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      margin-top: 20px;
+    }
+
+    .success {
+      color: #27ae60;
+    }
+
+    .error {
+      color: #e74c3c;
+    }
+
+    .warning {
+      color: #f39c12;
+    }
+
+    .info {
+      color: #3498db;
+    }
+
+    .controls {
+      margin: 20px 0;
+    }
+
+    button {
+      padding: 10px 20px;
+      margin: 5px;
+      background: #3498db;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #2980b9;
+    }
+
+    button:disabled {
+      background: #7f8c8d;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>⚡ 真實AkingSPICE LLC轉換器</h1>
+    <p>🎯 使用AkingSPICE實現LLC諧振轉換器 - 包含控制、波形、取樣</p>
+
+    <div class="controls">
+      <button id="startBtn">🚀 啟動LLC</button>
+      <button id="stopBtn" disabled>⏹️ 停止</button>
+      <button id="resetBtn">🔄 重置</button>
+    </div>
+
+    <div class="metrics">
+      <div class="metric">
+        <div class="metric-label">系統狀態</div>
+        <div id="status" class="metric-value">待機</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">輸入電壓</div>
+        <div id="vin" class="metric-value">0V</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">諧振電壓</div>
+        <div id="vres" class="metric-value">0V</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">輸出電壓</div>
+        <div id="vout" class="metric-value">0V</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">諧振頻率</div>
+        <div id="freq" class="metric-value">0Hz</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">輸出功率</div>
+        <div id="power" class="metric-value">0W</div>
+      </div>
+    </div>
+
+    <h3>📊 LLC電壓波形</h3>
+    <canvas id="waveform"></canvas>
+
+    <h3>📋 LLC控制與監控日誌</h3>
+    <div id="log">等待LLC系統啟動...<br></div>
+  </div>
+
+  <script src="./lib-dist/AkingSPICE.umd.js"></script>
+
+  <script>
+    let llcSystem = null;
+    let isRunning = false;
+    let animationFrame = null;
+    let voltageHistory = [];
+
+    function log(message, type = 'info') {
+      const colors = {
+        'success': '#27ae60',
+        'error': '#e74c3c',
+        'warning': '#f39c12',
+        'info': '#3498db'
+      };
+
+      const time = new Date().toLocaleTimeString();
+      const logElement = document.getElementById('log');
+      logElement.innerHTML += `<span style="color: ${colors[type]};">[${time}] ${message}</span><br>`;
+      logElement.scrollTop = logElement.scrollHeight;
+    }
+
+    function updateMetrics(vin, vres, vout, freq, power) {
+      document.getElementById('vin').textContent = vin.toFixed(1) + 'V';
+      document.getElementById('vres').textContent = vres.toFixed(1) + 'V';
+      document.getElementById('vout').textContent = vout.toFixed(1) + 'V';
+      document.getElementById('freq').textContent = freq.toFixed(0) + 'Hz';
+      document.getElementById('power').textContent = power.toFixed(1) + 'W';
+    }
+
+    function drawWaveform() {
+      const canvas = document.getElementById('waveform');
+      const ctx = canvas.getContext('2d');
+
+      canvas.width = canvas.clientWidth;
+      canvas.height = canvas.clientHeight;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (voltageHistory.length < 2) return;
+
+      // 繪製背景網格
+      ctx.strokeStyle = '#34495e';
+      ctx.lineWidth = 1;
+
+      // 垂直線
+      for (let i = 0; i <= 10; i++) {
+        const x = (i / 10) * canvas.width;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+
+      // 水平線
+      for (let i = 0; i <= 6; i++) {
+        const y = (i / 6) * canvas.height;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      }
+
+      // 繪製波形
+      const maxVoltage = 20; // ±20V範圍
+
+      // 輸入電壓 (綠色)
+      ctx.strokeStyle = '#27ae60';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < voltageHistory.length; i++) {
+        const x = (i / (voltageHistory.length - 1)) * canvas.width;
+        const y = canvas.height / 2 - (voltageHistory[i].vin / maxVoltage) * (canvas.height / 2);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // 諧振電壓 (藍色)
+      ctx.strokeStyle = '#3498db';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < voltageHistory.length; i++) {
+        const x = (i / (voltageHistory.length - 1)) * canvas.width;
+        const y = canvas.height / 2 - (voltageHistory[i].vres / maxVoltage) * (canvas.height / 2);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // 輸出電壓 (黃色)
+      ctx.strokeStyle = '#f39c12';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < voltageHistory.length; i++) {
+        const x = (i / (voltageHistory.length - 1)) * canvas.width;
+        const y = canvas.height / 2 - (voltageHistory[i].vout / maxVoltage) * (canvas.height / 2);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // 繪製標籤
+      ctx.fillStyle = '#ecf0f1';
+      ctx.font = '12px Arial';
+      ctx.fillText('輸入電壓 (綠)', 10, 20);
+      ctx.fillText('諧振電壓 (藍)', 10, 35);
+      ctx.fillText('輸出電壓 (黃)', 10, 50);
+      ctx.fillText('+20V', 10, 20);
+      ctx.fillText('0V', 10, canvas.height / 2);
+      ctx.fillText('-20V', 10, canvas.height - 10);
+    }
+
+    class LLCSystem {
+      constructor() {
+        this.solver = null;
+        this.time = 0;
+        this.stepCount = 0;
+
+        // LLC參數
+        this.Vin = 24.0;          // 24V輸入
+        this.Lr = 5e-3;           // 5mH 諧振電感
+        this.Cr = 2e-6;           // 2μF 諧振電容  
+        this.Lm = 20e-3;          // 20mH 激磁電感
+        this.Rload = 10.0;        // 10Ω 負載
+
+        // 計算諧振頻率
+        this.fr = 1 / (2 * Math.PI * Math.sqrt(this.Lr * this.Cr));
+
+        log(`📊 LLC設計參數:`, 'info');
+        log(`  輸入電壓: ${this.Vin}V`, 'info');
+        log(`  諧振電感: ${(this.Lr * 1000).toFixed(1)}mH`, 'info');
+        log(`  諧振電容: ${(this.Cr * 1e6).toFixed(1)}μF`, 'info');
+        log(`  理論諧振頻率: ${(this.fr / 1000).toFixed(1)}kHz`, 'success');
+      }
+
+      async initialize() {
+        if (!window.AkingSPICE) {
+          throw new Error('AkingSPICE未載入');
+        }
+
+        const { VoltageSource, Resistor, Capacitor, Inductor, ExplicitStateSolver } = window.AkingSPICE;
+
+        log('🔧 創建LLC電路拓樸...', 'info');
+
+        // 創建LLC電路 (簡化為基本RLC + 負載)
+        const components = [
+          // 輸入直流電源
+          new VoltageSource('Vin', [1, 0], this.Vin),
+
+          // 諧振電路
+          new Inductor('Lr', [1, 2], this.Lr),      // 諧振電感
+          new Capacitor('Cr', [2, 3], this.Cr),     // 諧振電容
+
+          // 激磁電感 + 負載 (簡化變壓器)
+          new Inductor('Lm', [3, 4], this.Lm),      // 激磁電感
+          new Resistor('Rload', [4, 0], this.Rload)  // 負載電阻
+        ];
+
+        log('✅ LLC組件創建完成', 'success');
+        log(`   - 節點1: 輸入正極 (${this.Vin}V)`, 'info');
+        log(`   - 節點2: 諧振電感輸出`, 'info');
+        log(`   - 節點3: 諧振電容輸出`, 'info');
+        log(`   - 節點4: 激磁電感輸出`, 'info');
+        log(`   - 節點0: 地線 (0V)`, 'info');
+
+        // 創建求解器
+        this.solver = new ExplicitStateSolver();
+
+        // 使用保守的參數
+        const dt = 1e-4;  // 100μs 時間步長
+        const solverOptions = {
+          maxIterations: 50,
+          tolerance: 1e-3,
+          debug: false
+        };
+
+        log(`⚙️ 初始化求解器: dt=${dt * 1e6}μs, tol=${solverOptions.tolerance}`, 'info');
+
+        this.solver.initialize(components, dt, solverOptions);
+
+        log('✅ LLC系統初始化完成', 'success');
+
+        this.time = 0;
+        this.stepCount = 0;
+        voltageHistory = [];
+
+        // 計算并顯示初始狀態
+        updateMetrics(this.Vin, 0, 0, this.fr, 0);
+      }
+
+      step() {
+        if (!this.solver) return null;
+
+        const result = this.solver.step();
+        this.stepCount++;
+        this.time = this.stepCount * 1e-4; // 100μs per step
+
+        // 提取電壓
+        const v1 = result.nodeVoltages[1] || 0;  // 輸入節點
+        const v2 = result.nodeVoltages[2] || 0;  // 諧振電感後
+        const v3 = result.nodeVoltages[3] || 0;  // 諧振電容後
+        const v4 = result.nodeVoltages[4] || 0;  // 輸出節點
+
+        // 計算功率
+        const iload = v4 / this.Rload;
+        const power = v4 * iload;
+
+        // 更新顯示
+        updateMetrics(v1, v3, v4, this.fr, power);
+
+        // 記錄波形
+        voltageHistory.push({
+          vin: v1,
+          vres: v3,
+          vout: v4,
+          time: this.time
+        });
+
+        // 限制歷史記錄長度
+        if (voltageHistory.length > 200) {
+          voltageHistory.shift();
+        }
+
+        // 每100步報告一次
+        if (this.stepCount % 100 === 0) {
+          log(`⚡ 步驟 ${this.stepCount}: V1=${v1.toFixed(2)}V, V3=${v3.toFixed(2)}V, V4=${v4.toFixed(2)}V, P=${power.toFixed(2)}W`, 'info');
+        }
+
+        return { v1, v2, v3, v4, power, time: this.time };
+      }
+    }
+
+    async function startLLC() {
+      if (isRunning) return;
+
+      log('🚀 啟動LLC轉換器系統', 'success');
+      document.getElementById('status').textContent = '啟動中';
+      document.getElementById('startBtn').disabled = true;
+
+      try {
+        llcSystem = new LLCSystem();
+        await llcSystem.initialize();
+
+        isRunning = true;
+        document.getElementById('status').textContent = '運行中';
+        document.getElementById('stopBtn').disabled = false;
+
+        log('✅ LLC系統運行中...', 'success');
+
+        // 開始模擬循環
+        function simulationLoop() {
+          if (!isRunning) return;
+
+          try {
+            llcSystem.step();
+            drawWaveform();
+
+            animationFrame = requestAnimationFrame(simulationLoop);
+          } catch (error) {
+            log(`❌ 模擬錯誤: ${error.message}`, 'error');
+            stopLLC();
+          }
+        }
+
+        simulationLoop();
+
+      } catch (error) {
+        log(`❌ LLC啟動失敗: ${error.message}`, 'error');
+        document.getElementById('status').textContent = '錯誤';
+        document.getElementById('startBtn').disabled = false;
+      }
+    }
+
+    function stopLLC() {
+      if (!isRunning) return;
+
+      isRunning = false;
+      if (animationFrame) {
+        cancelAnimationFrame(animationFrame);
+      }
+
+      document.getElementById('status').textContent = '已停止';
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('stopBtn').disabled = true;
+
+      log('⏹️ LLC系統已停止', 'warning');
+    }
+
+    function resetLLC() {
+      stopLLC();
+
+      llcSystem = null;
+      voltageHistory = [];
+
+      updateMetrics(0, 0, 0, 0, 0);
+
+      const canvas = document.getElementById('waveform');
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      document.getElementById('status').textContent = '待機';
+
+      log('🔄 LLC系統已重置', 'info');
+    }
+
+    // 事件處理
+    document.addEventListener('DOMContentLoaded', function () {
+      log('🎯 真實AkingSPICE LLC轉換器載入完成', 'success');
+      log('自動啟動LLC模擬...', 'info');
+
+      document.getElementById('startBtn').addEventListener('click', startLLC);
+      document.getElementById('stopBtn').addEventListener('click', stopLLC);
+      document.getElementById('resetBtn').addEventListener('click', resetLLC);
+
+      // 初始化顯示
+      updateMetrics(0, 0, 0, 0, 0);
+
+      // 自動啟動 (延遲1秒)
+      setTimeout(() => {
+        startLLC();
+      }, 1000);
+    });
+
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLC控制測試 - 無AkingSPICE版本</title>
+  <style>
+    body {
+      font-family: 'Microsoft YaHei', Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: linear-gradient(135deg, #74b9ff 0%, #0984e3 50%, #6c5ce7 100%);
+      color: white;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 30px;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 30px;
+      border-radius: 20px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    }
+
+    .card {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 15px;
+      padding: 25px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      margin-bottom: 20px;
+    }
+
+    .control-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+
+    .control-item {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .control-item label {
+      font-weight: bold;
+      font-size: 14px;
+    }
+
+    .control-item input {
+      padding: 10px;
+      border: none;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.2);
+      color: white;
+      font-size: 14px;
+    }
+
+    .btn {
+      padding: 12px 25px;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      margin: 5px;
+      transition: all 0.3s ease;
+    }
+
+    .btn-primary {
+      background: linear-gradient(45deg, #00b894, #00cec9);
+      color: white;
+    }
+
+    .btn-danger {
+      background: linear-gradient(45deg, #e17055, #d63031);
+      color: white;
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+    }
+
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 15px;
+      margin: 20px 0;
+    }
+
+    .metric-card {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+      padding: 20px;
+      text-align: center;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+
+    .metric-value {
+      font-size: 24px;
+      font-weight: bold;
+      margin: 10px 0;
+      color: #00cec9;
+    }
+
+    .metric-label {
+      font-size: 12px;
+      opacity: 0.8;
+    }
+
+    .waveform-canvas {
+      width: 100%;
+      height: 300px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 10px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+    }
+
+    .sampling-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 10px;
+      margin: 15px 0;
+    }
+
+    .sample-point {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 12px;
+      text-align: center;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .sample-label {
+      font-size: 10px;
+      opacity: 0.8;
+      margin-bottom: 5px;
+    }
+
+    .sample-value {
+      font-size: 16px;
+      font-weight: bold;
+      color: #fdcb6e;
+    }
+
+    @keyframes pulse {
+      0% {
+        opacity: 0.7;
+      }
+
+      50% {
+        opacity: 1;
+      }
+
+      100% {
+        opacity: 0.7;
+      }
+    }
+
+    .status-running {
+      animation: pulse 2s infinite;
+    }
+
+    .status-indicator {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 8px;
+    }
+
+    .status-running .status-indicator {
+      background: #00b894;
+    }
+
+    .status-stopped .status-indicator {
+      background: #d63031;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <!-- 標題區域 -->
+    <div class="header">
+      <h1>⚡ LLC諧振轉換器控制測試</h1>
+      <h3>🔧 數學模型驗證版 (無需AkingSPICE)</h3>
+      <p>📊 LLC控制算法、波形生成與性能分析</p>
+    </div>
+
+    <!-- 控制參數 -->
+    <div class="card">
+      <h3>🎛️ 控制參數</h3>
+      <div class="control-grid">
+        <div class="control-item">
+          <label>輸入電壓 (Vin)</label>
+          <input type="number" id="inputVoltage" value="400" min="200" max="800" step="10">
+        </div>
+        <div class="control-item">
+          <label>輸出電壓 (Vout)</label>
+          <input type="number" id="outputVoltage" value="48" min="12" max="100" step="1">
+        </div>
+        <div class="control-item">
+          <label>負載功率 (W)</label>
+          <input type="number" id="loadPower" value="500" min="50" max="2000" step="50">
+        </div>
+        <div class="control-item">
+          <label>開關頻率 (kHz)</label>
+          <input type="number" id="switchFreq" value="100" min="50" max="500" step="5">
+        </div>
+        <div class="control-item">
+          <label>諧振電感 Lr (μH)</label>
+          <input type="number" id="resonantL" value="50" min="10" max="200" step="5">
+        </div>
+        <div class="control-item">
+          <label>諧振電容 Cr (nF)</label>
+          <input type="number" id="resonantC" value="100" min="50" max="500" step="10">
+        </div>
+      </div>
+      <div style="text-align: center; margin-top: 20px;">
+        <button class="btn btn-primary" onclick="startLLCSimulation()">
+          <span class="status-indicator"></span>開始模擬
+        </button>
+        <button class="btn btn-danger" onclick="stopLLCSimulation()">停止模擬</button>
+      </div>
+    </div>
+
+    <!-- 性能指標 -->
+    <div class="card">
+      <h3>📊 LLC控制結果</h3>
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-value" id="efficiency">0.0%</div>
+          <div class="metric-label">效率</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="resonantFreq">0.0</div>
+          <div class="metric-label">諧振頻率 (kHz)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="voltageGain">0.00</div>
+          <div class="metric-label">電壓增益</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="frequencyRatio">0.00</div>
+          <div class="metric-label">頻率比 fs/fr</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="outputCurrent">0.00</div>
+          <div class="metric-label">輸出電流 (A)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="inputCurrent">0.00</div>
+          <div class="metric-label">輸入電流 (A)</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 電壓波形顯示 -->
+    <div class="card">
+      <h3>📈 波形模擬</h3>
+      <canvas id="waveformCanvas" class="waveform-canvas"></canvas>
+    </div>
+
+    <!-- 取樣電壓顯示 -->
+    <div class="card">
+      <h3>📍 關鍵節點取樣</h3>
+      <div class="sampling-grid">
+        <div class="sample-point">
+          <div class="sample-label">諧振電流 Ir</div>
+          <div class="sample-value" id="sampleIr">0.0A</div>
+        </div>
+        <div class="sample-point">
+          <div class="sample-label">諧振電壓 Vcr</div>
+          <div class="sample-value" id="sampleVcr">0.0V</div>
+        </div>
+        <div class="sample-point">
+          <div class="sample-label">開關電壓 Vgs</div>
+          <div class="sample-value" id="sampleVgs">0.0V</div>
+        </div>
+        <div class="sample-point">
+          <div class="sample-label">功率管 Q1</div>
+          <div class="sample-value" id="sampleVds1">0.0V</div>
+        </div>
+        <div class="sample-point">
+          <div class="sample-label">功率管 Q2</div>
+          <div class="sample-value" id="sampleVds2">0.0V</div>
+        </div>
+        <div class="sample-point">
+          <div class="sample-label">輸出電壓</div>
+          <div class="sample-value" id="sampleVout">0.0V</div>
+        </div>
+        <div class="sample-point">
+          <div class="sample-label">工作模式</div>
+          <div class="sample-value" id="workingMode">停止</div>
+        </div>
+        <div class="sample-point">
+          <div class="sample-label">軟開關</div>
+          <div class="sample-value" id="softSwitch">否</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // LLC控制系統 (純數學模型)
+    class LLCMathModel {
+      constructor() {
+        this.isRunning = false;
+        this.currentTime = 0;
+        this.canvas = null;
+        this.ctx = null;
+        this.animationId = null;
+
+        this.waveformData = {
+          time: [],
+          vgs: [], vds1: [], vds2: [], ir: [], vcr: [], vout: []
+        };
+
+        this.params = {
+          inputVoltage: 400,
+          outputVoltage: 48,
+          loadPower: 500,
+          switchFreq: 100000,
+          resonantL: 50e-6,
+          resonantC: 100e-9
+        };
+
+        this.init();
+      }
+
+      init() {
+        this.canvas = document.getElementById('waveformCanvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.resizeCanvas();
+        window.addEventListener('resize', () => this.resizeCanvas());
+
+        console.log('LLC數學模型初始化完成');
+      }
+
+      resizeCanvas() {
+        const rect = this.canvas.getBoundingClientRect();
+        this.canvas.width = rect.width * window.devicePixelRatio;
+        this.canvas.height = rect.height * window.devicePixelRatio;
+        this.ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+        this.canvas.style.width = rect.width + 'px';
+        this.canvas.style.height = rect.height + 'px';
+      }
+
+      updateParameters() {
+        this.params = {
+          inputVoltage: parseFloat(document.getElementById('inputVoltage').value),
+          outputVoltage: parseFloat(document.getElementById('outputVoltage').value),
+          loadPower: parseFloat(document.getElementById('loadPower').value),
+          switchFreq: parseFloat(document.getElementById('switchFreq').value) * 1000,
+          resonantL: parseFloat(document.getElementById('resonantL').value) * 1e-6,
+          resonantC: parseFloat(document.getElementById('resonantC').value) * 1e-9
+        };
+      }
+
+      calculateResonantFrequency() {
+        return 1 / (2 * Math.PI * Math.sqrt(this.params.resonantL * this.params.resonantC));
+      }
+
+      calculateLLCGain() {
+        const fr = this.calculateResonantFrequency();
+        const fs = this.params.switchFreq;
+        const k = fs / fr;
+
+        // 簡化的LLC增益模型
+        let gain;
+        if (k > 1) {
+          // 降壓區域 (軟開關)
+          gain = Math.pow(k, -2);
+        } else {
+          // 升壓區域
+          gain = 1 / k;
+        }
+
+        return { gain, k, fr };
+      }
+
+      startSimulation() {
+        if (this.isRunning) return;
+
+        this.updateParameters();
+        this.isRunning = true;
+        this.currentTime = 0;
+
+        // 清空波形數據
+        Object.keys(this.waveformData).forEach(key => {
+          this.waveformData[key] = [];
+        });
+
+        console.log('LLC模擬開始');
+        this.simulationLoop();
+      }
+
+      simulationLoop() {
+        if (!this.isRunning) return;
+
+        const timeStep = 1e-6; // 1μs
+        const t = this.currentTime;
+
+        // LLC數學模型計算
+        const fr = this.calculateResonantFrequency();
+        const { gain, k } = this.calculateLLCGain();
+
+        // PWM信號生成
+        const switchPeriod = 1 / this.params.switchFreq;
+        const cycleTime = t % switchPeriod;
+        const dutyCycle = 0.45;
+        const deadTime = switchPeriod * 0.05;
+
+        const q1On = cycleTime < (switchPeriod * dutyCycle);
+        const q2On = cycleTime > (switchPeriod * (dutyCycle + deadTime)) &&
+          cycleTime < (switchPeriod * (1 - dutyCycle - deadTime));
+
+        // 波形生成
+        const vgs = q1On ? 12 : (q2On ? -12 : 0);
+        const vds1 = q1On ? 0 : this.params.inputVoltage * (0.8 + 0.2 * Math.sin(2 * Math.PI * fr * t));
+        const vds2 = q2On ? 0 : this.params.inputVoltage * (0.8 + 0.2 * Math.cos(2 * Math.PI * fr * t));
+
+        // 諧振電流 (正弦波)
+        const irAmplitude = Math.sqrt(2 * this.params.loadPower / this.params.outputVoltage) * 2;
+        const ir = irAmplitude * Math.sin(2 * Math.PI * fr * t) * (q1On || q2On ? 1 : 0.3);
+
+        // 諧振電壓
+        const vcrAmplitude = this.params.inputVoltage / 2;
+        const vcr = vcrAmplitude * Math.sin(2 * Math.PI * fr * t + Math.PI / 4);
+
+        // 輸出電壓 (含紋波)
+        const ripple = this.params.outputVoltage * 0.01 * Math.sin(2 * Math.PI * this.params.switchFreq * t);
+        const vout = this.params.outputVoltage + ripple;
+
+        // 存儲波形數據
+        this.waveformData.time.push(t * 1e6); // 轉換為μs
+        this.waveformData.vgs.push(vgs);
+        this.waveformData.vds1.push(vds1);
+        this.waveformData.vds2.push(vds2);
+        this.waveformData.ir.push(ir);
+        this.waveformData.vcr.push(vcr);
+        this.waveformData.vout.push(vout);
+
+        // 更新顯示
+        this.updateMetrics(k, fr, gain);
+        this.updateSampling(vgs, vds1, vds2, ir, vcr, vout, k);
+        this.drawWaveforms();
+
+        this.currentTime += timeStep;
+
+        // 限制數據點數量
+        if (this.waveformData.time.length > 1000) {
+          Object.keys(this.waveformData).forEach(key => {
+            this.waveformData[key] = this.waveformData[key].slice(-800);
+          });
+        }
+
+        this.animationId = requestAnimationFrame(() => this.simulationLoop());
+      }
+
+      updateMetrics(k, fr, gain) {
+        const efficiency = Math.max(88, 96 - Math.abs(k - 1) * 2);
+        const outputCurrent = this.params.loadPower / this.params.outputVoltage;
+        const inputCurrent = this.params.loadPower / this.params.inputVoltage / (efficiency / 100);
+
+        document.getElementById('efficiency').textContent = efficiency.toFixed(1) + '%';
+        document.getElementById('resonantFreq').textContent = (fr / 1000).toFixed(1);
+        document.getElementById('voltageGain').textContent = gain.toFixed(2);
+        document.getElementById('frequencyRatio').textContent = k.toFixed(2);
+        document.getElementById('outputCurrent').textContent = outputCurrent.toFixed(2);
+        document.getElementById('inputCurrent').textContent = inputCurrent.toFixed(2);
+      }
+
+      updateSampling(vgs, vds1, vds2, ir, vcr, vout, k) {
+        document.getElementById('sampleIr').textContent = ir.toFixed(2) + 'A';
+        document.getElementById('sampleVcr').textContent = vcr.toFixed(1) + 'V';
+        document.getElementById('sampleVgs').textContent = vgs.toFixed(1) + 'V';
+        document.getElementById('sampleVds1').textContent = vds1.toFixed(1) + 'V';
+        document.getElementById('sampleVds2').textContent = vds2.toFixed(1) + 'V';
+        document.getElementById('sampleVout').textContent = vout.toFixed(1) + 'V';
+
+        const mode = k > 1 ? '降壓' : '升壓';
+        const softSwitch = k > 1 ? '是' : '否';
+        document.getElementById('workingMode').textContent = mode;
+        document.getElementById('softSwitch').textContent = softSwitch;
+      }
+
+      drawWaveforms() {
+        if (!this.ctx || this.waveformData.time.length < 2) return;
+
+        const width = this.canvas.width / window.devicePixelRatio;
+        const height = this.canvas.height / window.devicePixelRatio;
+
+        // 清空畫布
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+        this.ctx.fillRect(0, 0, width, height);
+
+        // 繪製網格
+        this.drawGrid(width, height);
+
+        // 繪製波形
+        const colors = {
+          vgs: '#00cec9',
+          ir: '#00b894',
+          vout: '#74b9ff'
+        };
+
+        ['vgs', 'ir', 'vout'].forEach((waveform, index) => {
+          this.drawWaveform(waveform, colors[waveform], width, height, index);
+        });
+      }
+
+      drawGrid(width, height) {
+        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+        this.ctx.lineWidth = 1;
+
+        for (let i = 0; i <= 10; i++) {
+          const x = (i / 10) * width;
+          this.ctx.beginPath();
+          this.ctx.moveTo(x, 0);
+          this.ctx.lineTo(x, height);
+          this.ctx.stroke();
+        }
+
+        for (let i = 0; i <= 6; i++) {
+          const y = (i / 6) * height;
+          this.ctx.beginPath();
+          this.ctx.moveTo(0, y);
+          this.ctx.lineTo(width, y);
+          this.ctx.stroke();
+        }
+      }
+
+      drawWaveform(waveformName, color, width, height, offset) {
+        const data = this.waveformData[waveformName];
+        const timeData = this.waveformData.time;
+
+        if (data.length < 2) return;
+
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = 2;
+        this.ctx.beginPath();
+
+        const startIdx = Math.max(0, data.length - 200);
+        const endIdx = data.length - 1;
+        const timeRange = timeData[endIdx] - timeData[startIdx];
+
+        const values = data.slice(startIdx, endIdx + 1);
+        const minVal = Math.min(...values);
+        const maxVal = Math.max(...values);
+        const range = maxVal - minVal || 1;
+
+        for (let i = startIdx; i <= endIdx; i++) {
+          const x = ((timeData[i] - timeData[startIdx]) / timeRange) * width;
+          const normalizedY = (data[i] - minVal) / range;
+          const y = height - (normalizedY * height / 3 + (offset * height / 3));
+
+          if (i === startIdx) {
+            this.ctx.moveTo(x, y);
+          } else {
+            this.ctx.lineTo(x, y);
+          }
+        }
+
+        this.ctx.stroke();
+
+        // 繪製標籤
+        this.ctx.fillStyle = color;
+        this.ctx.font = '12px Arial';
+        this.ctx.fillText(waveformName.toUpperCase(), 10, 20 + offset * 20);
+      }
+
+      stopSimulation() {
+        this.isRunning = false;
+        if (this.animationId) {
+          cancelAnimationFrame(this.animationId);
+          this.animationId = null;
+        }
+        console.log('LLC模擬停止');
+      }
+    }
+
+    // 全局控制
+    let llcModel = null;
+
+    window.startLLCSimulation = function () {
+      if (!llcModel) {
+        llcModel = new LLCMathModel();
+      }
+      llcModel.startSimulation();
+
+      // 更新UI狀態
+      document.querySelector('.btn-primary').classList.add('status-running');
+      document.querySelector('.btn-primary').classList.remove('status-stopped');
+    };
+
+    window.stopLLCSimulation = function () {
+      if (llcModel) {
+        llcModel.stopSimulation();
+      }
+
+      // 更新UI狀態
+      document.querySelector('.btn-primary').classList.remove('status-running');
+      document.querySelector('.btn-primary').classList.add('status-stopped');
+    };
+
+    // 初始化
+    document.addEventListener('DOMContentLoaded', () => {
+      llcModel = new LLCMathModel();
+      console.log('LLC控制測試系統已載入');
+
+      // 自動開始演示
+      setTimeout(() => {
+        startLLCSimulation();
+      }, 2000);
+    });
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLC測試 - 極簡版</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background: #f5f5f5;
+    }
+
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: white;
+      padding: 20px;
+      border-radius: 10px;
+    }
+
+    .btn {
+      padding: 10px 20px;
+      margin: 5px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+
+    .btn:hover {
+      opacity: 0.8;
+    }
+
+    #log {
+      height: 300px;
+      overflow-y: auto;
+      border: 1px solid #ddd;
+      padding: 10px;
+      font-family: monospace;
+      font-size: 12px;
+      background: #f9f9f9;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>🔋 LLC測試 - 極簡版</h1>
+
+    <button class="btn" style="background:#27ae60;color:white" onclick="testStart()">🚀 測試啟動</button>
+
+    <h3>📋 測試日誌</h3>
+    <div id="log"></div>
+  </div>
+
+  <script type="module">
+    // 日誌函數
+    function log(message, type = 'info') {
+      const logDiv = document.getElementById('log');
+      const time = new Date().toLocaleTimeString();
+      const colors = { info: '#2c3e50', error: '#e74c3c', warning: '#f39c12', success: '#27ae60' };
+
+      logDiv.innerHTML += `<div style="color:${colors[type]}">[${time}] ${message}</div>`;
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    // 全局變量
+    let AkingSPICE = null;
+    let solver = null;
+
+    // 載入模組
+    async function loadModule() {
+      try {
+        log('📦 開始載入AkingSPICE模組...');
+        const module = await import('./lib-dist/AkingSPICE.es.js');
+        AkingSPICE = module.AkingSPICE;
+        log('✅ AkingSPICE模組載入成功');
+        return true;
+      } catch (error) {
+        log(`❌ 模組載入失敗: ${error.message}`, 'error');
+        return false;
+      }
+    }
+
+    // 創建簡單電路
+    function createCircuit() {
+      try {
+        log('🔧 創建簡單RC電路...');
+
+        const { VoltageSource, Resistor, Capacitor } = AkingSPICE;
+
+        // 創建組件
+        const components = [];
+        components.push(new VoltageSource('V1', [1, 0], 5.0));
+        components.push(new Resistor('R1', [1, 2], 1000));
+        components.push(new Capacitor('C1', [2, 0], 1e-6));
+
+        log('✅ 電路創建成功：V=5V, R=1kΩ, C=1μF');
+        return components;
+      } catch (error) {
+        log(`❌ 電路創建失敗: ${error.message}`, 'error');
+        return null;
+      }
+    }
+
+    // 初始化求解器
+    function initSolver(components) {
+      try {
+        log('⚙️ 初始化求解器...');
+
+        const { ExplicitStateSolver } = AkingSPICE;
+        solver = new ExplicitStateSolver();
+
+        solver.initialize(components, 1e-6, {
+          debug: false,
+          solverMaxIterations: 1000,
+          solverTolerance: 1e-6
+        });
+
+        log('✅ 求解器初始化成功');
+        return true;
+      } catch (error) {
+        log(`❌ 求解器初始化失敗: ${error.message}`, 'error');
+        return false;
+      }
+    }
+
+    // 運行幾個時間步
+    async function runSimulation() {
+      try {
+        log('🚀 開始運行模擬...');
+
+        for (let i = 0; i < 10; i++) {
+          const result = solver.step();
+          const time = (i * 1e-6 * 1e6).toFixed(1); // 轉換為μs
+          const vOut = result.nodeVoltages[2] || 0;
+
+          log(`步驟 ${i + 1}: t=${time}μs, V(2)=${vOut.toFixed(3)}V`);
+        }
+
+        log('✅ 模擬運行完成！', 'success');
+      } catch (error) {
+        log(`❌ 模擬運行失敗: ${error.message}`, 'error');
+      }
+    }
+
+    // 測試函數
+    window.testStart = async function () {
+      log('🎯 開始LLC測試序列...', 'success');
+
+      // 步驟1：載入模組
+      const moduleOk = await loadModule();
+      if (!moduleOk) return;
+
+      // 步驟2：創建電路
+      const components = createCircuit();
+      if (!components) return;
+
+      // 步驟3：初始化求解器
+      const solverOk = initSolver(components);
+      if (!solverOk) return;
+
+      // 步驟4：運行模擬
+      await runSimulation();
+
+      log('🎉 測試序列完成！', 'success');
+    };
+
+    // 自動啟動
+    document.addEventListener('DOMContentLoaded', () => {
+      log('🔧 頁面載入完成');
+
+      setTimeout(() => {
+        log('⏰ 自動啟動測試...');
+        window.testStart();
+      }, 1000);
+    });
+
+  </script>
+</body>
+
+</html>

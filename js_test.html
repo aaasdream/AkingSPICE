@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <title>基礎JavaScript測試</title>
+</head>
+
+<body>
+  <h1>JavaScript測試</h1>
+  <div id="output"></div>
+
+  <script>
+    console.log('Script開始執行');
+
+    function addOutput(msg) {
+      const div = document.getElementById('output');
+      div.innerHTML += '<p>' + new Date().toLocaleTimeString() + ': ' + msg + '</p>';
+      console.log(msg);
+    }
+
+    // 立即執行
+    addOutput('立即執行成功');
+
+    // 測試setTimeout
+    setTimeout(() => {
+      addOutput('setTimeout執行成功');
+
+      // 測試模組載入
+      import('./lib-dist/AkingSPICE.es.js')
+        .then(module => {
+          addOutput('AkingSPICE模組載入成功: ' + typeof module.AkingSPICE);
+        })
+        .catch(error => {
+          addOutput('模組載入失敗: ' + error.message);
+        });
+
+    }, 1000);
+
+    // DOM載入事件
+    document.addEventListener('DOMContentLoaded', () => {
+      addOutput('DOMContentLoaded事件觸發');
+    });
+
+    console.log('Script執行結束');
+  </script>
+</body>
+
+</html>

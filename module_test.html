@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>模組載入測試</title>
+</head>
+
+<body>
+  <h1>AkingSPICE模組載入測試</h1>
+  <div id="log"></div>
+
+  <script type="module">
+    function log(msg) {
+      console.log(msg);
+      document.getElementById('log').innerHTML += '<p>' + new Date().toLocaleTimeString() + ': ' + msg + '</p>';
+    }
+
+    log('開始測試模組載入...');
+
+    try {
+      log('嘗試載入模組...');
+
+      // 測試模組載入
+      import('./lib-dist/AkingSPICE.es.js')
+        .then(module => {
+          log('✅ 模組載入成功!');
+          log('AkingSPICE 類型: ' + typeof module.default);
+          log('模組屬性: ' + Object.keys(module).join(', '));
+
+          // 嘗試創建實例
+          const AkingSPICE = module.default;
+          if (AkingSPICE) {
+            log('✅ 可以訪問AkingSPICE類');
+
+            // 測試組件創建 - 嘗試不同的訪問方式
+            log('嘗試從AkingSPICE解構VoltageSource...');
+            const { VoltageSource } = AkingSPICE;
+            if (VoltageSource) {
+              log('✅ 可以從AkingSPICE解構VoltageSource');
+            } else {
+              log('❌ 無法從AkingSPICE解構VoltageSource');
+
+              // 嘗試直接從module訪問
+              log('嘗試從module直接訪問VoltageSource...');
+              const ModuleVoltageSource = module.VoltageSource;
+              if (ModuleVoltageSource) {
+                log('✅ 可以從module直接訪問VoltageSource');
+                try {
+                  const vs = new ModuleVoltageSource('V1', [1, 0], 5.0);
+                  log('✅ 成功創建電壓源: ' + vs.name);
+                } catch (err) {
+                  log('❌ 創建電壓源失敗: ' + err.message);
+                }
+              } else {
+                log('❌ 無法從module直接訪問VoltageSource');
+
+                // 檢查AkingSPICE的內部結構
+                log('檢查AkingSPICE內部屬性...');
+                log('AkingSPICE.prototype: ' + (AkingSPICE.prototype ? 'exists' : 'null'));
+                if (typeof AkingSPICE === 'function') {
+                  log('嘗試實例化AkingSPICE...');
+                  try {
+                    const spiceInstance = new AkingSPICE();
+                    log('✅ 成功實例化AkingSPICE');
+                    log('實例屬性: ' + Object.keys(spiceInstance).join(', '));
+                  } catch (err) {
+                    log('❌ 實例化失敗: ' + err.message);
+                  }
+                }
+              }
+            }
+          } else {
+            log('❌ 無法訪問AkingSPICE類');
+          }
+        })
+        .catch(error => {
+          log('❌ 模組載入失敗: ' + error.message);
+          console.error('詳細錯誤:', error);
+        });
+
+    } catch (error) {
+      log('❌ 同步錯誤: ' + error.message);
+    }
+
+    log('測試腳本設置完成');
+  </script>
+</body>
+
+</html>

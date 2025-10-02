@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🔋 LLC諧振電路 - AkingSPICE UMD</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 20px;
+      border-radius: 15px;
+      backdrop-filter: blur(10px);
+    }
+
+    .btn {
+      padding: 12px 24px;
+      margin: 8px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: bold;
+      transition: all 0.3s;
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin: 20px 0;
+    }
+
+    .metric {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 15px;
+      border-radius: 10px;
+      text-align: center;
+    }
+
+    .metric-label {
+      font-size: 14px;
+      opacity: 0.8;
+      margin-bottom: 5px;
+    }
+
+    .metric-value {
+      font-size: 24px;
+      font-weight: bold;
+    }
+
+    .status-running {
+      color: #2ecc71;
+    }
+
+    .status-stopped {
+      color: #e74c3c;
+    }
+
+    .status-warning {
+      color: #f39c12;
+    }
+
+    #waveformCanvas {
+      width: 100%;
+      height: 300px;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.1);
+    }
+
+    #log {
+      height: 250px;
+      overflow-y: auto;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      border-radius: 10px;
+      padding: 15px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      background: rgba(0, 0, 0, 0.3);
+      margin-top: 20px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>🔋 LLC諧振電路 - AkingSPICE UMD版</h1>
+    <p>⚡ 電路拓撲: Vin(400V) → Lr(50μH) → Cr(100nF) → Rload(4.8Ω)</p>
+
+    <div style="text-align: center; margin: 20px 0;">
+      <button class="btn" style="background:#27ae60;color:white" onclick="runLLC()">🚀 啟動LLC模擬</button>
+      <button class="btn" style="background:#e74c3c;color:white" onclick="stopLLC()">⏹️ 停止模擬</button>
+      <button class="btn" style="background:#3498db;color:white" onclick="clearLog()">🧹 清除日誌</button>
+    </div>
+
+    <h3>📊 實時監控</h3>
+    <div class="status-grid">
+      <div class="metric">
+        <div class="metric-label">模擬狀態</div>
+        <div id="status" class="metric-value status-stopped">準備中</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">時間步數</div>
+        <div id="steps" class="metric-value">0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">模擬時間 (μs)</div>
+        <div id="time" class="metric-value">0.0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">輸出電壓 (V)</div>
+        <div id="voltage" class="metric-value">0.0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">諧振頻率 (kHz)</div>
+        <div id="frequency" class="metric-value">159.2</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">功率 (W)</div>
+        <div id="power" class="metric-value">0.0</div>
+      </div>
+    </div>
+
+    <h3>📈 電壓波形</h3>
+    <canvas id="waveformCanvas" width="800" height="300"></canvas>
+
+    <h3>📋 系統日誌</h3>
+    <div id="log">[LLC 諧振電路模擬系統準備就緒]</div>
+  </div>
+
+  <!-- 載入AkingSPICE UMD版本 -->
+  <script src="./lib-dist/AkingSPICE.umd.js"></script>
+
+  <script>
+    // 全局變數
+    let isRunning = false;
+    let solver = null;
+    let stepCount = 0;
+    let startTime = 0;
+    let voltageData = [];
+    let timeData = [];
+    let canvas, ctx;
+
+    // 初始化
+    document.addEventListener('DOMContentLoaded', function () {
+      log('🔧 LLC模擬系統初始化...', 'info');
+
+      // 初始化畫布
+      canvas = document.getElementById('waveformCanvas');
+      ctx = canvas.getContext('2d');
+
+      // 檢查AkingSPICE
+      if (window.AkingSPICE) {
+        log('✅ AkingSPICE UMD 載入成功', 'success');
+        log('🧮 計算諧振頻率: f = 1/(2π√LC) = 159.2 kHz');
+        log('⚡ 準備電路: 400V → 50μH → 100nF → 4.8Ω');
+        log('🚀 點擊"啟動LLC模擬"開始...');
+
+        document.getElementById('status').textContent = '就緒';
+        document.getElementById('status').className = 'metric-value status-warning';
+
+        // 自動啟動
+        setTimeout(() => {
+          log('🔄 3秒後自動啟動...', 'warning');
+          setTimeout(runLLC, 3000);
+        }, 1000);
+      } else {
+        log('❌ AkingSPICE 載入失敗', 'error');
+        document.getElementById('status').textContent = '錯誤';
+      }
+    });
+
+    // 日誌函數
+    function log(msg, type = 'info') {
+      const colors = { info: '#ecf0f1', error: '#e74c3c', success: '#2ecc71', warning: '#f39c12' };
+      const time = new Date().toLocaleTimeString();
+
+      console.log(`[${time}] ${msg}`);
+      const logDiv = document.getElementById('log');
+      logDiv.innerHTML += `<div style="color:${colors[type]}; margin:2px 0;">[${time}] ${msg}</div>`;
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    // 清除日誌
+    window.clearLog = function () {
+      document.getElementById('log').innerHTML = '[日誌已清除]';
+      log('🧹 日誌已清除', 'info');
+    };
+
+    // 主運行函數
+    window.runLLC = function () {
+      if (isRunning) {
+        log('⚠️ 模擬已在運行中', 'warning');
+        return;
+      }
+
+      try {
+        log('🚀 啟動LLC諧振電路模擬...', 'success');
+        document.getElementById('status').textContent = '啟動中';
+        document.getElementById('status').className = 'metric-value status-warning';
+
+        // 從AkingSPICE取得組件
+        const { VoltageSource, Inductor, Capacitor, Resistor, ExplicitStateSolver } = window.AkingSPICE;
+
+        log('🔧 創建LLC電路組件...');
+        const components = [
+          new VoltageSource('Vin', [1, 0], 400.0),     // 400V電源
+          new Inductor('Lr', [1, 2], 50e-6),          // 50μH諧振電感
+          new Capacitor('Cr', [2, 3], 100e-9),        // 100nF諧振電容  
+          new Resistor('Rload', [3, 0], 4.8)          // 4.8Ω負載
+        ];
+
+        log(`✅ 電路組件已創建: ${components.length} 個組件`);
+        components.forEach(comp => {
+          log(`   ${comp.name}: ${comp.value}${comp.type === 'V' ? 'V' : comp.type === 'L' ? 'H' : comp.type === 'C' ? 'F' : 'Ω'}`);
+        });
+
+        // 初始化求解器
+        log('⚙️ 初始化ExplicitStateSolver...');
+        solver = new ExplicitStateSolver();
+
+        // 使用 Promise 包裝初始化（如果是異步的話）
+        Promise.resolve(solver.initialize(components, 1e-7, {
+          debug: false,
+          maxIterations: 1000,
+          tolerance: 1e-9,
+          integrationMethod: 'forward_euler'
+        })).then(() => {
+          log('✅ 求解器初始化完成', 'success');
+
+          // 開始模擬
+          isRunning = true;
+          stepCount = 0;
+          startTime = performance.now();
+          voltageData = [];
+          timeData = [];
+
+          document.getElementById('status').textContent = '運行中';
+          document.getElementById('status').className = 'metric-value status-running';
+
+          log('🎉 LLC模擬開始運行！', 'success');
+
+          // 啟動模擬循環
+          runSimulationLoop();
+
+        }).catch(error => {
+          throw error;
+        });
+
+      } catch (error) {
+        log(`❌ 啟動失敗: ${error.message}`, 'error');
+        console.error('詳細錯誤:', error);
+        document.getElementById('status').textContent = '錯誤';
+        document.getElementById('status').className = 'metric-value status-error';
+      }
+    };
+
+    // 模擬循環
+    function runSimulationLoop() {
+      if (!isRunning || !solver) return;
+
+      try {
+        // 執行求解步驟
+        const result = solver.step();
+        stepCount++;
+
+        // 計算時間和電壓
+        const dt = 1e-7; // 時間步長 0.1μs
+        const currentTime = stepCount * dt;
+        const timeUs = currentTime * 1e6;
+
+        // 獲取節點電壓
+        const vOut = result.nodeVoltages && result.nodeVoltages[3] !== undefined ? result.nodeVoltages[3] : 0;
+        const vCap = result.nodeVoltages && result.nodeVoltages[2] !== undefined ? result.nodeVoltages[2] : 0;
+
+        // 計算功率
+        const current = vOut / 4.8; // I = V/R
+        const power = vOut * current;
+
+        // 更新顯示
+        document.getElementById('steps').textContent = stepCount;
+        document.getElementById('time').textContent = timeUs.toFixed(2);
+        document.getElementById('voltage').textContent = vOut.toFixed(3);
+        document.getElementById('power').textContent = power.toFixed(2);
+
+        // 存儲數據用於繪圖
+        if (stepCount % 5 === 0) { // 每5步記錄一次
+          timeData.push(timeUs);
+          voltageData.push(vOut);
+
+          // 保持最多1000個點
+          if (timeData.length > 1000) {
+            timeData.shift();
+            voltageData.shift();
+          }
+        }
+
+        // 每100步輸出一次結果
+        if (stepCount % 100 === 0) {
+          log(`步驟 ${stepCount}: t=${timeUs.toFixed(2)}μs, V_out=${vOut.toFixed(3)}V, P=${power.toFixed(2)}W`);
+
+          // 更新波形圖
+          updateWaveform();
+        }
+
+        // 限制最大步數
+        if (stepCount < 10000) {
+          requestAnimationFrame(runSimulationLoop);
+        } else {
+          log('🏁 模擬完成（達到最大步數10000）', 'success');
+          stopLLC();
+        }
+
+      } catch (error) {
+        log(`❌ 模擬步驟錯誤: ${error.message}`, 'error');
+        console.error('詳細錯誤:', error);
+        stopLLC();
+      }
+    }
+
+    // 更新波形圖
+    function updateWaveform() {
+      if (!ctx || timeData.length < 2) return;
+
+      const width = canvas.width;
+      const height = canvas.height;
+
+      // 清除畫布
+      ctx.clearRect(0, 0, width, height);
+
+      // 背景網格
+      ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+      ctx.lineWidth = 1;
+
+      // 垂直線
+      for (let i = 0; i <= 10; i++) {
+        const x = (width / 10) * i;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+      }
+
+      // 水平線
+      for (let i = 0; i <= 6; i++) {
+        const y = (height / 6) * i;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+      }
+
+      // 繪製電壓波形
+      if (voltageData.length > 1) {
+        const minTime = Math.min(...timeData);
+        const maxTime = Math.max(...timeData);
+        const minVolt = Math.min(...voltageData);
+        const maxVolt = Math.max(...voltageData);
+
+        const timeRange = maxTime - minTime || 1;
+        const voltRange = maxVolt - minVolt || 1;
+
+        ctx.strokeStyle = '#2ecc71';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+
+        for (let i = 0; i < timeData.length; i++) {
+          const x = ((timeData[i] - minTime) / timeRange) * width;
+          const y = height - ((voltageData[i] - minVolt) / voltRange) * height;
+
+          if (i === 0) {
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
+        }
+
+        ctx.stroke();
+
+        // 添加標籤
+        ctx.fillStyle = 'white';
+        ctx.font = '12px Arial';
+        ctx.fillText(`時間: ${minTime.toFixed(1)} - ${maxTime.toFixed(1)} μs`, 10, 20);
+        ctx.fillText(`電壓: ${minVolt.toFixed(2)} - ${maxVolt.toFixed(2)} V`, 10, 35);
+      }
+    }
+
+    // 停止模擬
+    window.stopLLC = function () {
+      if (!isRunning) return;
+
+      isRunning = false;
+      document.getElementById('status').textContent = '已停止';
+      document.getElementById('status').className = 'metric-value status-stopped';
+
+      const elapsed = (performance.now() - startTime) / 1000;
+      const avgSpeed = stepCount / elapsed;
+
+      log(`⏹️ 模擬已停止`, 'warning');
+      log(`📊 統計: ${stepCount} 步, 用時 ${elapsed.toFixed(2)}秒, 平均 ${avgSpeed.toFixed(0)} 步/秒`);
+      log(`📈 最終電壓: ${document.getElementById('voltage').textContent}V`);
+      log(`⚡ 最終功率: ${document.getElementById('power').textContent}W`);
+    };
+
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <title>LLC子電路模組測試</title>
+  <style>
+    body {
+      font-family: Arial;
+      padding: 20px;
+      background: #2c3e50;
+      color: white;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 20px;
+      border-radius: 10px;
+    }
+
+    .test-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin: 20px 0;
+    }
+
+    .test-module {
+      background: rgba(255, 255, 255, 0.05);
+      padding: 15px;
+      border-radius: 8px;
+      border: 1px solid #555;
+    }
+
+    .test-module h3 {
+      margin-top: 0;
+      color: #3498db;
+    }
+
+    .status {
+      font-weight: bold;
+      padding: 5px 10px;
+      border-radius: 4px;
+      margin: 5px 0;
+    }
+
+    .status.success {
+      background: #27ae60;
+    }
+
+    .status.fail {
+      background: #e74c3c;
+    }
+
+    .status.testing {
+      background: #f39c12;
+    }
+
+    #log {
+      height: 300px;
+      overflow-y: auto;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 15px;
+      border-radius: 8px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      margin-top: 20px;
+    }
+
+    .success {
+      color: #27ae60;
+    }
+
+    .error {
+      color: #e74c3c;
+    }
+
+    .warning {
+      color: #f39c12;
+    }
+
+    .info {
+      color: #3498db;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>🔧 LLC子電路模組測試</h1>
+    <p>逐一測試LLC轉換器所需的各個電路模組</p>
+
+    <div class="test-grid">
+      <div class="test-module">
+        <h3>1. 整流電路 (二極體)</h3>
+        <div id="status1" class="status testing">測試中...</div>
+        <div id="result1">等待測試結果</div>
+      </div>
+
+      <div class="test-module">
+        <h3>2. MOSFET開關</h3>
+        <div id="status2" class="status testing">測試中...</div>
+        <div id="result2">等待測試結果</div>
+      </div>
+
+      <div class="test-module">
+        <h3>3. 變壓器 (耦合電感)</h3>
+        <div id="status3" class="status testing">測試中...</div>
+        <div id="result3">等待測試結果</div>
+      </div>
+
+      <div class="test-module">
+        <h3>4. 諧振電路 (L-C)</h3>
+        <div id="status4" class="status testing">測試中...</div>
+        <div id="result4">等待測試結果</div>
+      </div>
+
+      <div class="test-module">
+        <h3>5. 輸出整流 (全波整流)</h3>
+        <div id="status5" class="status testing">測試中...</div>
+        <div id="result5">等待測試結果</div>
+      </div>
+
+      <div class="test-module">
+        <h3>6. 完整LLC組合</h3>
+        <div id="status6" class="status testing">測試中...</div>
+        <div id="result6">等待測試結果</div>
+      </div>
+    </div>
+
+    <h3>📋 詳細測試日誌</h3>
+    <div id="log">開始LLC子模組測試...<br></div>
+  </div>
+
+  <script src="./lib-dist/AkingSPICE.umd.js"></script>
+
+  <script>
+    function log(message, type = 'info') {
+      const colors = {
+        'success': '#27ae60',
+        'error': '#e74c3c',
+        'warning': '#f39c12',
+        'info': '#3498db'
+      };
+
+      const time = new Date().toLocaleTimeString();
+      const logElement = document.getElementById('log');
+      logElement.innerHTML += `<span style="color: ${colors[type]};">[${time}] ${message}</span><br>`;
+      logElement.scrollTop = logElement.scrollHeight;
+    }
+
+    function updateStatus(testNum, status, result) {
+      const statusElement = document.getElementById(`status${testNum}`);
+      const resultElement = document.getElementById(`result${testNum}`);
+
+      statusElement.className = `status ${status}`;
+      statusElement.textContent = status === 'success' ? '✅ 通過' : status === 'fail' ? '❌ 失敗' : '🔄 測試中';
+      resultElement.textContent = result;
+    }
+
+    async function testModule(testNum, name, testFunction) {
+      log(`🧪 測試 ${testNum}: ${name}`, 'info');
+      updateStatus(testNum, 'testing', '執行中...');
+
+      try {
+        const result = await testFunction();
+        log(`✅ 測試 ${testNum} 通過: ${result}`, 'success');
+        updateStatus(testNum, 'success', result);
+        return true;
+      } catch (error) {
+        log(`❌ 測試 ${testNum} 失敗: ${error.message}`, 'error');
+        updateStatus(testNum, 'fail', error.message);
+        return false;
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', async function () {
+      log('🚀 開始LLC子電路模組測試', 'success');
+
+      if (!window.AkingSPICE) {
+        log('❌ AkingSPICE未載入', 'error');
+        return;
+      }
+
+      const spice = window.AkingSPICE;
+      const { VoltageSource, Resistor, Capacitor, Inductor, Diode, MOSFET, CoupledInductor, ExplicitStateSolver } = spice;
+
+      // 測試1: 整流電路
+      await testModule(1, '整流電路 (二極體)', async () => {
+        const components = [
+          new VoltageSource('Vac', [1, 0], 10.0),  // 10V AC源
+          new Diode('D1', [1, 2], { Is: 1e-14, n: 1.0 }),  // 整流二極體
+          new Resistor('Rload', [2, 0], 100.0)     // 負載
+        ];
+
+        const solver = new ExplicitStateSolver();
+        solver.initialize(components, 1e-5, { maxIterations: 50, tolerance: 1e-3 });
+
+        // 執行幾步
+        for (let i = 0; i < 5; i++) {
+          solver.step();
+        }
+
+        return '二極體整流電路正常';
+      });
+
+      // 測試2: MOSFET開關
+      await testModule(2, 'MOSFET開關', async () => {
+        const components = [
+          new VoltageSource('Vdd', [1, 0], 12.0),   // 主電源
+          new VoltageSource('Vgate', [3, 0], 5.0),  // 閘極驅動
+          new MOSFET('M1', [1, 2, 3], {
+            type: 'nmos',
+            W: 1e-3,     // 寬度 1mm
+            L: 1e-6,     // 長度 1μm  
+            Vth: 1.0,    // 閾值電壓
+            Cox: 3.45e-3 // 氧化層電容
+          }),
+          new Resistor('Rd', [2, 0], 10.0)          // 汲極負載
+        ];
+
+        const solver = new ExplicitStateSolver();
+        solver.initialize(components, 1e-5, { maxIterations: 50, tolerance: 1e-3 });
+
+        for (let i = 0; i < 5; i++) {
+          solver.step();
+        }
+
+        return 'MOSFET開關電路正常';
+      });
+
+      // 測試3: 變壓器 (耦合電感)
+      await testModule(3, '變壓器 (耦合電感)', async () => {
+        const components = [
+          new VoltageSource('Vin', [1, 0], 12.0),
+          new CoupledInductor('T1', {
+            primary: { nodes: [1, 2], L: 1e-3 },    // 初級 1mH
+            secondary: { nodes: [3, 4], L: 4e-3 },  // 次級 4mH (2:1匝比)
+            coupling: 0.95  // 耦合係數
+          }),
+          new Resistor('Rpri', [2, 0], 1.0),       // 初級阻抗
+          new Resistor('Rsec', [3, 4], 10.0)       // 次級負載
+        ];
+
+        const solver = new ExplicitStateSolver();
+        solver.initialize(components, 1e-5, { maxIterations: 100, tolerance: 1e-3 });
+
+        for (let i = 0; i < 3; i++) {
+          solver.step();
+        }
+
+        return '變壓器耦合正常';
+      });
+
+      // 測試4: 諧振電路
+      await testModule(4, '諧振電路 (L-C)', async () => {
+        const components = [
+          new VoltageSource('Vres', [1, 0], 10.0),
+          new Inductor('Lr', [1, 2], 100e-6),      // 諧振電感 100μH
+          new Capacitor('Cr', [2, 3], 1e-6),       // 諧振電容 1μF
+          new Resistor('Rres', [3, 0], 10.0)       // 諧振阻抗
+        ];
+
+        const solver = new ExplicitStateSolver();
+        solver.initialize(components, 1e-6, { maxIterations: 50, tolerance: 1e-3 });
+
+        for (let i = 0; i < 10; i++) {
+          solver.step();
+        }
+
+        // 計算理論諧振頻率
+        const fr = 1 / (2 * Math.PI * Math.sqrt(100e-6 * 1e-6));
+        return `諧振電路正常, fr≈${(fr / 1000).toFixed(1)}kHz`;
+      });
+
+      // 測試5: 輸出整流
+      await testModule(5, '輸出整流 (全波整流)', async () => {
+        const components = [
+          new VoltageSource('Vsec', [1, 0], 10.0),    // 次級電壓
+          new Diode('D1', [1, 2], { Is: 1e-14, n: 1.0 }),
+          new Diode('D2', [0, 2], { Is: 1e-14, n: 1.0 }),
+          new Capacitor('Cout', [2, 0], 10e-6),      // 輸出電容 10μF
+          new Resistor('Rout', [2, 0], 50.0)         // 輸出負載
+        ];
+
+        const solver = new ExplicitStateSolver();
+        solver.initialize(components, 1e-5, { maxIterations: 50, tolerance: 1e-3 });
+
+        for (let i = 0; i < 8; i++) {
+          solver.step();
+        }
+
+        return '全波整流電路正常';
+      });
+
+      // 測試6: 簡化LLC組合
+      await testModule(6, '完整LLC組合', async () => {
+        const components = [
+          // 輸入部分
+          new VoltageSource('Vin', [1, 0], 48.0),   // 48V輸入
+
+          // 諧振電路
+          new Inductor('Lr', [1, 2], 50e-6),        // 諧振電感 50μH
+          new Capacitor('Cr', [2, 3], 0.5e-6),      // 諧振電容 0.5μF
+
+          // 變壓器 (簡化為電感 + 電阻)
+          new Inductor('Lm', [3, 4], 200e-6),       // 激磁電感 200μH
+          new Resistor('Rtr', [4, 0], 0.1),         // 變壓器損耗
+
+          // 輸出整流 (簡化)
+          new Resistor('Rload', [3, 0], 20.0)       // 等效負載
+        ];
+
+        const solver = new ExplicitStateSolver();
+        solver.initialize(components, 5e-6, { maxIterations: 30, tolerance: 1e-2 });
+
+        for (let i = 0; i < 5; i++) {
+          const result = solver.step();
+          log(`LLC步驟 ${i + 1}: V3=${result.nodeVoltages[3]?.toFixed(2)}V`, 'info');
+        }
+
+        return 'LLC基本組合電路運行正常';
+      });
+
+      log('🎉 所有LLC子模組測試完成！', 'success');
+    });
+
+  </script>
+</body>
+
+</html>

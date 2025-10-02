@@ -1,0 +1,26 @@
+{
+  "summary": {
+    "total": 0,
+    "passed": 0,
+    "failed": 0,
+    "success_rate": 0
+  },
+  "test_results": {},
+  "failed_tests": [],
+  "execution_info": {
+    "start_time": 1759379458.719,
+    "end_time": null,
+    "duration": null,
+    "is_complete": false
+  },
+  "logs": [
+    {
+      "type": "log",
+      "level": "success",
+      "message": "✅ 測試服務器連接成功",
+      "data": null,
+      "timestamp": 1759379458.718
+    }
+  ],
+  "generated_at": 1759379516.925959
+}

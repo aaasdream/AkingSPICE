@@ -139,7 +139,7 @@ export class VoltageSource extends BaseComponent {
         const node2 = preprocessor.getNodeIndex(this.nodes[1]);
         
         // 使用大導納近似理想電壓源
-        const largeAdmittance = 1e6;  // 降低導納值避免數值問題
+        const largeAdmittance = 1e3;  // 進一步降低導納值提高數值穩定性
         
         if (node1 >= 0) {
             preprocessor.addConductance(node1, node1, largeAdmittance);

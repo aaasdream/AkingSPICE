@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <title>LLC使用標準AkingSPICE</title>
+  <style>
+    body {
+      font-family: Arial;
+      padding: 20px;
+      background: #2c3e50;
+      color: white;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 20px;
+      border-radius: 10px;
+    }
+
+    .metrics {
+      display: flex;
+      gap: 15px;
+      margin: 20px 0;
+      flex-wrap: wrap;
+    }
+
+    .metric {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 12px;
+      border-radius: 6px;
+      text-align: center;
+      flex: 1;
+      min-width: 120px;
+    }
+
+    .metric-label {
+      font-size: 11px;
+      opacity: 0.8;
+      margin-bottom: 4px;
+    }
+
+    .metric-value {
+      font-size: 18px;
+      font-weight: bold;
+      color: #27ae60;
+    }
+
+    #log {
+      height: 400px;
+      overflow-y: auto;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 15px;
+      border-radius: 8px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      margin-top: 20px;
+    }
+
+    .success {
+      color: #27ae60;
+    }
+
+    .error {
+      color: #e74c3c;
+    }
+
+    .warning {
+      color: #f39c12;
+    }
+
+    .info {
+      color: #3498db;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>⚡ LLC使用標準AkingSPICE</h1>
+    <p>🎯 嘗試使用標準AkingSPICE求解器而非ExplicitStateSolver</p>
+
+    <div class="metrics">
+      <div class="metric">
+        <div class="metric-label">求解器狀態</div>
+        <div id="status" class="metric-value">初始化中</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">分析類型</div>
+        <div id="analysis" class="metric-value">DC</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">節點數</div>
+        <div id="nodes" class="metric-value">0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">組件數</div>
+        <div id="components" class="metric-value">0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">輸出電壓</div>
+        <div id="vout" class="metric-value">0V</div>
+      </div>
+    </div>
+
+    <h3>📋 標準AkingSPICE求解器日誌</h3>
+    <div id="log">準備使用標準AkingSPICE...<br></div>
+  </div>
+
+  <script src="./lib-dist/AkingSPICE.umd.js"></script>
+
+  <script>
+    function log(message, type = 'info') {
+      const colors = {
+        'success': '#27ae60',
+        'error': '#e74c3c',
+        'warning': '#f39c12',
+        'info': '#3498db'
+      };
+
+      const time = new Date().toLocaleTimeString();
+      const logElement = document.getElementById('log');
+      logElement.innerHTML += `<span style="color: ${colors[type]};">[${time}] ${message}</span><br>`;
+      logElement.scrollTop = logElement.scrollHeight;
+    }
+
+    function updateMetric(id, value) {
+      document.getElementById(id).textContent = value;
+    }
+
+    // 立即執行
+    document.addEventListener('DOMContentLoaded', function () {
+      log('⚡ LLC標準AkingSPICE版本啟動', 'success');
+
+      if (!window.AkingSPICE) {
+        log('❌ AkingSPICE未載入', 'error');
+        updateMetric('status', '錯誤');
+        return;
+      }
+
+      log('✅ AkingSPICE模塊載入成功', 'success');
+
+      // 檢查可用的類
+      const spice = window.AkingSPICE;
+      log('📦 檢查AkingSPICE可用組件:', 'info');
+
+      for (const key in spice) {
+        if (typeof spice[key] === 'function') {
+          log(`  - ${key}: ${typeof spice[key]}`, 'info');
+        }
+      }
+
+      try {
+        // 方法1: 嘗試使用主AkingSPICE類
+        if (spice.AkingSPICE) {
+          log('🧪 方法1: 使用主AkingSPICE類', 'info');
+
+          const solver = new spice.AkingSPICE();
+          log('✅ AkingSPICE實例創建成功', 'success');
+
+          // 檢查可用方法
+          log('🔍 檢查AkingSPICE實例方法:', 'info');
+          for (const method in solver) {
+            if (typeof solver[method] === 'function') {
+              log(`  方法: ${method}`, 'info');
+            }
+          }
+
+          updateMetric('status', '成功');
+
+        } else {
+          log('❌ 找不到主AkingSPICE類', 'error');
+        }
+
+        // 方法2: 嘗試DCAnalysis
+        if (spice.DCAnalysis) {
+          log('🧪 方法2: 使用DCAnalysis', 'info');
+
+          const dcSolver = new spice.DCAnalysis();
+          log('✅ DCAnalysis創建成功', 'success');
+
+          updateMetric('analysis', 'DC分析');
+        }
+
+        // 方法3: 檢查TransientAnalysis
+        if (spice.TransientAnalysis) {
+          log('🧪 方法3: TransientAnalysis可用', 'info');
+          updateMetric('analysis', '瞬態分析');
+        }
+
+        // 方法4: 嘗試創建基本LLC電路使用網表
+        log('🔧 方法4: 嘗試網表方式創建LLC', 'info');
+
+        const llcNetlist = `
+LLC諧振轉換器測試
+* LLC電路網表
+Vin 1 0 DC 12V
+Lr 1 2 10mH
+Cr 2 3 1uF
+Rload 3 0 50
+.dc vin 0 12 1
+.end
+        `;
+
+        log('📝 創建LLC網表:', 'info');
+        log('   Vin: 12V DC電源 (節點1到地)', 'info');
+        log('   Lr: 10mH 諧振電感 (節點1到2)', 'info');
+        log('   Cr: 1μF 諧振電容 (節點2到3)', 'info');
+        log('   Rload: 50Ω 負載 (節點3到地)', 'info');
+
+        if (spice.AkingSPICE) {
+          const netlistSolver = new spice.AkingSPICE(llcNetlist);
+          log('✅ 網表求解器創建成功', 'success');
+
+          // 嘗試運行分析
+          if (typeof netlistSolver.run === 'function') {
+            log('🚀 執行分析...', 'info');
+            const result = netlistSolver.run();
+
+            if (result) {
+              log('✅ 分析完成', 'success');
+              log(`結果類型: ${typeof result}`, 'info');
+
+              if (result.nodeVoltages) {
+                log('📊 節點電壓:', 'success');
+                for (const node in result.nodeVoltages) {
+                  log(`  節點${node}: ${result.nodeVoltages[node].toFixed(3)}V`, 'success');
+                }
+
+                // 更新顯示
+                const v3 = result.nodeVoltages[3] || 0;
+                updateMetric('vout', v3.toFixed(2) + 'V');
+
+              } else {
+                log('⚠️ 結果中沒有節點電壓信息', 'warning');
+              }
+            } else {
+              log('❌ 分析返回空結果', 'error');
+            }
+          } else {
+            log('❌ 求解器沒有run方法', 'error');
+          }
+        }
+
+        // 方法5: 嘗試直接組件方式
+        log('🔧 方法5: 直接組件方式', 'info');
+
+        const { VoltageSource, Resistor, Capacitor, Inductor } = spice;
+
+        const components = [
+          new VoltageSource('Vin', [1, 0], 12.0),
+          new Inductor('Lr', [1, 2], 10e-3),
+          new Capacitor('Cr', [2, 3], 1e-6),
+          new Resistor('Rload', [3, 0], 50.0)
+        ];
+
+        log(`✅ 創建${components.length}個組件`, 'success');
+        updateMetric('components', components.length);
+        updateMetric('nodes', '4');
+
+        // 檢查組件屬性
+        components.forEach((comp, i) => {
+          log(`  組件${i + 1}: ${comp.name} ${comp.type} 節點[${comp.nodes.join(',')}]`, 'info');
+        });
+
+        if (spice.AkingSPICE) {
+          const componentSolver = new spice.AkingSPICE();
+          componentSolver.components = components;
+
+          log('✅ 組件設置到求解器', 'success');
+
+          // 嘗試設置分析
+          if (typeof componentSolver.addAnalysis === 'function') {
+            componentSolver.addAnalysis('.dc vin 0 12 1');
+            log('✅ DC分析設置完成', 'success');
+          }
+        }
+
+        log('🎉 標準AkingSPICE測試完成', 'success');
+        updateMetric('status', '完成');
+
+      } catch (error) {
+        log(`❌ 執行錯誤: ${error.message}`, 'error');
+        log(`錯誤詳細: ${error.stack}`, 'error');
+        updateMetric('status', '錯誤');
+      }
+    });
+
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <title>ExplicitStateSolver基礎診斷</title>
+  <style>
+    body {
+      font-family: Arial;
+      padding: 20px;
+      background: #2c3e50;
+      color: white;
+    }
+
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 20px;
+      border-radius: 10px;
+    }
+
+    #log {
+      height: 500px;
+      overflow-y: auto;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 15px;
+      border-radius: 8px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      margin-top: 20px;
+    }
+
+    .success {
+      color: #27ae60;
+    }
+
+    .error {
+      color: #e74c3c;
+    }
+
+    .warning {
+      color: #f39c12;
+    }
+
+    .info {
+      color: #3498db;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>🔍 ExplicitStateSolver基礎診斷</h1>
+    <p>深入診斷ExplicitStateSolver的每個步驟</p>
+
+    <div id="log">開始ExplicitStateSolver基礎診斷...<br></div>
+  </div>
+
+  <script src="./lib-dist/AkingSPICE.umd.js"></script>
+
+  <script>
+    function log(message, type = 'info') {
+      const colors = {
+        'success': '#27ae60',
+        'error': '#e74c3c',
+        'warning': '#f39c12',
+        'info': '#3498db'
+      };
+
+      const time = new Date().toLocaleTimeString();
+      const logElement = document.getElementById('log');
+      logElement.innerHTML += `<span style="color: ${colors[type]};">[${time}] ${message}</span><br>`;
+      logElement.scrollTop = logElement.scrollHeight;
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      log('🔍 開始ExplicitStateSolver基礎診斷', 'success');
+
+      if (!window.AkingSPICE) {
+        log('❌ AkingSPICE未載入', 'error');
+        return;
+      }
+
+      const { VoltageSource, Resistor, ExplicitStateSolver } = window.AkingSPICE;
+
+      try {
+        log('📦 創建最基本的電路: 5V電源 + 10Ω電阻', 'info');
+
+        const v1 = new VoltageSource('V1', [1, 0], 5.0);
+        const r1 = new Resistor('R1', [1, 0], 10.0);
+
+        log(`VoltageSource: name=${v1.name}, nodes=[${v1.nodes}], value=${v1.value}V`, 'info');
+        log(`Resistor: name=${r1.name}, nodes=[${r1.nodes}], value=${r1.value}Ω`, 'info');
+
+        const components = [v1, r1];
+
+        log('⚙️ 創建ExplicitStateSolver...', 'info');
+        const solver = new ExplicitStateSolver();
+
+        log('🔧 嘗試初始化求解器...', 'info');
+
+        // 使用最寬鬆的參數
+        const initResult = solver.initialize(components, 1e-2, {  // 10ms大時間步長
+          debug: true,
+          maxIterations: 10,
+          tolerance: 1e-1,         // 10%容差
+          solverMaxIterations: 20,
+          solverTolerance: 1e-1
+        });
+
+        log('✅ 求解器初始化完成', 'success');
+        log(`初始化結果: ${JSON.stringify(initResult)}`, 'info');
+
+        // 檢查求解器內部狀態
+        log('🔍 檢查求解器內部狀態:', 'info');
+
+        if (solver.circuitData) {
+          log(`  節點數: ${solver.circuitData.nodeCount}`, 'info');
+          log(`  組件數: ${solver.circuitData.componentCount}`, 'info');
+          log(`  狀態變量數: ${solver.circuitData.stateCount}`, 'info');
+        }
+
+        if (solver.gMatrix) {
+          log(`  G矩陣大小: ${solver.gMatrix.rows}x${solver.gMatrix.cols}`, 'info');
+
+          // 打印G矩陣內容 (如果不太大)
+          if (solver.gMatrix.rows <= 5) {
+            log('  G矩陣內容:', 'info');
+            for (let i = 0; i < solver.gMatrix.rows; i++) {
+              let row = '    [';
+              for (let j = 0; j < solver.gMatrix.cols; j++) {
+                row += solver.gMatrix.get(i, j).toFixed(3);
+                if (j < solver.gMatrix.cols - 1) row += ', ';
+              }
+              row += ']';
+              log(row, 'info');
+            }
+          }
+        }
+
+        log('⚡ 執行第一個求解步驟...', 'info');
+
+        const result = solver.step();
+
+        log('✅ 第一步執行成功', 'success');
+        log(`結果類型: ${typeof result}`, 'info');
+        log(`結果keys: ${Object.keys(result)}`, 'info');
+
+        if (result.nodeVoltages) {
+          log('📊 節點電壓:', 'success');
+          for (const node in result.nodeVoltages) {
+            log(`  節點 ${node}: ${result.nodeVoltages[node]}V`, 'success');
+          }
+
+          // 手動驗證 - 5V電源，10Ω電阻，應該有0.5A電流
+          const v_node1 = result.nodeVoltages[1] || 0;
+          const expected_current = 5.0 / 10.0; // 0.5A
+          const calculated_current = v_node1 / 10.0;
+
+          log('🧮 理論計算驗證:', 'info');
+          log(`  理論電流: ${expected_current}A`, 'info');
+          log(`  計算電流: ${calculated_current}A`, 'info');
+          log(`  電壓是否合理: ${Math.abs(v_node1) > 1e-6 ? '是' : '否'}`, v_node1 > 1e-6 ? 'success' : 'error');
+
+        } else {
+          log('❌ 結果中沒有nodeVoltages', 'error');
+        }
+
+        if (result.componentStates) {
+          log('🔗 組件狀態:', 'info');
+          for (const comp in result.componentStates) {
+            log(`  ${comp}: ${JSON.stringify(result.componentStates[comp])}`, 'info');
+          }
+        }
+
+        // 嘗試執行多步
+        log('🔄 嘗試執行5個額外步驟...', 'info');
+        for (let step = 2; step <= 6; step++) {
+          try {
+            const stepResult = solver.step();
+            const v1_step = stepResult.nodeVoltages[1] || 0;
+            log(`  步驟 ${step}: V1=${v1_step.toFixed(6)}V`, 'info');
+          } catch (stepError) {
+            log(`  步驟 ${step} 失敗: ${stepError.message}`, 'error');
+            break;
+          }
+        }
+
+        log('🎉 ExplicitStateSolver基礎診斷完成', 'success');
+
+      } catch (error) {
+        log(`❌ 診斷過程錯誤: ${error.message}`, 'error');
+        console.error('完整錯誤:', error);
+
+        if (error.stack) {
+          const stackLines = error.stack.split('\n').slice(0, 5);
+          log('錯誤堆疊 (前5行):', 'error');
+          stackLines.forEach(line => {
+            log(`  ${line}`, 'error');
+          });
+        }
+      }
+    });
+
+  </script>
+</body>
+
+</html>
