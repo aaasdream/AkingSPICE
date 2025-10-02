@@ -5,14 +5,29 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "test": "node test/test-explicit-solver.js",
-    "test:explicit": "node test/test-explicit-solver.js",
-    "test:webgpu": "node test/test-webgpu-basic.js",
-    "test:gpu": "node test/test-gpu-explicit-solver.js",
-    "test:gpu-fast": "node test/test-batch-gpu.js",
+    "test": "node test/run-tests.js",
+    "test:all": "node test/run-tests.js",
+    "test:master": "node test/master-test.js",
+    "test:core": "node test/test-core-modules.js",
+    "test:solvers": "node test/test-solver-validation.js",
+    "test:components": "node test/test-component-imports.js",
+    "test:rlc": "node test/test-rlc-frequency-validation.js",
     "test:perf": "node test/quick-gpu-perf.js",
+    "test:stability": "node test/test-long-term-stability.js",
+    "test:watch": "nodemon --exec \"npm run test:core\" --watch src --watch test",
+    "test:report": "node test/run-tests.js > test-report-$(date +%Y%m%d-%H%M%S).txt 2>&1",
+    "quality-gate": "npm run test:core && npm run test:solvers && npm run test:rlc && npm run build",
+    "performance-check": "npm run test:perf && npm run test:stability",
     "build": "rollup -c",
-    "dev": "rollup -c -w"
+    "dev": "rollup -c -w",
+    "check-all": "npm run quality-gate && npm run performance-check",
+    "dev:help": "node tools/ai-dev-helper.js",
+    "dev:circuit": "node tools/ai-dev-helper.js generate circuit",
+    "dev:component": "node tools/ai-dev-helper.js generate component",
+    "dev:api": "node tools/ai-dev-helper.js api",
+    "dev:example": "node tools/ai-dev-helper.js example",
+    "dev:cheatsheet": "node tools/ai-dev-helper.js cheatsheet",
+    "docs:serve": "echo 'Documentation available in docs/ folder'"
   },
   "keywords": [
     "spice",
@@ -26,8 +41,7 @@
   "engines": {
     "node": ">=16.0.0"
   },
-  "dependencies": {
-  },
+  "dependencies": {},
   "devDependencies": {
     "@webgpu/types": "^0.1.65",
     "rollup": "^4.0.0"
