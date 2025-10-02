@@ -83,7 +83,7 @@ export class MNABuilder {
             }
             
             // 收集電壓源 (需要額外的電流變數)
-            if (component.type === 'V' || component.needsCurrentVariable()) {
+            if (component.type === 'V' || (component.needsCurrentVariable && component.needsCurrentVariable())) {
                 voltageSourceSet.add(component.name);
             }
         }
@@ -535,6 +535,30 @@ export class MNABuilder {
             console.log(row);
         }
         console.log('==================\n');
+    }
+
+    /**
+     * 獲取節點映射 (用於 Newton-Raphson 求解器)
+     * @returns {Map<string, number>} 節點名稱到矩陣索引的映射
+     */
+    getNodeMap() {
+        return new Map(this.nodeMap);
+    }
+    
+    /**
+     * 獲取矩陣大小 (用於 Newton-Raphson 求解器)
+     * @returns {number} 矩陣維度
+     */
+    getMatrixSize() {
+        return this.matrixSize;
+    }
+    
+    /**
+     * 獲取電壓源映射 (用於支路電流提取)
+     * @returns {Map<string, number>} 電壓源名稱到電流變量索引的映射
+     */
+    getVoltageSourceMap() {
+        return new Map(this.voltageSourceMap);
     }
 
     /**

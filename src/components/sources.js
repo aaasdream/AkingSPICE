@@ -138,8 +138,9 @@ export class VoltageSource extends BaseComponent {
         const node1 = preprocessor.getNodeIndex(this.nodes[0]);
         const node2 = preprocessor.getNodeIndex(this.nodes[1]);
         
-        // 使用大導納近似理想電壓源
-        const largeAdmittance = 1e3;  // 進一步降低導納值提高數值穩定性
+        // 🔥 核心修正：使用標準大導納法確保G矩陣非奇異
+        // 對於理想電壓源，使用更大的導納值
+        const largeAdmittance = 1e6;  // 工業標準值，確保理想電壓源約束
         
         if (node1 >= 0) {
             preprocessor.addConductance(node1, node1, largeAdmittance);
@@ -164,6 +165,7 @@ export class VoltageSource extends BaseComponent {
 
     /**
      * 更新RHS向量 - 電壓源的等效電流源貢獻
+     * 使用標準大導納法：I_eq = V(t) * G_large
      * @param {Float32Array} rhsVector RHS向量
      * @param {Float32Array} stateVector 狀態向量
      * @param {number} time 當前時間
@@ -177,7 +179,8 @@ export class VoltageSource extends BaseComponent {
         // 獲取當前電壓值
         const voltage = this.getValue(time);
         
-        // 等效電流源: I = G_large * V
+        // 🔥 核心修正：計算等效電流源貢獻 I_eq = V(t) * G_large
+        // 這是標準大導納法的RHS項
         const currentContribution = this.largeAdmittance * voltage;
         
         if (node1Idx >= 0) {

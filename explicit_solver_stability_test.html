@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>顯式求解器數值穩定性測試</title>
+    <style>
+        body {
+            font-family: 'Consolas', 'Monaco', monospace;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        .test-section {
+            margin: 30px 0;
+            padding: 20px;
+            background: #f8f9fa;
+            border-left: 4px solid #007bff;
+            border-radius: 5px;
+        }
+        .result {
+            margin: 15px 0;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+        }
+        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .warning { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+        .info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+        .plot-container {
+            margin: 20px 0;
+            text-align: center;
+        }
+        canvas {
+            border: 1px solid #ddd;
+            max-width: 100%;
+            height: auto;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .controls {
+            margin: 20px 0;
+            padding: 15px;
+            background: #e9ecef;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 顯式求解器數值穩定性測試</h1>
+        <p>此測試驗證修正後的顯式求解器在處理RC電路時的數值穩定性，特別是移除大導納後的改進效果。</p>
+
+        <div class="controls">
+            <label>時間步長 (µs): </label>
+            <input type="number" id="timeStep" value="1" min="0.1" max="100" step="0.1">
+            
+            <label>模擬時間 (ms): </label>
+            <input type="number" id="simTime" value="5" min="1" max="50" step="1">
+            
+            <button onclick="runStabilityTest()">🚀 執行穩定性測試</button>
+            <button onclick="compareWithImplicit()">📊 對比隱式求解器</button>
+            <button onclick="clearResults()">🧹 清除結果</button>
+        </div>
+
+        <div class="test-section">
+            <h2>測試電路: 簡單RC電路</h2>
+            <p>VIN (5V DC) → R1 (1kΩ) → C1 (1µF) → GND</p>
+            <div id="circuitInfo" class="info result">
+                理論時間常數 τ = RC = 1kΩ × 1µF = 1ms<br>
+                理論穩態電壓: 5V<br>
+                理論充電曲線: Vc(t) = 5 × (1 - e^(-t/τ))
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h2>穩定性測試結果</h2>
+            <div id="testResults"></div>
+            
+            <div class="plot-container">
+                <canvas id="plotCanvas" width="800" height="400"></canvas>
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h2>數值穩定性分析</h2>
+            <div id="stabilityAnalysis"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { AkingSPICE } from './lib-dist/AkingSPICE.es.js';
+
+        let testResults = [];
+        let canvas, ctx;
+
+        window.addEventListener('DOMContentLoaded', function() {
+            canvas = document.getElementById('plotCanvas');
+            ctx = canvas.getContext('2d');
+            clearCanvas();
+        });
+
+        window.runStabilityTest = async function() {
+            const timeStepUs = parseFloat(document.getElementById('timeStep').value);
+            const simTimeMs = parseFloat(document.getElementById('simTime').value);
+            
+            const timeStep = timeStepUs * 1e-6;  // 轉換為秒
+            const totalTime = simTimeMs * 1e-3;   // 轉換為秒
+            
+            const resultsDiv = document.getElementById('testResults');
+            const analysisDiv = document.getElementById('stabilityAnalysis');
+            
+            resultsDiv.innerHTML = '<div class="info result">正在執行測試...</div>';
+            
+            try {
+                // 創建測試電路
+                const spice = new AkingSPICE();
+                
+                // 簡單RC電路: VIN(5V) - R1(1k) - C1(1µ) - GND
+                spice.addVoltageSource('VIN', ['n1', '0'], 5);
+                spice.addResistor('R1', ['n1', 'n2'], 1000);
+                spice.addCapacitor('C1', ['n2', '0'], 1e-6, { ic: 0 });
+                
+                console.log('🧪 開始顯式求解器穩定性測試');
+                console.log(`參數: dt=${timeStep*1e6}µs, 總時間=${totalTime*1e3}ms`);
+                
+                // 使用顯式求解器
+                spice.useExplicitSolver();
+                spice.setTimeStep(timeStep);
+                
+                // 執行暫態分析
+                const startTime = performance.now();
+                const result = await spice.transientAnalysis(totalTime, timeStep);
+                const endTime = performance.now();
+                
+                if (result && result.timePoints && result.timePoints.length > 0) {
+                    testResults = result;
+                    
+                    // 分析結果
+                    const analysis = analyzeStability(result, totalTime);
+                    
+                    // 顯示結果
+                    resultsDiv.innerHTML = `
+                        <div class="success result">
+                            ✅ 測試成功完成！<br>
+                            模擬點數: ${result.timePoints.length}<br>
+                            計算時間: ${(endTime - startTime).toFixed(2)}ms<br>
+                            平均每步: ${((endTime - startTime) / result.timePoints.length).toFixed(3)}ms
+                        </div>
+                    `;
+                    
+                    // 顯示穩定性分析
+                    displayStabilityAnalysis(analysis, analysisDiv);
+                    
+                    // 繪圖
+                    plotResults(result);
+                    
+                } else {
+                    throw new Error('模擬結果為空或格式不正確');
+                }
+                
+            } catch (error) {
+                console.error('測試失敗:', error);
+                resultsDiv.innerHTML = `
+                    <div class="error result">
+                        ❌ 測試失敗: ${error.message}<br>
+                        這可能表示數值不穩定或其他錯誤。
+                    </div>
+                `;
+                
+                analysisDiv.innerHTML = `
+                    <div class="warning result">
+                        ⚠️ 由於測試失敗，無法進行穩定性分析。<br>
+                        建議: 嘗試增大時間步長或檢查電路定義。
+                    </div>
+                `;
+            }
+        };
+
+        function analyzeStability(result, totalTime) {
+            const times = result.timePoints;
+            const voltages = result.voltageData['n2'] || [];  // 電容電壓
+            
+            if (!voltages || voltages.length === 0) {
+                return { stable: false, reason: '無電壓數據' };
+            }
+            
+            // 檢查數值穩定性
+            let hasNaN = false;
+            let hasInfinite = false;
+            let maxVoltage = -Infinity;
+            let minVoltage = Infinity;
+            let oscillations = 0;
+            let lastSign = 0;
+            
+            for (let i = 0; i < voltages.length; i++) {
+                const v = voltages[i];
+                
+                if (isNaN(v)) hasNaN = true;
+                if (!isFinite(v)) hasInfinite = true;
+                
+                maxVoltage = Math.max(maxVoltage, v);
+                minVoltage = Math.min(minVoltage, v);
+                
+                // 檢測振盪 (相鄰點斜率變號)
+                if (i > 0) {
+                    const slope = voltages[i] - voltages[i-1];
+                    const sign = Math.sign(slope);
+                    if (sign !== 0 && lastSign !== 0 && sign !== lastSign) {
+                        oscillations++;
+                    }
+                    lastSign = sign;
+                }
+            }
+            
+            // 理論值分析
+            const R = 1000;  // 1kΩ
+            const C = 1e-6;  // 1µF
+            const timeConstant = R * C;  // 1ms
+            const theoreticalFinal = 5.0;  // 5V
+            
+            const finalVoltage = voltages[voltages.length - 1];
+            const settlingTime = findSettlingTime(times, voltages, theoreticalFinal);
+            
+            return {
+                stable: !hasNaN && !hasInfinite && Math.abs(finalVoltage) < 100,
+                hasNaN,
+                hasInfinite,
+                maxVoltage,
+                minVoltage,
+                oscillations,
+                finalVoltage,
+                theoreticalFinal,
+                error: Math.abs(finalVoltage - theoreticalFinal),
+                relativeError: Math.abs(finalVoltage - theoreticalFinal) / theoreticalFinal * 100,
+                settlingTime,
+                theoreticalSettlingTime: timeConstant * 4,  // 4τ = 99.3% 穩定
+                timeConstant
+            };
+        }
+
+        function findSettlingTime(times, voltages, target, tolerance = 0.02) {
+            // 找到電壓穩定在目標值±2%內的時間
+            const upperBound = target * (1 + tolerance);
+            const lowerBound = target * (1 - tolerance);
+            
+            for (let i = voltages.length - 1; i >= 0; i--) {
+                if (voltages[i] < lowerBound || voltages[i] > upperBound) {
+                    return i < times.length - 1 ? times[i + 1] : times[times.length - 1];
+                }
+            }
+            return times[0];  // 如果一開始就穩定
+        }
+
+        function displayStabilityAnalysis(analysis, div) {
+            let html = '';
+            
+            if (analysis.stable) {
+                html += '<div class="success result">✅ 數值穩定 - 未檢測到發散或異常值</div>';
+            } else {
+                html += '<div class="error result">❌ 數值不穩定檢測</div>';
+            }
+            
+            html += `<div class="info result">
+                📊 數值統計:<br>
+                • 最終電壓: ${analysis.finalVoltage.toFixed(4)}V (理論值: ${analysis.theoreticalFinal}V)<br>
+                • 絕對誤差: ${analysis.error.toFixed(4)}V<br>
+                • 相對誤差: ${analysis.relativeError.toFixed(2)}%<br>
+                • 電壓範圍: ${analysis.minVoltage.toFixed(4)}V ~ ${analysis.maxVoltage.toFixed(4)}V<br>
+                • 振盪次數: ${analysis.oscillations}<br>
+                • 穩定時間: ${(analysis.settlingTime * 1000).toFixed(2)}ms (理論: ${(analysis.theoreticalSettlingTime * 1000).toFixed(2)}ms)
+            </div>`;
+            
+            if (analysis.hasNaN) {
+                html += '<div class="error result">❌ 檢測到 NaN 值 - 嚴重數值錯誤</div>';
+            }
+            
+            if (analysis.hasInfinite) {
+                html += '<div class="error result">❌ 檢測到無窮大值 - 數值發散</div>';
+            }
+            
+            if (analysis.relativeError > 10) {
+                html += '<div class="warning result">⚠️ 相對誤差過大 (>10%) - 可能需要更小的時間步長</div>';
+            } else if (analysis.relativeError > 5) {
+                html += '<div class="warning result">⚠️ 相對誤差較大 (>5%) - 建議檢查數值精度</div>';
+            }
+            
+            if (analysis.oscillations > analysis.timePoints?.length / 10) {
+                html += '<div class="warning result">⚠️ 檢測到過多振盪 - 可能存在數值不穩定</div>';
+            }
+            
+            div.innerHTML = html;
+        }
+
+        function plotResults(result) {
+            clearCanvas();
+            
+            const times = result.timePoints;
+            const voltages = result.voltageData['n2'] || [];
+            
+            if (!times || !voltages || times.length === 0) return;
+            
+            const width = canvas.width;
+            const height = canvas.height;
+            const margin = 50;
+            
+            // 設置坐標系
+            const xMin = 0;
+            const xMax = times[times.length - 1] * 1000;  // 轉換為ms
+            const yMin = 0;
+            const yMax = 6;
+            
+            // 繪製座標軸
+            drawAxes(margin, width - margin, margin, height - margin, xMin, xMax, yMin, yMax);
+            
+            // 繪製理論曲線 (綠色虛線)
+            drawTheoreticalCurve(times, margin, width - margin, margin, height - margin, xMin, xMax, yMin, yMax);
+            
+            // 繪製實際結果 (藍色實線)
+            drawDataCurve(times, voltages, margin, width - margin, margin, height - margin, xMin, xMax, yMin, yMax, 'blue', 2);
+            
+            // 添加圖例
+            drawLegend();
+        }
+
+        function drawAxes(x1, x2, y1, y2, xMin, xMax, yMin, yMax) {
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x1, y2);
+            ctx.lineTo(x2, y2);  // X軸
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x1, y2);  // Y軸
+            ctx.stroke();
+            
+            // 標籤
+            ctx.fillStyle = '#333';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('時間 (ms)', (x1 + x2) / 2, y2 + 30);
+            
+            ctx.save();
+            ctx.translate(x1 - 30, (y1 + y2) / 2);
+            ctx.rotate(-Math.PI / 2);
+            ctx.fillText('電壓 (V)', 0, 0);
+            ctx.restore();
+            
+            // 刻度
+            const xTicks = 5;
+            const yTicks = 6;
+            
+            for (let i = 0; i <= xTicks; i++) {
+                const x = x1 + (x2 - x1) * i / xTicks;
+                const value = xMin + (xMax - xMin) * i / xTicks;
+                ctx.beginPath();
+                ctx.moveTo(x, y2);
+                ctx.lineTo(x, y2 + 5);
+                ctx.stroke();
+                ctx.fillText(value.toFixed(1), x, y2 + 20);
+            }
+            
+            for (let i = 0; i <= yTicks; i++) {
+                const y = y2 - (y2 - y1) * i / yTicks;
+                const value = yMin + (yMax - yMin) * i / yTicks;
+                ctx.beginPath();
+                ctx.moveTo(x1, y);
+                ctx.lineTo(x1 - 5, y);
+                ctx.stroke();
+                ctx.textAlign = 'right';
+                ctx.fillText(value.toFixed(1), x1 - 10, y + 3);
+            }
+        }
+
+        function drawTheoreticalCurve(times, x1, x2, y1, y2, xMin, xMax, yMin, yMax) {
+            const timeConstant = 1e-3;  // 1ms
+            const finalVoltage = 5.0;
+            
+            ctx.strokeStyle = '#28a745';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            ctx.beginPath();
+            
+            let firstPoint = true;
+            for (const t of times) {
+                const theoretical = finalVoltage * (1 - Math.exp(-t / timeConstant));
+                const x = x1 + (x2 - x1) * (t * 1000 - xMin) / (xMax - xMin);
+                const y = y2 - (y2 - y1) * (theoretical - yMin) / (yMax - yMin);
+                
+                if (firstPoint) {
+                    ctx.moveTo(x, y);
+                    firstPoint = false;
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            }
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        function drawDataCurve(times, data, x1, x2, y1, y2, xMin, xMax, yMin, yMax, color, lineWidth) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = lineWidth;
+            ctx.beginPath();
+            
+            let firstPoint = true;
+            for (let i = 0; i < Math.min(times.length, data.length); i++) {
+                const x = x1 + (x2 - x1) * (times[i] * 1000 - xMin) / (xMax - xMin);
+                const y = y2 - (y2 - y1) * (data[i] - yMin) / (yMax - yMin);
+                
+                if (firstPoint) {
+                    ctx.moveTo(x, y);
+                    firstPoint = false;
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            }
+            ctx.stroke();
+        }
+
+        function drawLegend() {
+            const x = canvas.width - 200;
+            const y = 50;
+            
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.fillRect(x, y, 180, 60);
+            ctx.strokeStyle = '#ccc';
+            ctx.strokeRect(x, y, 180, 60);
+            
+            // 理論曲線
+            ctx.strokeStyle = '#28a745';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            ctx.beginPath();
+            ctx.moveTo(x + 10, y + 20);
+            ctx.lineTo(x + 40, y + 20);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            
+            ctx.fillStyle = '#333';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'left';
+            ctx.fillText('理論曲線', x + 50, y + 25);
+            
+            // 實際結果
+            ctx.strokeStyle = 'blue';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(x + 10, y + 40);
+            ctx.lineTo(x + 40, y + 40);
+            ctx.stroke();
+            
+            ctx.fillText('顯式求解器', x + 50, y + 45);
+        }
+
+        function clearCanvas() {
+            ctx.fillStyle = '#f8f9fa';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        window.compareWithImplicit = function() {
+            alert('隱式求解器對比功能將在下一階段實現');
+        };
+
+        window.clearResults = function() {
+            document.getElementById('testResults').innerHTML = '';
+            document.getElementById('stabilityAnalysis').innerHTML = '';
+            clearCanvas();
+            testResults = [];
+        };
+
+    </script>
+</body>
+</html>

@@ -114,6 +114,159 @@ export class Matrix {
     }
 
     /**
+     * 矩陣乘法 - A * B
+     * @param {Matrix} other 右側矩陣
+     * @returns {Matrix} 乘積矩陣
+     */
+    multiply(other) {
+        if (this.cols !== other.rows) {
+            throw new Error(`Matrix dimensions incompatible for multiplication: ${this.rows}x${this.cols} * ${other.rows}x${other.cols}`);
+        }
+        
+        const result = new Matrix(this.rows, other.cols);
+        
+        for (let i = 0; i < this.rows; i++) {
+            for (let j = 0; j < other.cols; j++) {
+                let sum = 0;
+                for (let k = 0; k < this.cols; k++) {
+                    sum += this.get(i, k) * other.get(k, j);
+                }
+                result.set(i, j, sum);
+            }
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 矩陣減法 - A - B
+     * @param {Matrix} other 右側矩陣
+     * @returns {Matrix} 差矩陣
+     */
+    subtract(other) {
+        if (this.rows !== other.rows || this.cols !== other.cols) {
+            throw new Error(`Matrix dimensions incompatible for subtraction: ${this.rows}x${this.cols} - ${other.rows}x${other.cols}`);
+        }
+        
+        const result = new Matrix(this.rows, this.cols);
+        
+        for (let i = 0; i < this.rows; i++) {
+            for (let j = 0; j < this.cols; j++) {
+                result.set(i, j, this.get(i, j) - other.get(i, j));
+            }
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 矩陣加法 - A + B
+     * @param {Matrix} other 右側矩陣
+     * @returns {Matrix} 和矩陣
+     */
+    add(other) {
+        if (this.rows !== other.rows || this.cols !== other.cols) {
+            throw new Error(`Matrix dimensions incompatible for addition: ${this.rows}x${this.cols} + ${other.rows}x${other.cols}`);
+        }
+        
+        const result = new Matrix(this.rows, this.cols);
+        
+        for (let i = 0; i < this.rows; i++) {
+            for (let j = 0; j < this.cols; j++) {
+                result.set(i, j, this.get(i, j) + other.get(i, j));
+            }
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 矩陣轉置
+     * @returns {Matrix} 轉置矩陣
+     */
+    transpose() {
+        const result = new Matrix(this.cols, this.rows);
+        
+        for (let i = 0; i < this.rows; i++) {
+            for (let j = 0; j < this.cols; j++) {
+                result.set(j, i, this.get(i, j));
+            }
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 矩陣求逆 - 使用 LU 分解方法
+     * @returns {Matrix} 逆矩陣
+     */
+    inverse() {
+        if (!this.isSquare()) {
+            throw new Error('Matrix must be square to compute inverse');
+        }
+        
+        const n = this.rows;
+        const A = this.clone();
+        const I = Matrix.identity(n);
+        
+        // 對每一列求解 Ax = e_i，其中 e_i 是第 i 個單位向量
+        const result = new Matrix(n, n);
+        
+        for (let i = 0; i < n; i++) {
+            // 創建第 i 個單位向量
+            const unitVector = Vector.zeros(n);
+            unitVector.set(i, 1.0);
+            
+            try {
+                // 求解 Ax = e_i
+                const ACopy = this.clone();
+                const solution = LUSolver.solve(ACopy, unitVector);
+                
+                // 將解放入結果矩陣的第 i 列
+                for (let j = 0; j < n; j++) {
+                    result.set(j, i, solution.get(j));
+                }
+            } catch (error) {
+                throw new Error(`Matrix is singular and cannot be inverted: ${error.message}`);
+            }
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 提取子矩陣
+     * @param {number[]} rowIndices 行索引數組
+     * @param {number[]} colIndices 列索引數組
+     * @returns {Matrix} 子矩陣
+     */
+    subMatrix(rowIndices, colIndices) {
+        const result = new Matrix(rowIndices.length, colIndices.length);
+        
+        for (let i = 0; i < rowIndices.length; i++) {
+            for (let j = 0; j < colIndices.length; j++) {
+                result.set(i, j, this.get(rowIndices[i], colIndices[j]));
+            }
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 設置子矩陣
+     * @param {number} startRow 起始行
+     * @param {number} startCol 起始列
+     * @param {Matrix} subMatrix 要設置的子矩陣
+     */
+    setSubMatrix(startRow, startCol, subMatrix) {
+        for (let i = 0; i < subMatrix.rows; i++) {
+            for (let j = 0; j < subMatrix.cols; j++) {
+                this.set(startRow + i, startCol + j, subMatrix.get(i, j));
+            }
+        }
+    }
+
+    /**
      * 轉換為字符串表示
      * @param {number} precision 小數點後位數
      * @returns {string}
@@ -189,6 +342,83 @@ export class Vector {
      */
     clone() {
         return new Vector(this.size, this.data);
+    }
+
+    /**
+     * 向量加法
+     * @param {Vector} other 另一個向量
+     * @returns {Vector} 和向量
+     */
+    add(other) {
+        if (this.size !== other.size) {
+            throw new Error(`Vector dimensions incompatible for addition: ${this.size} + ${other.size}`);
+        }
+        
+        const result = new Vector(this.size);
+        for (let i = 0; i < this.size; i++) {
+            result.set(i, this.get(i) + other.get(i));
+        }
+        return result;
+    }
+    
+    /**
+     * 向量減法
+     * @param {Vector} other 另一個向量
+     * @returns {Vector} 差向量
+     */
+    subtract(other) {
+        if (this.size !== other.size) {
+            throw new Error(`Vector dimensions incompatible for subtraction: ${this.size} - ${other.size}`);
+        }
+        
+        const result = new Vector(this.size);
+        for (let i = 0; i < this.size; i++) {
+            result.set(i, this.get(i) - other.get(i));
+        }
+        return result;
+    }
+    
+    /**
+     * 標量乘法
+     * @param {number} scalar 標量
+     * @returns {Vector} 結果向量
+     */
+    scale(scalar) {
+        const result = new Vector(this.size);
+        for (let i = 0; i < this.size; i++) {
+            result.set(i, this.get(i) * scalar);
+        }
+        return result;
+    }
+    
+    /**
+     * 點積
+     * @param {Vector} other 另一個向量
+     * @returns {number} 點積結果
+     */
+    dot(other) {
+        if (this.size !== other.size) {
+            throw new Error(`Vector dimensions incompatible for dot product: ${this.size} · ${other.size}`);
+        }
+        
+        let sum = 0;
+        for (let i = 0; i < this.size; i++) {
+            sum += this.get(i) * other.get(i);
+        }
+        return sum;
+    }
+    
+    /**
+     * 向量的歐幾里得範數
+     * @returns {number} 範數
+     */
+    norm() {
+        let sum = 0;
+        for (let i = 0; i < this.size; i++) {
+            const val = this.get(i);
+            sum += val * val;
+        }
+        return Math.sqrt(sum);
     }
 
     /**

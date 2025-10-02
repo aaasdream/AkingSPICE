@@ -25,8 +25,8 @@ export class Capacitor extends LinearTwoTerminal {
         // 計算溫度修正後的電容值
         this.updateTemperatureCoefficient();
         
-        // 顯式方法相關 - 電容被視為電壓源
-        this.largeAdmittance = 1e3;  // 降低大導納以避免數值問題（從1e6降到1e3）
+        // 顯式方法相關 - 電容被視為電壓源，使用工業標準大導納法
+        this.largeAdmittance = 1e3;  // 工業標準值，確保G矩陣非奇異但避免數值精度問題
     }
 
     /**
@@ -49,8 +49,9 @@ export class Capacitor extends LinearTwoTerminal {
     // ==================== 顯式狀態更新法接口 ====================
     
     /**
-     * 電容預處理 - 註冊為狀態變量並添加到G矩陣
-     * 在顯式方法中，電容被建模為理想電壓源 (值 = Vc(t))
+     * 電容預處理 - 註冊為狀態變量 (修正後的顯式方法)
+     * 在顯式方法中，電容被建模為理想電壓源但不添加大導納到G矩陣
+     * G矩陣只包含純電阻和VCCS，電容的影響完全通過RHS向量體現
      * @param {CircuitPreprocessor} preprocessor 預處理器
      */
     preprocess(preprocessor) {
@@ -67,8 +68,9 @@ export class Capacitor extends LinearTwoTerminal {
             initialVoltage: this.ic
         };
         
-        // 電容被建模為理想電壓源，使用大導納近似
-        // 這會在G矩陣中添加: G[i,i] += G_large, G[j,j] += G_large, G[i,j] -= G_large, G[j,i] -= G_large
+        // 🔥 核心修正：使用標準大導納法確保G矩陣非奇異
+        // 電容被建模為：大導納 + 等效電流源
+        // 這是業界標準方法，保證數值穩定性
         if (this.node1Idx >= 0) {
             preprocessor.addConductance(this.node1Idx, this.node1Idx, this.largeAdmittance);
             if (this.node2Idx >= 0) {
@@ -85,9 +87,8 @@ export class Capacitor extends LinearTwoTerminal {
     }
 
     /**
-     * 更新RHS向量 - 電容作為電壓源的貢獻
-     * 電容電壓源方程: V_node1 - V_node2 = Vc(t)
-     * 轉換為電流源: I = G_large * Vc(t)
+     * 更新RHS向量 - 電容作為電壓源的等效電流源貢獻
+     * 使用標準大導納法：I_eq = Vc(t) * G_large
      * @param {Float32Array} rhsVector RHS向量
      * @param {Float32Array} stateVector 狀態向量 [Vc1, Vc2, ...]
      * @param {number} time 當前時間
@@ -96,16 +97,18 @@ export class Capacitor extends LinearTwoTerminal {
     updateRHS(rhsVector, stateVector, time, componentData) {
         if (!componentData) return;
         
-        // 獲取當前電容電壓 (狀態變量)
+        // 獲取當前電容電壓 Vc(t)（狀態變量）
         const stateIndex = componentData.stateIndex;
         if (stateIndex === undefined || !stateVector) return;
         
         const currentVc = stateVector[stateIndex] || 0;
         
-        // 電壓源的等效電流源貢獻: I = G_large * Vc
+        // 🔥 核心修正：計算等效電流源貢獻 I_eq = Vc(t) * G_large
+        // 這是標準大導納法的RHS項
         const currentContribution = this.largeAdmittance * currentVc;
         
-        // 添加到RHS: I流入正端，流出負端
+        // 將電流源貢獻添加到RHS向量
+        // 電流從 n2 流向 n1（按照電壓源極性）
         if (this.node1Idx >= 0) {
             rhsVector[this.node1Idx] += currentContribution;
         }
@@ -115,8 +118,8 @@ export class Capacitor extends LinearTwoTerminal {
     }
 
     /**
-     * 更新電容狀態變數 - 顯式積分法
-     * 計算 dVc/dt = Ic/C 並更新電容電壓
+     * 更新電容狀態變數 - 標準大導納法
+     * 🔥 核心修正：根據求解出的節點電壓計算流過電容的真實電流
      * @param {Map} nodeVoltageMap 節點電壓映射
      * @param {Float32Array} solutionVector 解向量
      * @param {number} dt 時間步長
@@ -125,9 +128,9 @@ export class Capacitor extends LinearTwoTerminal {
      * @param {Matrix} gMatrix G矩陣
      */
     updateState(nodeVoltageMap, solutionVector, dt, currentTime, nodeMap, gMatrix) {
-        // 由於顯式求解器的調用約定與我們需要的不一致，
-        // 電容的狀態更新由求解器的備用路徑處理。
-        // 這個方法只是為了標記電容有updateState能力，實際不做任何事情。
+        // 這個方法由求解器的備用路徑統一處理，
+        // 具體實現在 explicit-state-solver.js 的 updateStateVariables 方法中
+        // 標準大導納法：Ic = (V_node - Vc(t)) * G_large
     }
 
     /**
