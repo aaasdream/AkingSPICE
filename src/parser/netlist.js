@@ -533,34 +533,7 @@ export class NetlistParser {
         };
     }
 
-    /**
-     * 解析工程記號值的助手方法
-     * @param {string|number} value 要解析的值
-     * @returns {number} 解析後的數值
-     */
-    parseValue(value) {
-        if (typeof value === 'number') return value;
-        if (typeof value !== 'string') return null;
-        
-        const str = value.toString().trim().toLowerCase();
-        const numberPart = parseFloat(str);
-        if (isNaN(numberPart)) return null;
-        
-        // 檢查工程記號後綴
-        const suffix = str.slice(numberPart.toString().length);
-        switch (suffix) {
-            case 'p': case 'pico': return numberPart * 1e-12;
-            case 'n': case 'nano': return numberPart * 1e-9;
-            case 'u': case 'μ': case 'micro': return numberPart * 1e-6;
-            case 'm': case 'milli': return numberPart * 1e-3;
-            case 'k': case 'kilo': return numberPart * 1e3;
-            case 'meg': case 'mega': return numberPart * 1e6;
-            case 'g': case 'giga': return numberPart * 1e9;
-            case 't': case 'tera': return numberPart * 1e12;
-            case '': return numberPart;
-            default: return numberPart; // 未知後綴，返回數字部分
-        }
-    }
+
 
     /**
      * 打印解析報告

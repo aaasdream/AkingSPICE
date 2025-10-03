@@ -24,9 +24,6 @@ export class Capacitor extends LinearTwoTerminal {
         
         // 計算溫度修正後的電容值
         this.updateTemperatureCoefficient();
-        
-        // 顯式方法相關 - 電容被視為電壓源，使用工業標準大導納法
-        this.largeAdmittance = 1e3;  // 工業標準值，確保G矩陣非奇異但避免數值精度問題
     }
 
     /**
@@ -46,92 +43,7 @@ export class Capacitor extends LinearTwoTerminal {
         return this.actualValue || this.value;
     }
 
-    // ==================== 顯式狀態更新法接口 ====================
-    
-    /**
-     * 電容預處理 - 註冊為狀態變量 (修正後的顯式方法)
-     * 在顯式方法中，電容被建模為理想電壓源但不添加大導納到G矩陣
-     * G矩陣只包含純電阻和VCCS，電容的影響完全通過RHS向量體現
-     * @param {CircuitPreprocessor} preprocessor 預處理器
-     */
-    preprocess(preprocessor) {
-        // 獲取節點索引
-        this.node1Idx = preprocessor.getNodeIndex(this.nodes[0]);
-        this.node2Idx = preprocessor.getNodeIndex(this.nodes[1]);
-        
-        // 註冊為狀態變量 (電壓類型)
-        // 這將在 identifyStateVariables 階段完成，這裡只記錄索引
-        this.componentData = {
-            node1: this.node1Idx,
-            node2: this.node2Idx,
-            capacitance: this.getCapacitance(),
-            initialVoltage: this.ic
-        };
-        
-        // 🔥 核心修正：使用標準大導納法確保G矩陣非奇異
-        // 電容被建模為：大導納 + 等效電流源
-        // 這是業界標準方法，保證數值穩定性
-        if (this.node1Idx >= 0) {
-            preprocessor.addConductance(this.node1Idx, this.node1Idx, this.largeAdmittance);
-            if (this.node2Idx >= 0) {
-                preprocessor.addConductance(this.node1Idx, this.node2Idx, -this.largeAdmittance);
-            }
-        }
-        
-        if (this.node2Idx >= 0) {
-            preprocessor.addConductance(this.node2Idx, this.node2Idx, this.largeAdmittance);
-            if (this.node1Idx >= 0) {
-                preprocessor.addConductance(this.node2Idx, this.node1Idx, -this.largeAdmittance);
-            }
-        }
-    }
 
-    /**
-     * 更新RHS向量 - 電容作為電壓源的等效電流源貢獻
-     * 使用標準大導納法：I_eq = Vc(t) * G_large
-     * @param {Float32Array} rhsVector RHS向量
-     * @param {Float32Array} stateVector 狀態向量 [Vc1, Vc2, ...]
-     * @param {number} time 當前時間
-     * @param {object} componentData 組件數據
-     */
-    updateRHS(rhsVector, stateVector, time, componentData) {
-        if (!componentData) return;
-        
-        // 獲取當前電容電壓 Vc(t)（狀態變量）
-        const stateIndex = componentData.stateIndex;
-        if (stateIndex === undefined || !stateVector) return;
-        
-        const currentVc = stateVector[stateIndex] || 0;
-        
-        // 🔥 核心修正：計算等效電流源貢獻 I_eq = Vc(t) * G_large
-        // 這是標準大導納法的RHS項
-        const currentContribution = this.largeAdmittance * currentVc;
-        
-        // 將電流源貢獻添加到RHS向量
-        // 電流從 n2 流向 n1（按照電壓源極性）
-        if (this.node1Idx >= 0) {
-            rhsVector[this.node1Idx] += currentContribution;
-        }
-        if (this.node2Idx >= 0) {
-            rhsVector[this.node2Idx] -= currentContribution;
-        }
-    }
-
-    /**
-     * 更新電容狀態變數 - 標準大導納法
-     * 🔥 核心修正：根據求解出的節點電壓計算流過電容的真實電流
-     * @param {Map} nodeVoltageMap 節點電壓映射
-     * @param {Float32Array} solutionVector 解向量
-     * @param {number} dt 時間步長
-     * @param {number} currentTime 當前時間
-     * @param {Map} nodeMap 節點映射
-     * @param {Matrix} gMatrix G矩陣
-     */
-    updateState(nodeVoltageMap, solutionVector, dt, currentTime, nodeMap, gMatrix) {
-        // 這個方法由求解器的備用路徑統一處理，
-        // 具體實現在 explicit-state-solver.js 的 updateStateVariables 方法中
-        // 標準大導納法：Ic = (V_node - Vc(t)) * G_large
-    }
 
     /**
      * 計算電容電流 i = C * dv/dt
@@ -195,6 +107,35 @@ export class Capacitor extends LinearTwoTerminal {
         
         // 計算功耗 (對理想電容應該為0，但實際中可能有數值誤差)
         this.operatingPoint.power = voltage * current;
+    }
+
+    /**
+     * 更新伴隨模型 (用於暫態分析)
+     * 計算電容器在下一個時間步的等效電路參數
+     */
+    updateCompanionModel() {
+        if (!this.timeStep) {
+            return; // DC 分析不需要伴隨模型
+        }
+
+        const C = this.getCapacitance();
+        const dt = this.timeStep;
+
+        // 使用後向歐拉積分法的伴隨模型
+        // 等效電導：Geq = C/dt
+        // 等效電流源：Ieq = C/dt * Vc(t-dt)
+        this.equivalentConductance = C / dt;
+        
+        const previousVoltage = this.previousValues.get('voltage') || this.ic || 0;
+        this.equivalentCurrentSource = this.equivalentConductance * previousVoltage;
+
+        // 如果使用梯形法
+        if (this.integrationMethod === 'trapezoidal') {
+            // 梯形法：Geq = 2*C/dt
+            this.equivalentConductance = 2 * C / dt;
+            const previousCurrent = this.previousValues.get('current') || 0;
+            this.equivalentCurrentSource = this.equivalentConductance * previousVoltage + previousCurrent;
+        }
     }
 
     /**

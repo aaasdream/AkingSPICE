@@ -42,35 +42,7 @@ export class Resistor extends LinearTwoTerminal {
         return this.actualValue || this.value;
     }
 
-    // ==================== 顯式狀態更新法接口 ====================
 
-    /**
-     * 電阻預處理 - 添加導納到G矩陣
-     * @param {CircuitPreprocessor} preprocessor 預處理器
-     */
-    preprocess(preprocessor) {
-        // 獲取節點索引
-        const node1 = preprocessor.getNodeIndex(this.nodes[0]);
-        const node2 = preprocessor.getNodeIndex(this.nodes[1]);
-
-        // 計算電導
-        const conductance = this.getConductance();
-
-        // 添加到G矩陣: G[i,i] += G, G[j,j] += G, G[i,j] -= G, G[j,i] -= G
-        if (node1 >= 0) {
-            preprocessor.addConductance(node1, node1, conductance);
-            if (node2 >= 0) {
-                preprocessor.addConductance(node1, node2, -conductance);
-            }
-        }
-
-        if (node2 >= 0) {
-            preprocessor.addConductance(node2, node2, conductance);
-            if (node1 >= 0) {
-                preprocessor.addConductance(node2, node1, -conductance);
-            }
-        }
-    }
 
     /**
      * 獲取電導值
@@ -112,17 +84,7 @@ export class Resistor extends LinearTwoTerminal {
         this.operatingPoint.power = this.operatingPoint.voltage * current;
     }
 
-    /**
-     * 更新RHS向量 - 電阻不貢獻電流源項
-     * @param {Float32Array} rhsVector RHS向量
-     * @param {Float32Array} stateVector 狀態向量
-     * @param {number} time 當前時間
-     * @param {Object} componentData 元件數據
-     */
-    updateRHS(rhsVector, stateVector, time, componentData) {
-        // 電阻不產生電流源，所以不需要修改RHS向量
-        // 這個方法存在是為了滿足ExplicitStateSolver的接口要求
-    }
+
 
     /**
      * 檢查是否超過功率額定值

@@ -1,14 +1,14 @@
 /**
- * 直流分析 (DC Analysis) 實現
- * 
- * 用於求解電路的直流工作點，是暫態分析的初始條件
+ * 增強型 DC 分析器 - 整合同倫延拓與 Newton-Raphson 方法
  */
 
 import { Matrix, Vector, LUSolver } from '../core/linalg.js';
 import { MNABuilder } from '../core/mna.js';
+import { NewtonRaphsonSolver, createSPICENewtonSolver } from '../core/newton-raphson-solver.js';
+import { HomotopyDCSolver, createHomotopyDCSolver } from '../core/homotopy-dc-solver.js';
 
 /**
- * DC分析結果類
+ * 增強型 DC 分析結果
  */
 export class DCResult {
     constructor() {
@@ -16,278 +16,495 @@ export class DCResult {
         this.branchCurrents = new Map();
         this.componentPower = new Map();
         this.totalPower = 0;
-        this.analysisInfo = {};
         this.converged = false;
-    }
-
-    /**
-     * 獲取節點電壓
-     * @param {string} nodeName 節點名稱
-     * @returns {number} 電壓值
-     */
-    getNodeVoltage(nodeName) {
-        return this.nodeVoltages.get(nodeName) || 0;
-    }
-
-    /**
-     * 獲取支路電流
-     * @param {string} branchName 支路名稱
-     * @returns {number} 電流值
-     */
-    getBranchCurrent(branchName) {
-        return this.branchCurrents.get(branchName) || 0;
-    }
-
-    /**
-     * 計算元件功耗
-     * @param {BaseComponent[]} components 元件列表
-     */
-    calculatePower(components) {
-        this.totalPower = 0;
         
-        for (const component of components) {
-            let power = 0;
-            
-            if (component.type === 'R') {
-                // 電阻功耗: P = V² / R
-                const voltage = component.getVoltage(this.nodeVoltages);
-                power = voltage * voltage / component.getResistance();
-                
-            } else if (component.type === 'V') {
-                // 電壓源功耗: P = V * I
-                const voltage = component.getValue();
-                const current = this.getBranchCurrent(component.name);
-                power = -voltage * current; // 負號表示電壓源提供功率
-                
-            } else if (component.type === 'I') {
-                // 電流源功耗: P = V * I
-                const voltage = component.getVoltage(this.nodeVoltages);
-                const current = component.getValue();
-                power = -voltage * current; // 負號表示電流源提供功率
-            }
-            
-            this.componentPower.set(component.name, power);
-            this.totalPower += Math.abs(power);
-        }
-    }
-
-    /**
-     * 獲取分析摘要
-     * @returns {Object} 摘要信息
-     */
-    getSummary() {
-        const nodeCount = this.nodeVoltages.size;
-        const branchCount = this.branchCurrents.size;
-        
-        return {
-            ...this.analysisInfo,
-            converged: this.converged,
-            nodeCount,
-            branchCount,
-            totalPower: this.totalPower,
-            nodes: Array.from(this.nodeVoltages.keys()),
-            branches: Array.from(this.branchCurrents.keys())
+        // Newton-Raphson 統計
+        this.newtonStats = {
+            iterations: 0,
+            finalError: Infinity,
+            convergenceHistory: [],
+            jacobianConditionNumber: 1.0,
+            dampingUsed: 1.0
         };
+        
+        this.analysisInfo = {};
+    }
+    
+    setNewtonStatistics(result) {
+        this.newtonStats.iterations = result.iterations;
+        this.newtonStats.finalError = result.finalError;
+        this.newtonStats.convergenceHistory = result.convergenceHistory;
+        this.newtonStats.jacobianConditionNumber = result.jacobianConditionNumber;
+        this.newtonStats.dampingUsed = result.dampingUsed;
     }
 }
 
 /**
- * DC分析引擎
+ * 增強型 DC 分析器
  */
 export class DCAnalysis {
     constructor() {
         this.mnaBuilder = new MNABuilder();
+        this.newtonSolver = createSPICENewtonSolver({
+            maxIterations: 100,
+            vntol: 1e-6,
+            abstol: 1e-12,
+            reltol: 1e-9,
+            debug: false
+        });
+        
+        // 同倫延拓求解器 - 數學嚴格的全局收斂方法
+        this.homotopySolver = createHomotopyDCSolver({
+            tolerance: 1e-6,
+            maxIterations: 100,
+            maxStepSize: 0.1,
+            minStepSize: 1e-5,
+            debug: false
+        });
+        
+        this.linearComponents = [];
+        this.nonlinearComponents = [];
         this.debug = false;
+        
+        this.options = {
+            maxIterations: 100,
+            useHomotopyContinuation: true,  // 默認使用同倫延拓（失敗時自動回退到 Newton-Raphson）
+            useNewtonRaphson: false,        // 設為 true 可強制只使用 Newton-Raphson
+            initialGuessStrategy: 'linear'
+        };
     }
-
-    /**
-     * 執行DC分析
-     * @param {BaseComponent[]} components 電路元件列表
-     * @param {Object} options 分析選項
-     * @returns {DCResult} DC分析結果
-     */
-    async run(components, options = {}) {
-        this.debug = options.debug || false;
+    
+    async analyze(components, options = {}) {
         const result = new DCResult();
         
+        Object.assign(this.options, options);
+        this.newtonSolver.setConfig({ debug: this.debug });
+        
+        if (this.debug) {
+            console.log('🔧 開始增強型 DC 分析...');
+        }
+        
         try {
-            if (this.debug) {
-                console.log('Starting DC analysis...');
-            }
+            this.classifyComponents(components);
             
-            // 分析電路拓撲
+            this.mnaBuilder.reset();
             this.mnaBuilder.analyzeCircuit(components);
             
-            // 非線性求解迭代
-            const maxIterations = 20;
-            const tolerance = 1e-9;
-            let iteration = 0;
-            let converged = false;
-            let solution;
-            
-            while (iteration < maxIterations && !converged) {
-                iteration++;
-                
-                // 建立MNA矩陣 (t=0，所有動態元件使用DC行為)
-                const { matrix, rhs } = this.mnaBuilder.buildMNAMatrix(components, 0);
-                
-                if (this.debug && iteration === 1) {
-                    console.log('MNA Matrix built');
-                    this.mnaBuilder.printMNAMatrix();
-                }
-                
-                // 求解線性方程組
-                const newSolution = LUSolver.solve(matrix, rhs);
-                
-                // 檢查收斂性
-                if (iteration > 1) {
-                    let maxChange = 0;
-                    for (let i = 0; i < newSolution.size; i++) {
-                        const change = Math.abs(newSolution.get(i) - solution.get(i));
-                        maxChange = Math.max(maxChange, change);
-                    }
-                    
-                    if (maxChange < tolerance) {
-                        converged = true;
-                        if (this.debug) {
-                            console.log(`DC analysis converged after ${iteration} iterations (max change: ${maxChange.toExponential(2)})`);
-                        }
-                    }
-                }
-                
-                solution = newSolution;
-                
-                // 提取結果並更新組件狀態
-                const tempNodeVoltages = this.mnaBuilder.extractNodeVoltages(solution);
-                const tempBranchCurrents = this.mnaBuilder.extractVoltageSourceCurrents(solution);
-                
-                // 更新所有組件的電壓狀態
-                for (const component of components) {
-                    if (typeof component.updateHistory === 'function') {
-                        component.updateHistory(tempNodeVoltages, tempBranchCurrents);
-                    }
-                }
+            if (this.nonlinearComponents.length === 0) {
+                return await this.solveLinearDC(components, result);
+            } else {
+                return await this.solveNonlinearDC(components, result);
             }
-            
-            if (!converged) {
-                console.warn(`DC analysis did not converge after ${maxIterations} iterations`);
-            }
-            
-            // 設置最終結果
-            result.nodeVoltages = this.mnaBuilder.extractNodeVoltages(solution);
-            result.branchCurrents = this.mnaBuilder.extractVoltageSourceCurrents(solution);
-            result.converged = converged;
-            
-            // 計算功耗
-            result.calculatePower(components);
-            
-            // 設置分析信息
-            result.analysisInfo = {
-                method: 'Modified Nodal Analysis',
-                matrixSize: this.mnaBuilder.matrixSize,
-                nodeCount: this.mnaBuilder.nodeCount,
-                voltageSourceCount: this.mnaBuilder.voltageSourceCount,
-                iterations: iteration,
-                convergence: converged ? 'converged' : 'max iterations reached'
-            };
-            
-            if (this.debug) {
-                this.printResults(result);
-            }
-            
-            return result;
             
         } catch (error) {
-            console.error('DC analysis failed:', error);
             result.converged = false;
             result.analysisInfo.error = error.message;
+            
+            if (this.debug) {
+                console.error('❌ DC 分析失敗:', error);
+            }
+            
             return result;
         }
     }
+    
+    classifyComponents(components) {
+        this.linearComponents = [];
+        this.nonlinearComponents = [];
+        
+        for (const component of components) {
+            if (typeof component.stampJacobian === 'function' && 
+                typeof component.stampResidual === 'function') {
+                this.nonlinearComponents.push(component);
+            } else {
+                this.linearComponents.push(component);
+            }
+        }
+        
+        if (this.debug) {
+            console.log(`  線性元件: ${this.linearComponents.length}, 非線性元件: ${this.nonlinearComponents.length}`);
+        }
+    }
+    
+    async solveLinearDC(components, result) {
+        if (this.debug) {
+            console.log('  📐 求解線性 DC 電路...');
+        }
+        
+        const { matrix, rhs } = this.mnaBuilder.buildMNAMatrix(components, 0);
+        const solution = LUSolver.solve(matrix, rhs);
+        
+        result.nodeVoltages = this.mnaBuilder.extractNodeVoltages(solution);
+        result.branchCurrents = this.mnaBuilder.extractVoltageSourceCurrents(solution);
+        result.converged = true;
+        
+        this.calculatePower(components, result);
+        
+        if (this.debug) {
+            console.log('  ✅ 線性 DC 分析完成');
+        }
+        
+        return result;
+    }
+    
+    async solveNonlinearDC(components, result) {
+        if (this.debug) {
+            console.log('  🔬 求解非線性 DC 電路...');
+        }
+        
+        const nodeMap = this.mnaBuilder.getNodeMap();
+        const matrixSize = this.mnaBuilder.getMatrixSize();
+        
+        // 優先使用同倫延拓方法
+        if (this.options.useHomotopyContinuation) {
+            const homotopyResult = await this.solveWithHomotopyContinuation(components, result, matrixSize, nodeMap);
+            if (homotopyResult.converged) {
+                return homotopyResult;
+            }
+            
+            if (this.debug) {
+                console.log('  ⚠️  同倫延拓失敗，自動回退到 Newton-Raphson...');
+            }
+            
+            // 自動啟用 Newton-Raphson 作為備用方案
+            const newtonResult = await this.solveWithNewtonRaphson(components, result, matrixSize, nodeMap);
+            if (newtonResult.converged) {
+                return newtonResult;
+            }
+            
+            if (this.debug) {
+                console.log('  ❌ Newton-Raphson 也失敗了');
+            }
+        }
+        
+        // 如果用戶明確要求只使用 Newton-Raphson 方法
+        if (this.options.useNewtonRaphson && !this.options.useHomotopyContinuation) {
+            return await this.solveWithNewtonRaphson(components, result, matrixSize, nodeMap);
+        }
+        
+        result.converged = false;
+        result.analysisInfo.error = '所有非線性求解方法都失敗';
+        return result;
+    }
 
-    /**
-     * 估算矩陣條件數
-     * @param {Matrix} matrix MNA矩陣
-     * @returns {number} 條件數估計值
-     */
-    estimateCondition(matrix) {
+    async solveWithNewtonRaphson(components, result, matrixSize, nodeMap) {
+        if (this.debug) {
+            console.log('    🧮 使用 Newton-Raphson 方法求解...');
+        }
+
         try {
-            return LUSolver.estimateConditionNumber(matrix);
+            // 定義殘差和雅可比函數
+            const residualFn = (x) => {
+                return this.computeResidual(x, components, nodeMap, matrixSize);
+            };
+
+            const jacobianFn = (x) => {
+                return this.computeJacobian(x, components, nodeMap, matrixSize);
+            };
+
+            // 初始猜測
+            const initialGuess = Vector.zeros(matrixSize);
+
+            // 使用 Newton-Raphson 求解器
+            const newtonResult = this.newtonSolver.solve(residualFn, jacobianFn, initialGuess);
+
+            if (newtonResult.converged) {
+                result.converged = true;
+                result.nodeVoltages = this.mnaBuilder.extractNodeVoltages(newtonResult.solution);
+                result.branchCurrents = this.mnaBuilder.extractVoltageSourceCurrents(newtonResult.solution);
+
+                // 更新所有元件的狀態
+                for (const component of components) {
+                    if (typeof component.updateHistory === 'function') {
+                        component.updateHistory(result.nodeVoltages, result.branchCurrents);
+                    }
+                }
+
+                // 設置統計信息
+                result.newtonStats.iterations = newtonResult.iterations;
+                result.newtonStats.finalError = newtonResult.finalError;
+
+                this.calculatePower(components, result);
+
+                if (this.debug) {
+                    console.log(`    ✅ Newton-Raphson 收斂，${newtonResult.iterations} 次迭代`);
+                    console.log(`       最終誤差: ${newtonResult.finalError.toExponential(3)}`);
+                }
+            } else {
+                result.converged = false;
+                result.analysisInfo.error = `Newton-Raphson 未收斂: ${newtonResult.error}`;
+
+                if (this.debug) {
+                    console.log(`    ❌ Newton-Raphson 未收斂: ${newtonResult.error}`);
+                }
+            }
+
         } catch (error) {
-            return Infinity;
+            result.converged = false;
+            result.analysisInfo.error = `Newton-Raphson 執行失敗: ${error.message}`;
+
+            if (this.debug) {
+                console.error(`    ❌ Newton-Raphson 執行失敗:`, error);
+            }
+        }
+
+        return result;
+    }
+    
+    async solveWithHomotopyContinuation(components, result, matrixSize, nodeMap) {
+        if (this.debug) {
+            console.log('    🧮 使用同倫延拓方法求解...');
+        }
+        
+        // 設置同倫求解器調試模式
+        this.homotopySolver.debug = this.debug;
+        
+        try {
+            // === 定義原始非線性系統 F(x) ===
+            const originalSystem = {
+                residual: (x) => {
+                    return this.computeResidual(x, components, nodeMap, matrixSize);
+                },
+                
+                jacobian: (x) => {
+                    return this.computeJacobian(x, components, nodeMap, matrixSize);
+                }
+            };
+            
+            // === 定義簡化線性系統 G(x) ===
+            const simplifiedSystem = {
+                residual: (x) => {
+                    return this.computeLinearizedResidual(x, components, nodeMap, matrixSize);
+                },
+                
+                jacobian: (x) => {
+                    return this.computeLinearizedJacobian(x, components, nodeMap, matrixSize);
+                }
+            };
+            
+            // === 求解簡化系統獲得初始解 ===
+            const x0 = this.generateLinearInitialGuess(matrixSize);
+            
+            // === 執行同倫延拓求解 ===
+            const homotopyResult = this.homotopySolver.solve(originalSystem, simplifiedSystem, x0);
+            
+            if (homotopyResult.converged) {
+                result.converged = true;
+                result.nodeVoltages = this.mnaBuilder.extractNodeVoltages(homotopyResult.solution);
+                result.branchCurrents = this.mnaBuilder.extractVoltageSourceCurrents(homotopyResult.solution);
+                
+                // 更新所有元件的狀態
+                for (const component of components) {
+                    if (typeof component.updateHistory === 'function') {
+                        component.updateHistory(result.nodeVoltages, result.branchCurrents);
+                    }
+                }
+                
+                // 設置同倫統計信息
+                result.newtonStats.iterations = homotopyResult.stats.totalSteps;
+                result.newtonStats.finalError = homotopyResult.finalResidualNorm;
+                result.newtonStats.convergenceHistory = homotopyResult.path.map(p => p.residualNorm);
+                
+                this.calculatePower(components, result);
+                
+                if (this.debug) {
+                    const stats = homotopyResult.stats;
+                    console.log(`    ✅ 同倫延拓收斂，${stats.totalSteps} 步，成功率 ${(stats.successRate*100).toFixed(1)}%`);
+                    console.log(`       最終殘差: ${homotopyResult.finalResidualNorm.toExponential(3)}`);
+                }
+            } else {
+                result.converged = false;
+                result.analysisInfo.error = `同倫延拓未收斂: ${homotopyResult.error}`;
+                
+                if (this.debug) {
+                    console.log(`    ❌ 同倫延拓未收斂: ${homotopyResult.error}`);
+                }
+            }
+            
+        } catch (error) {
+            result.converged = false;
+            result.analysisInfo.error = `同倫延拓執行失敗: ${error.message}`;
+            
+            if (this.debug) {
+                console.error(`    ❌ 同倫延拓執行失敗:`, error);
+            }
+        }
+        
+        return result;
+    }
+    
+    computeResidual(x, components, nodeMap, matrixSize) {
+        const residual = Vector.zeros(matrixSize);
+        
+        const { matrix, rhs } = this.mnaBuilder.buildMNAMatrix(this.linearComponents, 0);
+        
+        for (let i = 0; i < matrixSize; i++) {
+            let linearContribution = -rhs.get(i);
+            
+            for (let j = 0; j < matrixSize; j++) {
+                linearContribution += matrix.get(i, j) * x.get(j);
+            }
+            
+            residual.set(i, linearContribution);
+        }
+        
+        for (const component of this.nonlinearComponents) {
+            component.stampResidual(residual, x, nodeMap);
+        }
+        
+        return residual;
+    }
+    
+    computeJacobian(x, components, nodeMap, matrixSize) {
+        const jacobian = Matrix.zeros(matrixSize, matrixSize);
+        
+        const { matrix, rhs } = this.mnaBuilder.buildMNAMatrix(this.linearComponents, 0);
+        
+        for (let i = 0; i < matrixSize; i++) {
+            for (let j = 0; j < matrixSize; j++) {
+                jacobian.set(i, j, matrix.get(i, j));
+            }
+        }
+        
+        for (const component of this.nonlinearComponents) {
+            component.stampJacobian(jacobian, x, nodeMap);
+        }
+        
+        return jacobian;
+    }
+    
+    /**
+     * 計算線性化殘差函數 (同倫延拓用)
+     */
+    computeLinearizedResidual(x, components, nodeMap, matrixSize) {
+        const residual = Vector.zeros(matrixSize);
+        
+        // 線性部分
+        const { matrix, rhs } = this.mnaBuilder.buildMNAMatrix(this.linearComponents, 0);
+        
+        for (let i = 0; i < matrixSize; i++) {
+            let sum = -rhs.get(i);
+            for (let j = 0; j < matrixSize; j++) {
+                sum += matrix.get(i, j) * x.get(j);
+            }
+            residual.set(i, sum);
+        }
+        
+        // 非線性元件線性化為 1Ω 電阻
+        for (const component of this.nonlinearComponents) {
+            if (component.constructor.name === 'NonlinearDiode') {
+                const node1Name = component.nodes[0];
+                const node2Name = component.nodes[1];
+                
+                const node1Index = nodeMap.get(node1Name);
+                const node2Index = nodeMap.get(node2Name);
+                
+                const conductance = 1.0; // 1S
+                
+                if (node1Index !== undefined && node1Index >= 0) {
+                    const v1 = x.get(node1Index);
+                    const v2 = (node2Index !== undefined && node2Index >= 0) ? x.get(node2Index) : 0;
+                    const current = conductance * (v1 - v2);
+                    
+                    residual.set(node1Index, residual.get(node1Index) + current);
+                    
+                    if (node2Index !== undefined && node2Index >= 0) {
+                        residual.set(node2Index, residual.get(node2Index) - current);
+                    }
+                }
+            }
+        }
+        
+        return residual;
+    }
+    
+    /**
+     * 計算線性化雅可比矩陣
+     */
+    computeLinearizedJacobian(x, components, nodeMap, matrixSize) {
+        const jacobian = Matrix.zeros(matrixSize, matrixSize);
+        
+        // 線性部分
+        const { matrix } = this.mnaBuilder.buildMNAMatrix(this.linearComponents, 0);
+        for (let i = 0; i < matrixSize; i++) {
+            for (let j = 0; j < matrixSize; j++) {
+                jacobian.set(i, j, matrix.get(i, j));
+            }
+        }
+        
+        // 非線性元件線性化
+        for (const component of this.nonlinearComponents) {
+            if (component.constructor.name === 'NonlinearDiode') {
+                const node1Name = component.nodes[0];
+                const node2Name = component.nodes[1];
+                
+                const node1Index = nodeMap.get(node1Name);
+                const node2Index = nodeMap.get(node2Name);
+                
+                const conductance = 1.0; // 1S
+                
+                if (node1Index !== undefined && node1Index >= 0) {
+                    jacobian.set(node1Index, node1Index, 
+                        jacobian.get(node1Index, node1Index) + conductance);
+                    
+                    if (node2Index !== undefined && node2Index >= 0) {
+                        jacobian.set(node1Index, node2Index,
+                            jacobian.get(node1Index, node2Index) - conductance);
+                        jacobian.set(node2Index, node1Index,
+                            jacobian.get(node2Index, node1Index) - conductance);
+                        jacobian.set(node2Index, node2Index,
+                            jacobian.get(node2Index, node2Index) + conductance);
+                    }
+                }
+            }
+        }
+        
+        return jacobian;
+    }
+    
+    /**
+     * 生成線性初始解
+     */
+    generateLinearInitialGuess(matrixSize) {
+        try {
+            const linearJacobian = this.computeLinearizedJacobian(Vector.zeros(matrixSize), [], this.mnaBuilder.getNodeMap(), matrixSize);
+            const linearResidual = this.computeLinearizedResidual(Vector.zeros(matrixSize), [], this.mnaBuilder.getNodeMap(), matrixSize);
+            
+            return LUSolver.solve(linearJacobian, linearResidual.scale(-1));
+            
+        } catch (error) {
+            if (this.debug) {
+                console.log('  ⚠️  線性系統求解失敗，使用零向量');
+            }
+            return Vector.zeros(matrixSize);
         }
     }
 
-    /**
-     * 打印DC分析結果
-     * @param {DCResult} result DC分析結果
-     */
-    printResults(result) {
-        console.log('\\n=== DC Analysis Results ===');
+    calculatePower(components, result) {
+        result.totalPower = 0;
         
-        console.log('\\nNode Voltages:');
-        for (const [node, voltage] of result.nodeVoltages) {
-            if (Math.abs(voltage) < 1e-12) {
-                console.log(`  V(${node}) = 0V`);
-            } else if (Math.abs(voltage) >= 1000) {
-                console.log(`  V(${node}) = ${(voltage / 1000).toFixed(3)}kV`);
-            } else if (Math.abs(voltage) >= 1) {
-                console.log(`  V(${node}) = ${voltage.toFixed(6)}V`);
-            } else if (Math.abs(voltage) >= 1e-3) {
-                console.log(`  V(${node}) = ${(voltage * 1000).toFixed(3)}mV`);
-            } else if (Math.abs(voltage) >= 1e-6) {
-                console.log(`  V(${node}) = ${(voltage * 1e6).toFixed(3)}µV`);
-            } else {
-                console.log(`  V(${node}) = ${voltage.toExponential(3)}V`);
+        for (const component of components) {
+            let power = 0;
+            
+            try {
+                if (component.calculatePower) {
+                    power = component.calculatePower(result.nodeVoltages, result.branchCurrents);
+                }
+                
+                result.componentPower.set(component.name, power);
+                result.totalPower += power;
+                
+            } catch (error) {
+                result.componentPower.set(component.name, 0);
             }
         }
-        
-        console.log('\\nBranch Currents:');
-        for (const [branch, current] of result.branchCurrents) {
-            if (Math.abs(current) < 1e-12) {
-                console.log(`  I(${branch}) = 0A`);
-            } else if (Math.abs(current) >= 1) {
-                console.log(`  I(${branch}) = ${current.toFixed(6)}A`);
-            } else if (Math.abs(current) >= 1e-3) {
-                console.log(`  I(${branch}) = ${(current * 1000).toFixed(3)}mA`);
-            } else if (Math.abs(current) >= 1e-6) {
-                console.log(`  I(${branch}) = ${(current * 1e6).toFixed(3)}µA`);
-            } else if (Math.abs(current) >= 1e-9) {
-                console.log(`  I(${branch}) = ${(current * 1e9).toFixed(3)}nA`);
-            } else {
-                console.log(`  I(${branch}) = ${current.toExponential(3)}A`);
-            }
-        }
-        
-        console.log('\\nComponent Power:');
-        let totalSupplied = 0;
-        let totalDissipated = 0;
-        
-        for (const [component, power] of result.componentPower) {
-            if (power < 0) {
-                totalSupplied += Math.abs(power);
-                console.log(`  P(${component}) = ${Math.abs(power).toFixed(6)}W (supplied)`);
-            } else if (power > 1e-12) {
-                totalDissipated += power;
-                console.log(`  P(${component}) = ${power.toFixed(6)}W (dissipated)`);
-            }
-        }
-        
-        console.log(`\\nPower Balance:`);
-        console.log(`  Total Supplied: ${totalSupplied.toFixed(6)}W`);
-        console.log(`  Total Dissipated: ${totalDissipated.toFixed(6)}W`);
-        console.log(`  Balance Error: ${Math.abs(totalSupplied - totalDissipated).toFixed(9)}W`);
-        
-        const info = result.getSummary();
-        console.log(`\\nMatrix Info: ${info.matrixSize}×${info.matrixSize}, iterations: ${info.iterations}`);
-        console.log('===========================\\n');
     }
-
-    /**
-     * 設置調試模式
-     * @param {boolean} enabled 是否啟用調試
-     */
+    
     setDebug(enabled) {
         this.debug = enabled;
+        this.newtonSolver.setConfig({ debug: enabled });
+        this.homotopySolver.debug = enabled;
     }
 }
+
+export default DCAnalysis;

@@ -58,73 +58,7 @@ export class Inductor extends LinearTwoTerminal {
 
     // ==================== 顯式狀態更新法接口 ====================
     
-    /**
-     * 電感預處理 - 註冊為狀態變量（電流）
-     * 在顯式方法中，電感被建模為理想電流源 (值 = Il(t))
-     * @param {CircuitPreprocessor} preprocessor 預處理器
-     */
-    preprocess(preprocessor) {
-        // 獲取節點索引
-        this.node1Idx = preprocessor.getNodeIndex(this.nodes[0]);
-        this.node2Idx = preprocessor.getNodeIndex(this.nodes[1]);
-        
-        // 註冊為狀態變量 (電流類型)
-        // 這將在 identifyStateVariables 階段完成
-        this.componentData = {
-            node1: this.node1Idx,
-            node2: this.node2Idx,
-            inductance: this.getInductance(),
-            initialCurrent: this.ic,
-            resistance: this.resistance
-        };
-        
-        // 電感被建模為電流源，不直接影響G矩陣
-        // (電流源只影響RHS向量)
-        // 🔥 修正：電感不需要大導納，因為它是理想電流源
-        
-        // 如果有寄生電阻，添加到G矩陣
-        if (this.resistance > 0) {
-            const conductance = 1 / this.resistance;
-            if (this.node1Idx >= 0) {
-                preprocessor.addConductance(this.node1Idx, this.node1Idx, conductance);
-                if (this.node2Idx >= 0) {
-                    preprocessor.addConductance(this.node1Idx, this.node2Idx, -conductance);
-                }
-            }
-            if (this.node2Idx >= 0) {
-                preprocessor.addConductance(this.node2Idx, this.node2Idx, conductance);
-                if (this.node1Idx >= 0) {
-                    preprocessor.addConductance(this.node2Idx, this.node1Idx, -conductance);
-                }
-            }
-        }
-    }
 
-    /**
-     * 更新RHS向量 - 電感作為電流源的貢獻
-     * 電感電流源：I = Il(t) 從 node1 流向 node2
-     * @param {Float32Array} rhsVector RHS向量
-     * @param {Float32Array} stateVector 狀態向量 [..., Il1, Il2, ...]
-     * @param {number} time 當前時間
-     * @param {object} componentData 組件數據
-     */
-    updateRHS(rhsVector, stateVector, time, componentData) {
-        if (!componentData) return;
-        
-        // 獲取當前電感電流 (狀態變量)
-        const stateIndex = componentData.stateIndex;
-        if (stateIndex === undefined || !stateVector) return;
-        
-        const currentIl = stateVector[stateIndex] || 0;
-        
-        // 電流源貢獻: I 從 node1 流向 node2
-        if (this.node1Idx >= 0) {
-            rhsVector[this.node1Idx] -= currentIl;  // 電流流出 node1
-        }
-        if (this.node2Idx >= 0) {
-            rhsVector[this.node2Idx] += currentIl;  // 電流流入 node2
-        }
-    }
 
     /**
      * 計算電感電壓 v = L * di/dt
@@ -166,40 +100,6 @@ export class Inductor extends LinearTwoTerminal {
     getStoredEnergy(current) {
         const L = this.getInductance();
         return 0.5 * L * current * current;
-    }
-
-    /**
-     * 更新狀態變量 - 顯式積分方法
-     * dIl/dt = Vl/L，其中 Vl 是施加在電感上的電壓
-     * @param {Float32Array} stateVector 狀態向量
-     * @param {Float32Array} nodeVoltages 節點電壓解
-     * @param {number} dt 時間步長
-     * @param {object} componentData 組件數據
-     */
-    updateState(stateVector, nodeVoltages, dt, componentData) {
-        if (!componentData || componentData.stateIndex === undefined) return;
-        
-        const stateIndex = componentData.stateIndex;
-        const currentIl = stateVector[stateIndex];
-        
-        // 獲取節點電壓
-        const v1 = this.node1Idx >= 0 ? nodeVoltages[this.node1Idx] : 0;
-        const v2 = this.node2Idx >= 0 ? nodeVoltages[this.node2Idx] : 0;
-        const nodeVoltage = v1 - v2;
-        
-        // 電感電壓 = 節點電壓 - 寄生電阻壓降
-        const vl = nodeVoltage - currentIl * this.resistance;
-        
-        // 顯式歐拉積分: Il(t+dt) = Il(t) + dt * (Vl/L)
-        const L = this.getInductance();
-        const dIlDt = vl / L;
-        
-        stateVector[stateIndex] = currentIl + dt * dIlDt;
-        
-        // 更新運行點資訊 (用於調試)
-        this.operatingPoint.current = currentIl;
-        this.operatingPoint.voltage = nodeVoltage;
-        this.operatingPoint.power = nodeVoltage * currentIl;
     }
 
     /**

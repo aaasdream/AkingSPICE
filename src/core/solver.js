@@ -179,7 +179,7 @@ export class AkingSPICE {
         
         try {
             const options = { debug: this.debug };
-            const result = await this.dcAnalysis.run(this.components, options);
+            const result = await this.dcAnalysis.analyze(this.components, options);
             
             // 保存結果
             this.results.set('dc', result);

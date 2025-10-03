@@ -496,10 +496,10 @@ export class TransientUtils {
         }
         
         const params = {
-            timeStep: this.parseTimeValue(match[1]),
-            stopTime: this.parseTimeValue(match[2]),
-            startTime: match[3] ? this.parseTimeValue(match[3]) : 0,
-            maxTimeStep: match[4] ? this.parseTimeValue(match[4]) : undefined
+            timeStep: TransientUtils.parseTimeValue(match[1]),
+            stopTime: TransientUtils.parseTimeValue(match[2]),
+            startTime: match[3] ? TransientUtils.parseTimeValue(match[3]) : 0,
+            maxTimeStep: match[4] ? TransientUtils.parseTimeValue(match[4]) : undefined
         };
         
         return params;
@@ -513,18 +513,20 @@ export class TransientUtils {
     static parseTimeValue(timeStr) {
         const str = timeStr.trim().toLowerCase();
         
-        // 按照長度降序排列，確保最長的後綴先被匹配，避免 's' 匹配 'us' 的問題
-        const suffixes = {
-            'fs': 1e-15,
-            'ps': 1e-12,
-            'ns': 1e-9,
-            'us': 1e-6,
-            'µs': 1e-6,
-            'ms': 1e-3,
-            's': 1
-        };
+        // 按照長度降序排列，確保最長的後綴先被匹配
+        const suffixes = [
+            ['fs', 1e-15],
+            ['ps', 1e-12], 
+            ['ns', 1e-9],
+            ['us', 1e-6],
+            ['µs', 1e-6],
+            ['ms', 1e-3],
+            ['u', 1e-6],   // SPICE 風格：u = 微秒
+            ['m', 1e-3],   // SPICE 風格：m = 毫秒  
+            ['s', 1]
+        ];
         
-        for (const [suffix, multiplier] of Object.entries(suffixes)) {
+        for (const [suffix, multiplier] of suffixes) {
             if (str.endsWith(suffix)) {
                 const numPart = parseFloat(str.slice(0, -suffix.length));
                 if (!isNaN(numPart)) {
