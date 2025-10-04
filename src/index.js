@@ -90,8 +90,8 @@ export function createPowerElectronicsEnvironment(options = {}) {
             
             // 線性元件
             R: (name, n1, n2, value) => new Resistor(name, [n1, n2], value),
-            L: (name, n1, n2, value, ic) => new Inductor(name, [n1, n2], value, { initialCurrent: ic }),
-            C: (name, n1, n2, value, ic) => new Capacitor(name, [n1, n2], value, { initialVoltage: ic }),
+            L: (name, n1, n2, value, ic) => new Inductor(name, [n1, n2], value, { ic: ic }),
+            C: (name, n1, n2, value, ic) => new Capacitor(name, [n1, n2], value, { ic: ic }),
             V: (name, n1, n2, value) => new VoltageSource(name, [n1, n2], value)
         },
         
