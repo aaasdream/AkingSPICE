@@ -24,6 +24,10 @@ export class Capacitor extends LinearTwoTerminal {
         
         // 計算溫度修正後的電容值
         this.updateTemperatureCoefficient();
+        
+        // 🔥 新增: 儲存導數歷史，用於 LTE 計算
+        this.previous_dvdt = 0;
+        this.integrationMethod = 'trapezoidal'; // 預設使用梯形法
     }
 
     /**

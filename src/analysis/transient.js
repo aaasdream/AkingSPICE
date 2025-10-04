@@ -180,6 +180,10 @@ export class TransientAnalysis {
         this.maxIterations = 50;  // 最大Newton-Raphson迭代次數
         this.convergenceTol = 1e-9; // 收斂容差
         
+        // 自適應步長控制
+        this.adaptive = false;    // 是否使用自適應步長
+        this.integrationMethod = 'backward_euler'; // 積分方法
+        
         // 調試和監控
         this.debug = false;
         this.saveHistory = true;
@@ -198,6 +202,8 @@ export class TransientAnalysis {
         if (params.minTimeStep !== undefined) this.minTimeStep = params.minTimeStep;
         if (params.maxIterations !== undefined) this.maxIterations = params.maxIterations;
         if (params.convergenceTol !== undefined) this.convergenceTol = params.convergenceTol;
+        if (params.adaptive !== undefined) this.adaptive = params.adaptive;
+        if (params.integrationMethod !== undefined) this.integrationMethod = params.integrationMethod;
         if (params.debug !== undefined) this.debug = params.debug;
         if (params.progressCallback !== undefined) this.progressCallback = params.progressCallback;
     }
@@ -213,14 +219,19 @@ export class TransientAnalysis {
         this.components = [...components];
         this.result = new TransientResult();
         
-        console.log(`Starting transient analysis: ${this.startTime}s to ${this.stopTime}s, step=${this.timeStep}s`);
+        const analysisType = this.adaptive ? 'adaptive timestep' : 'fixed timestep';
+        console.log(`Starting ${analysisType} transient analysis: ${this.startTime}s to ${this.stopTime}s`);
         
         try {
-            // 初始化
-            await this.initialize();
+            // 初始化 (傳遞積分方法)
+            await this.initialize(components, this.timeStep, this.integrationMethod);
             
-            // 主時域迴圈
-            await this.timeLoop();
+            // 選擇時域迴圈方法
+            if (this.adaptive) {
+                await this.timeLoopAdaptive();
+            } else {
+                await this.timeLoop();
+            }
             
             // 完成分析
             this.finalize();
@@ -319,7 +330,7 @@ export class TransientAnalysis {
     }
 
     /**
-     * 主時域迴圈
+     * 主時域迴圈 (固定步長)
      */
     async timeLoop() {
         let currentTime = this.startTime + this.timeStep;
@@ -354,7 +365,94 @@ export class TransientAnalysis {
     }
 
     /**
-     * 執行單個時間步
+     * 自適應步長時域迴圈 (基於LTE誤差估算)
+     */
+    async timeLoopAdaptive() {
+        let currentTime = this.startTime;
+        let h = this.timeStep; // 當前步長
+        let stepCount = 0;
+        let rejectedSteps = 0;
+        let adaptations = 0;
+        
+        // 自適應控制參數
+        const reltol = 1e-3;     // 相對誤差容差
+        const abstol = 1e-6;     // 絕對誤差容差
+        const safety = 0.9;      // 安全係數
+        const minScale = 0.1;    // 最小步長縮放
+        const maxScale = 10.0;   // 最大步長擴展
+        
+        console.log(`Starting adaptive transient analysis: ${this.startTime}s to ${this.stopTime}s`);
+        console.log(`Initial step=${(h * 1e6).toFixed(2)}µs, range=[${(this.minTimeStep * 1e9).toFixed(2)}ns, ${(this.maxTimeStep * 1e6).toFixed(2)}µs]`);
+        
+        while (currentTime < this.stopTime) {
+            stepCount++;
+            const targetTime = Math.min(currentTime + h, this.stopTime);
+            const actualStep = targetTime - currentTime;
+            
+            try {
+                // 執行自適應時間步
+                const stepResult = await this.adaptiveTimeStep(currentTime, actualStep);
+                
+                if (stepResult.accepted) {
+                    // 步驟被接受
+                    currentTime = targetTime;
+                    
+                    // 調整下一步的步長
+                    const newStep = this.controlTimeStep(h, stepResult.lte, reltol, abstol, safety, minScale, maxScale);
+                    
+                    if (Math.abs(newStep - h) > h * 0.01) { // 步長變化超過1%
+                        adaptations++;
+                    }
+                    
+                    h = Math.min(Math.max(newStep, this.minTimeStep), this.maxTimeStep);
+                    
+                    // 確保不超過結束時間
+                    if (currentTime + h > this.stopTime) {
+                        h = this.stopTime - currentTime;
+                    }
+                    
+                    // 進度回調
+                    if (this.progressCallback) {
+                        const progress = currentTime / (this.stopTime - this.startTime);
+                        this.progressCallback(progress, currentTime, stepCount);
+                    }
+                    
+                    // 調試輸出
+                    if (this.debug && stepCount % 100 === 0) {
+                        console.log(`Step ${stepCount}, t=${(currentTime * 1e6).toFixed(2)}µs, h=${(h * 1e6).toFixed(2)}µs, LTE=${stepResult.lte.toExponential(2)}`);
+                    }
+                    
+                } else {
+                    // 步驟被拒絕，縮小步長重試
+                    rejectedSteps++;
+                    const newStep = this.controlTimeStep(h, stepResult.lte, reltol, abstol, safety, minScale, maxScale);
+                    h = Math.max(newStep, this.minTimeStep);
+                    
+                    if (this.debug) {
+                        console.log(`Step rejected at t=${(currentTime * 1e6).toFixed(2)}µs, LTE=${stepResult.lte.toExponential(2)}, new h=${(h * 1e6).toFixed(2)}µs`);
+                    }
+                }
+                
+            } catch (error) {
+                console.error(`Adaptive time step failed at t=${currentTime}s, h=${h}s:`, error);
+                throw error;
+            }
+        }
+        
+        // 保存自適應統計信息
+        this.result.analysisInfo.adaptiveStats = {
+            totalSteps: stepCount,
+            rejectedSteps: rejectedSteps,
+            adaptations: adaptations,
+            rejectionRate: rejectedSteps / stepCount,
+            adaptationRate: adaptations / stepCount
+        };
+        
+        console.log(`Adaptive analysis completed: ${stepCount} steps, ${rejectedSteps} rejected (${(rejectedSteps/stepCount*100).toFixed(1)}%), ${adaptations} adaptations`);
+    }
+
+    /**
+     * 執行單個時間步 (固定步長)
      * @param {number} time 當前時間
      */
     async singleTimeStep(time) {
@@ -382,6 +480,171 @@ export class TransientAnalysis {
         
         // 保存結果
         this.result.addTimePoint(time, nodeVoltages, branchCurrents);
+    }
+
+    /**
+     * 執行自適應時間步 (基於LTE誤差估算)
+     * @param {number} currentTime 當前時間
+     * @param {number} h 嘗試的步長
+     * @returns {Object} 步驟結果 {accepted: boolean, lte: number, nodeVoltages?, branchCurrents?}
+     */
+    async adaptiveTimeStep(currentTime, h) {
+        const targetTime = currentTime + h;
+        
+        // 步驟1: 使用梯形法進行主求解
+        const trapezoidalResult = await this.solveStepWithMethod(currentTime, h, 'trapezoidal');
+        
+        // 步驟2: 使用後向歐拉法進行影子求解 (誤差估算)
+        const eulerResult = await this.solveStepWithMethod(currentTime, h, 'backward_euler');
+        
+        // 步驟3: 計算全局LTE誤差
+        const lte = this.calculateGlobalLTE(trapezoidalResult.nodeVoltages, eulerResult.nodeVoltages, h);
+        
+        // 步驟4: 判斷是否接受此步驟
+        const reltol = 1e-3;
+        const abstol = 1e-6;
+        const accepted = this.isStepAcceptable(lte, trapezoidalResult.nodeVoltages, reltol, abstol);
+        
+        if (accepted) {
+            // 接受梯形法的結果，更新元件歷史狀態
+            for (const component of this.components) {
+                component.updateHistory(trapezoidalResult.nodeVoltages, trapezoidalResult.branchCurrents);
+            }
+            
+            // 保存結果
+            this.result.addTimePoint(targetTime, trapezoidalResult.nodeVoltages, trapezoidalResult.branchCurrents);
+        }
+        
+        return {
+            accepted: accepted,
+            lte: lte,
+            nodeVoltages: accepted ? trapezoidalResult.nodeVoltages : null,
+            branchCurrents: accepted ? trapezoidalResult.branchCurrents : null,
+            method: 'trapezoidal'
+        };
+    }
+
+    /**
+     * 使用指定方法求解時間步
+     * @param {number} currentTime 當前時間
+     * @param {number} h 步長
+     * @param {string} method 積分方法: 'trapezoidal' 或 'backward_euler'
+     * @returns {Object} 求解結果
+     */
+    async solveStepWithMethod(currentTime, h, method) {
+        const targetTime = currentTime + h;
+        
+        // 更新所有反應性元件的伴隨模型
+        for (const component of this.components) {
+            if (typeof component.updateCompanionModel === 'function') {
+                // 傳遞步長和積分方法
+                component.updateCompanionModel(h, method);
+            }
+        }
+        
+        // 建立MNA矩陣
+        const { matrix, rhs } = this.mnaBuilder.buildMNAMatrix(this.components, targetTime);
+        
+        // 求解線性方程組
+        const solution = LUSolver.solve(matrix, rhs);
+        
+        // 提取結果
+        const nodeVoltages = this.mnaBuilder.extractNodeVoltages(solution);
+        const branchCurrents = this.mnaBuilder.extractVoltageSourceCurrents(solution);
+        
+        return {
+            nodeVoltages: nodeVoltages,
+            branchCurrents: branchCurrents,
+            method: method
+        };
+    }
+
+    /**
+     * 計算全局LTE誤差 (基於兩種積分方法的差異)
+     * @param {Map<string, number>} trapezoidalV 梯形法節點電壓
+     * @param {Map<string, number>} eulerV 後向歐拉法節點電壓
+     * @param {number} h 當前步長
+     * @returns {number} 全局LTE誤差
+     */
+    calculateGlobalLTE(trapezoidalV, eulerV, h) {
+        let maxError = 0.0;
+        let totalError = 0.0;
+        let nodeCount = 0;
+        
+        // 計算所有節點電壓的誤差
+        for (const [nodeName, vTrap] of trapezoidalV) {
+            if (eulerV.has(nodeName)) {
+                const vEuler = eulerV.get(nodeName);
+                const error = Math.abs(vTrap - vEuler);
+                
+                maxError = Math.max(maxError, error);
+                totalError += error * error;
+                nodeCount++;
+            }
+        }
+        
+        // 添加反應性元件的局部LTE貢獻
+        for (const component of this.components) {
+            if (typeof component.calculateLTE === 'function') {
+                const componentLTE = component.calculateLTE(h);
+                maxError = Math.max(maxError, componentLTE);
+                totalError += componentLTE * componentLTE;
+            }
+        }
+        
+        // 返回RMS誤差作為全局LTE
+        return nodeCount > 0 ? Math.sqrt(totalError / Math.max(nodeCount, 1)) : maxError;
+    }
+
+    /**
+     * 判斷時間步是否可接受
+     * @param {number} lte 局部截斷誤差
+     * @param {Map<string, number>} nodeVoltages 當前節點電壓
+     * @param {number} reltol 相對容差
+     * @param {number} abstol 絕對容差
+     * @returns {boolean} 是否接受
+     */
+    isStepAcceptable(lte, nodeVoltages, reltol, abstol) {
+        // 計算最大節點電壓用於相對誤差
+        let maxVoltage = 0.0;
+        for (const voltage of nodeVoltages.values()) {
+            maxVoltage = Math.max(maxVoltage, Math.abs(voltage));
+        }
+        
+        // 計算容差閾值
+        const threshold = abstol + reltol * maxVoltage;
+        
+        return lte <= threshold;
+    }
+
+    /**
+     * 自適應步長控制算法
+     * @param {number} currentStep 當前步長
+     * @param {number} lte 局部截斷誤差
+     * @param {number} reltol 相對容差
+     * @param {number} abstol 絕對容差
+     * @param {number} safety 安全係數
+     * @param {number} minScale 最小縮放係數
+     * @param {number} maxScale 最大擴展係數
+     * @returns {number} 新的步長建議
+     */
+    controlTimeStep(currentStep, lte, reltol, abstol, safety, minScale, maxScale) {
+        // 計算目標誤差
+        const targetError = abstol + reltol * 1.0; // 簡化的目標誤差
+        
+        if (lte <= 0) {
+            // 誤差為零，可以適度擴展
+            return currentStep * Math.min(maxScale, 2.0);
+        }
+        
+        // 基於誤差比率的步長控制 (經典算法)
+        const errorRatio = targetError / lte;
+        const scale = safety * Math.pow(errorRatio, 0.2); // 使用1/5次方，較保守
+        
+        // 限制縮放範圍
+        const clampedScale = Math.min(Math.max(scale, minScale), maxScale);
+        
+        return currentStep * clampedScale;
     }
 
     /**
