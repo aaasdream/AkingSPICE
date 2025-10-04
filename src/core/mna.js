@@ -19,7 +19,10 @@ import { Matrix, Vector } from './linalg.js';
  * 負責從電路元件列表生成MNA矩陣和右手邊向量
  */
 export class MNABuilder {
-    constructor() {
+    constructor(options = {}) {
+        // 調試選項
+        this.debug = options.debug || false;
+        
         // 節點映射：節點名稱 -> 矩陣索引
         this.nodeMap = new Map();
         this.nodeCount = 0;
@@ -115,7 +118,9 @@ export class MNABuilder {
             ...this.debugInfo.voltageSourceNames.map(name => `I(${name})`)
         ];
 
-        console.log(`MNA Analysis: ${this.nodeCount} nodes, ${this.voltageSourceCount} voltage sources, matrix size: ${this.matrixSize}x${this.matrixSize}`);
+        if (this.debug) {
+            console.log(`MNA Analysis: ${this.nodeCount} nodes, ${this.voltageSourceCount} voltage sources, matrix size: ${this.matrixSize}x${this.matrixSize}`);
+        }
     }
 
     /**
@@ -320,6 +325,7 @@ export class MNABuilder {
                 for (const coupling of inductor.couplings) {
                     const otherInductor = coupling.inductor;
                     const M = coupling.mutualInductance;
+                    const polaritySign = coupling.polaritySign; // 極性符號：+1 或 -1
                     
                     // 獲取另一個電感的電流變數索引
                     const otherCurrIndex = this.voltageSourceMap.get(otherInductor.name);
@@ -327,12 +333,13 @@ export class MNABuilder {
                         throw new Error(`Coupled inductor ${otherInductor.name} not found for ${inductor.name}`);
                     }
 
-                    // 添加互感對矩陣的貢獻 (V_L += M * dI_other/dt)
-                    this.matrix.addAt(currIndex, otherCurrIndex, -M / h);
+                    // 添加互感對矩陣的貢獻 (V_L += ±M * dI_other/dt)
+                    // 極性符號決定互感的正負
+                    this.matrix.addAt(currIndex, otherCurrIndex, -polaritySign * M / h);
                     
                     // 添加互感對歷史項的貢獻
                     if (otherInductor.historyTerm !== undefined) {
-                        this.rhs.addAt(currIndex, -M / h * otherInductor.historyTerm);
+                        this.rhs.addAt(currIndex, -polaritySign * M / h * otherInductor.historyTerm);
                     }
                 }
             }

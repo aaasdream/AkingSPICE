@@ -43,8 +43,8 @@ export class DCResult {
  * 增強型 DC 分析器
  */
 export class DCAnalysis {
-    constructor() {
-        this.mnaBuilder = new MNABuilder();
+    constructor(options = {}) {
+        this.mnaBuilder = new MNABuilder({ debug: options.debug });
         this.newtonSolver = createSPICENewtonSolver({
             maxIterations: 100,
             vntol: 1e-6,
@@ -68,8 +68,8 @@ export class DCAnalysis {
         
         this.options = {
             maxIterations: 100,
-            useHomotopyContinuation: true,  // 默認使用同倫延拓（失敗時自動回退到 Newton-Raphson）
-            useNewtonRaphson: false,        // 設為 true 可強制只使用 Newton-Raphson
+            useHomotopyContinuation: true,  // 允許使用同倫延拓作為 Newton-Raphson 的後備方案
+            useNewtonRaphson: true,         // 優先使用快速的 Newton-Raphson 方法
             initialGuessStrategy: 'linear'
         };
     }
@@ -155,35 +155,46 @@ export class DCAnalysis {
         const nodeMap = this.mnaBuilder.getNodeMap();
         const matrixSize = this.mnaBuilder.getMatrixSize();
         
-        // 優先使用同倫延拓方法
+        // =================================================================
+        // 🔥 核心邏輯修改：優先使用 Newton-Raphson，失敗後回退到 Homotopy
+        // =================================================================
+        
+        // 策略 1: 優先嘗試快速的 Newton-Raphson 方法
+        if (this.debug) {
+            console.log('  🚀 [策略 1] 嘗試使用快速的 Newton-Raphson 方法...');
+        }
+        const newtonResult = await this.solveWithNewtonRaphson(components, result, matrixSize, nodeMap);
+        if (newtonResult.converged) {
+            result.analysisInfo.solverUsed = 'Newton-Raphson';
+            if (this.debug) {
+                console.log('  ✅ Newton-Raphson 成功收斂！');
+            }
+            return newtonResult;
+        }
+
+        // 策略 2: 如果 Newton-Raphson 失敗，並且用戶允許，則使用同倫延拓作為最後防線
         if (this.options.useHomotopyContinuation) {
-            const homotopyResult = await this.solveWithHomotopyContinuation(components, result, matrixSize, nodeMap);
+            if (this.debug) {
+                console.warn('  ⚠️ Newton-Raphson 失敗，回退到全局收斂的同倫延拓方法...');
+            }
+            // 創建一個新的 result 物件，避免污染之前的失敗結果
+            const freshResult = new DCResult();
+            const homotopyResult = await this.solveWithHomotopyContinuation(components, freshResult, matrixSize, nodeMap);
+            
             if (homotopyResult.converged) {
+                homotopyResult.analysisInfo.solverUsed = 'Homotopy Continuation';
+                 if (this.debug) {
+                    console.log('  ✅ 同倫延拓成功找到解！');
+                }
                 return homotopyResult;
             }
-            
-            if (this.debug) {
-                console.log('  ⚠️  同倫延拓失敗，自動回退到 Newton-Raphson...');
-            }
-            
-            // 自動啟用 Newton-Raphson 作為備用方案
-            const newtonResult = await this.solveWithNewtonRaphson(components, result, matrixSize, nodeMap);
-            if (newtonResult.converged) {
-                return newtonResult;
-            }
-            
-            if (this.debug) {
-                console.log('  ❌ Newton-Raphson 也失敗了');
-            }
-        }
-        
-        // 如果用戶明確要求只使用 Newton-Raphson 方法
-        if (this.options.useNewtonRaphson && !this.options.useHomotopyContinuation) {
-            return await this.solveWithNewtonRaphson(components, result, matrixSize, nodeMap);
         }
         
         result.converged = false;
         result.analysisInfo.error = '所有非線性求解方法都失敗';
+        if (this.debug) {
+            console.error('  ❌ 所有 DC 求解方法均宣告失敗。');
+        }
         return result;
     }
 
@@ -504,6 +515,8 @@ export class DCAnalysis {
         this.debug = enabled;
         this.newtonSolver.setConfig({ debug: enabled });
         this.homotopySolver.debug = enabled;
+        // 重新創建MNABuilder以傳遞debug選項
+        this.mnaBuilder = new MNABuilder({ debug: enabled });
     }
 }
 

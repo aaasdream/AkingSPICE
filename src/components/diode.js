@@ -1,5 +1,10 @@
 /**
- * Diode 元件模型 (簡化的指數二極體模型)
+ * Diode 元件模型 (簡化的指數二極體模型) - 舊版模型
+ * 
+ * ⚠️ 模型選擇指導:
+ * - 本模型為簡化的線性化二極體，適用於快速線性分析
+ * - 建議新專案使用 'nonlinear-diode.js' (真正的Shockley模型)
+ * - NonlinearDiode支持Newton-Raphson非線性分析，精度更高
  * 
  * 使用 Shockley 方程的線性化近似：
  * I = Is * (exp(V/(n*Vt)) - 1) ≈ G * (V - Vf) for V > Vf
@@ -9,12 +14,15 @@
 import { BaseComponent } from './base.js';
 
 /**
- * 簡化二極體模型
+ * 簡化二極體模型 (線性化版本)
  * 
  * 模型特點：
  * 1. V > Vf 時：線性導通，I = (V - Vf) / Rs
  * 2. V <= Vf 時：截止，I ≈ 0 (使用高電阻)
- * 3. 適合 DC 和暫態分析
+ * 3. 適合僅線性分析器 (transient.js, 非Newton-Raphson)
+ * 
+ * ⚠️ 限制: 此模型依賴於前一時刻電壓狀態，不適用於Newton-Raphson迭代
+ * 建議使用 NonlinearDiode 獲得更高精度和數值穩定性
  */
 export class Diode extends BaseComponent {
     /**

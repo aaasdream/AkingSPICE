@@ -1,5 +1,11 @@
 /**
- * MOSFET 元件模型 (專為電力電子控制模擬設計)
+ * MOSFET 元件模型 (專為電力電子控制模擬設計) - 舊版模型
+ * 
+ * ⚠️ 模型選擇指導:
+ * - 本模型為簡化的理想開關，適用於快速 PWM 控制分析
+ * - 建議根據應用選擇更適合的模型：
+ *   - 'vcmosfet.js': 電壓控制MOSFET，支持Newton-Raphson非線性分析
+ *   - 'mosfet_mcp.js': MCP框架下MOSFET，精確處理開關約束
  * 
  * 特點：
  * - 外部可控的 ON/OFF 狀態 (不依賴 Vgs)
@@ -10,12 +16,16 @@
 import { BaseComponent } from './base.js';
 
 /**
- * 理想 MOSFET 開關模型
+ * 理想 MOSFET 開關模型 (線性化版本)
  * 
  * 這個模型專為電力電子控制模擬設計，重點是：
  * 1. 開關狀態由外部控制器決定，而不是 Vgs
  * 2. 包含並聯的體二極體
  * 3. 支援快速狀態切換
+ * 
+ * ⚠️ 適用範圍: 僅適用於傳統線性分析器 (transient.js)
+ * 此模型使用前一時刻狀態，不適用於Newton-Raphson迭代求解
+ * 建議使用 VoltageControlledMOSFET 或 MOSFET_MCP 獲得更好的數值穩定性
  */
 export class MOSFET extends BaseComponent {
     /**

@@ -23,6 +23,9 @@ export class Inductor extends LinearTwoTerminal {
         this.tnom = params.tnom || 27;   // 標稱溫度 (°C)
         this.currentRating = params.current || Infinity; // 額定電流 (A)
         
+        // 同名端（dot convention）支持 - 默認為nodes[0]
+        this.dotNode = params.dotNode || nodes[0];
+        
         // 計算溫度修正後的電感值
         this.updateTemperatureCoefficient();
         
@@ -204,11 +207,62 @@ export class CoupledInductor {
         this.k = Math.max(0, Math.min(1, couplingFactor)); // 限制在0-1範圍
         this.params = params;
         
-        // 計算互感 M = k * sqrt(L1 * L2)
+        // 計算互感 M = k * sqrt(L1 * L2)  (總是正值)
         this.mutualInductance = this.k * Math.sqrt(L1.getInductance() * L2.getInductance());
         
-        // 極性 (dot convention)
-        this.dotNodes = params.dotNodes || [L1.nodes[0], L2.nodes[0]];
+        // 同名端設置 - 如果未指定，使用各電感的dotNode
+        this.L1DotNode = params.L1DotNode || L1.dotNode;
+        this.L2DotNode = params.L2DotNode || L2.dotNode;
+        
+        // 設置各電感的耦合信息
+        this.setupCouplingReferences();
+    }
+
+    /**
+     * 設置電感的耦合引用
+     */
+    setupCouplingReferences() {
+        // 初始化電感的耦合數組（如果不存在）
+        if (!this.L1.couplings) this.L1.couplings = [];
+        if (!this.L2.couplings) this.L2.couplings = [];
+        
+        // 為L1添加與L2的耦合信息
+        this.L1.couplings.push({
+            inductor: this.L2,
+            mutualInductance: this.getMutualInductance(),
+            polaritySign: this.getPolaritySign(this.L1, this.L2),
+            couplingName: this.name
+        });
+        
+        // 為L2添加與L1的耦合信息  
+        this.L2.couplings.push({
+            inductor: this.L1,
+            mutualInductance: this.getMutualInductance(),
+            polaritySign: this.getPolaritySign(this.L2, this.L1),
+            couplingName: this.name
+        });
+    }
+
+    /**
+     * 計算兩個電感間的極性符號
+     * @param {Inductor} L1 第一個電感（受影響的電感）
+     * @param {Inductor} L2 第二個電感（產生影響的電感）
+     * @returns {number} +1 或 -1
+     */
+    getPolaritySign(L1, L2) {
+        // 獲取電流定義方向
+        // 電流總是定義為從第一個節點流向第二個節點
+        const L1_currentDirection = L1.nodes[0]; // 電流流出的節點
+        const L2_currentDirection = L2.nodes[0]; // 電流流出的節點
+        
+        // 檢查電流方向相對於同名端的關係
+        const L1_currentFromDot = (L1_currentDirection === this.L1DotNode);
+        const L2_currentFromDot = (L2_currentDirection === this.L2DotNode);
+        
+        // 同名端極性規則：
+        // - 如果兩個電流都從同名端流出（或都流入），互感為正
+        // - 如果一個從同名端流出，一個流入，互感為負
+        return (L1_currentFromDot === L2_currentFromDot) ? 1 : -1;
     }
 
     /**
@@ -232,9 +286,12 @@ export class CoupledInductor {
             L2: this.L2.name,
             couplingFactor: this.k,
             mutualInductance: this.getMutualInductance(),
-            dotNodes: this.dotNodes,
+            L1DotNode: this.L1DotNode,
+            L2DotNode: this.L2DotNode,
             L1_inductance: this.L1.getInductance(),
-            L2_inductance: this.L2.getInductance()
+            L2_inductance: this.L2.getInductance(),
+            polaritySign_L1toL2: this.getPolaritySign(this.L1, this.L2),
+            polaritySign_L2toL1: this.getPolaritySign(this.L2, this.L1)
         };
     }
 

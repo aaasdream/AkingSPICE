@@ -11,13 +11,14 @@
 import { BaseComponent } from './base.js';
 
 /**
- * 電壓控制 MOSFET
+ * 電壓控制 MOSFET (非線性模型)
  * 
  * 這個模型實現了：
  * 1. 根據 Vgs 自動決定 ON/OFF 狀態
  * 2. 閾值電壓 (Vth) 和跨導 (gm) 特性
- * 3. 線性區和飽和區行為
+ * 3. 線性區和飽和區行為  
  * 4. 寄生效應（體二極體、電容）
+ * 5. 非線性Newton-Raphson兼容的stampResidual和stampJacobian
  */
 export class VoltageControlledMOSFET extends BaseComponent {
     /**
@@ -73,6 +74,13 @@ export class VoltageControlledMOSFET extends BaseComponent {
         this.Vds = 0;  // 汲源電壓
         this.Vbs = 0;  // 體源電壓
         this.Id = 0;   // 汲極電流
+        
+        // 非線性元件標記
+        this.isNonlinear = true;
+        this.model = 'vcmosfet';
+        
+        // 數值穩定性參數
+        this.Gmin = 1e-12;  // 最小導納
         
         // 驗證參數
         this.validate();
@@ -147,34 +155,167 @@ export class VoltageControlledMOSFET extends BaseComponent {
     }
 
     /**
-     * 計算汲極電流
+     * 計算汲極電流 (非線性模型)
+     * @param {number} Vgs 閘源電壓
+     * @param {number} Vds 汲源電壓
+     * @returns {number} 汲極電流
      */
-    calculateDrainCurrent() {
+    evaluateDrainCurrent(Vgs, Vds) {
         const effectiveVth = this.getEffectiveThresholdVoltage();
         const beta = this.Kp * this.W / this.L; // 跨導參數
         
+        // 更新工作區域
+        this.updateOperatingRegionFromVoltages(Vgs, Vds);
+        
+        let Id = 0;
+        
         switch (this.operatingRegion) {
             case 'OFF':
-                this.Id = 0;
+                Id = 0;
                 break;
                 
             case 'LINEAR':
                 // 線性區：Id = β * [(Vgs - Vth) * Vds - Vds²/2] * (1 + λ * Vds)
-                const Vov = this.Vgs - effectiveVth; // 過驅動電壓
-                this.Id = beta * (Vov * this.Vds - this.Vds * this.Vds / 2) * (1 + this.lambda * this.Vds);
+                const Vov = Vgs - effectiveVth; // 過驅動電壓
+                if (Vov > 0 && Vds > 0) {
+                    Id = beta * (Vov * Vds - Vds * Vds / 2) * (1 + this.lambda * Vds);
+                }
                 break;
                 
             case 'SATURATION':
                 // 飽和區：Id = β/2 * (Vgs - Vth)² * (1 + λ * Vds)
-                const Vov_sat = this.Vgs - effectiveVth;
-                this.Id = (beta / 2) * Vov_sat * Vov_sat * (1 + this.lambda * this.Vds);
+                const Vov_sat = Vgs - effectiveVth;
+                if (Vov_sat > 0) {
+                    Id = (beta / 2) * Vov_sat * Vov_sat * (1 + this.lambda * Vds);
+                }
                 break;
         }
         
         // 確保電流方向正確（NMOS vs PMOS）
         if (this.modelType === 'PMOS') {
-            this.Id = -this.Id;
+            Id = -Id;
         }
+        
+        return Id;
+    }
+
+    /**
+     * 從電壓更新工作區域
+     */
+    updateOperatingRegionFromVoltages(Vgs, Vds) {
+        const effectiveVth = this.getEffectiveThresholdVoltage();
+        
+        if (this.modelType === 'NMOS') {
+            if (Vgs < effectiveVth) {
+                this.operatingRegion = 'OFF';
+            } else if (Vds < (Vgs - effectiveVth)) {
+                this.operatingRegion = 'LINEAR';
+            } else {
+                this.operatingRegion = 'SATURATION';
+            }
+        } else { // PMOS
+            if (Vgs > effectiveVth) {
+                this.operatingRegion = 'OFF';
+            } else if (Vds > (Vgs - effectiveVth)) {
+                this.operatingRegion = 'LINEAR';
+            } else {
+                this.operatingRegion = 'SATURATION';
+            }
+        }
+    }
+
+    /**
+     * 計算汲極電流對閘源電壓的偏導數 ∂Id/∂Vgs
+     * @param {number} Vgs 閘源電壓
+     * @param {number} Vds 汲源電壓
+     * @returns {number} 跨導 gm
+     */
+    evaluateTransconductance(Vgs, Vds) {
+        const effectiveVth = this.getEffectiveThresholdVoltage();
+        const beta = this.Kp * this.W / this.L;
+        
+        this.updateOperatingRegionFromVoltages(Vgs, Vds);
+        
+        let gm = 0;
+        
+        switch (this.operatingRegion) {
+            case 'OFF':
+                gm = 0;
+                break;
+                
+            case 'LINEAR':
+                // ∂Id/∂Vgs = β * Vds * (1 + λ * Vds)
+                if (Vds > 0 && Vgs > effectiveVth) {
+                    gm = beta * Vds * (1 + this.lambda * Vds);
+                }
+                break;
+                
+            case 'SATURATION':
+                // ∂Id/∂Vgs = β * (Vgs - Vth) * (1 + λ * Vds)
+                const Vov = Vgs - effectiveVth;
+                if (Vov > 0) {
+                    gm = beta * Vov * (1 + this.lambda * Vds);
+                }
+                break;
+        }
+        
+        if (this.modelType === 'PMOS') {
+            gm = -gm;
+        }
+        
+        return Math.max(this.Gmin, gm);
+    }
+
+    /**
+     * 計算汲極電流對汲源電壓的偏導數 ∂Id/∂Vds
+     * @param {number} Vgs 閘源電壓
+     * @param {number} Vds 汲源電壓
+     * @returns {number} 輸出導納 gds
+     */
+    evaluateOutputConductance(Vgs, Vds) {
+        const effectiveVth = this.getEffectiveThresholdVoltage();
+        const beta = this.Kp * this.W / this.L;
+        
+        this.updateOperatingRegionFromVoltages(Vgs, Vds);
+        
+        let gds = 0;
+        
+        switch (this.operatingRegion) {
+            case 'OFF':
+                gds = 0;
+                break;
+                
+            case 'LINEAR':
+                // ∂Id/∂Vds = β * [(Vgs - Vth) - Vds] * (1 + λ * Vds) + β * [(Vgs - Vth) * Vds - Vds²/2] * λ
+                const Vov = Vgs - effectiveVth;
+                if (Vov > 0 && Vds > 0) {
+                    const term1 = beta * (Vov - Vds) * (1 + this.lambda * Vds);
+                    const term2 = beta * (Vov * Vds - Vds * Vds / 2) * this.lambda;
+                    gds = term1 + term2;
+                }
+                break;
+                
+            case 'SATURATION':
+                // ∂Id/∂Vds = β/2 * (Vgs - Vth)² * λ
+                const Vov_sat = Vgs - effectiveVth;
+                if (Vov_sat > 0) {
+                    gds = (beta / 2) * Vov_sat * Vov_sat * this.lambda;
+                }
+                break;
+        }
+        
+        if (this.modelType === 'PMOS') {
+            gds = -gds;
+        }
+        
+        return Math.max(this.Gmin, gds);
+    }
+
+    /**
+     * 計算汲極電流 (舊方法保持兼容性)
+     */
+    calculateDrainCurrent() {
+        this.Id = this.evaluateDrainCurrent(this.Vgs, this.Vds);
     }
 
     /**
@@ -208,7 +349,7 @@ export class VoltageControlledMOSFET extends BaseComponent {
     }
 
     /**
-     * 為 MNA 分析提供印花支援
+     * 為 MNA 分析提供印花支援 (線性化模型，用於非Newton-Raphson分析)
      * 使用等效電阻模型進行簡化分析
      */
     stamp(matrix, rhs, nodeMap, voltageSourceMap, time) {
@@ -345,11 +486,153 @@ export class VoltageControlledMOSFET extends BaseComponent {
     }
 
     /**
+     * 蓋印非線性殘差 (Newton-Raphson法)
+     * @param {Vector} residual 殘差向量
+     * @param {Vector} solution 當前解向量
+     * @param {Map<string, number>} nodeMap 節點映射
+     */
+    stampResidual(residual, solution, nodeMap) {
+        const drainIndex = nodeMap.get(this.drain);
+        const gateIndex = nodeMap.get(this.gate);
+        const sourceIndex = nodeMap.get(this.source);
+        
+        // 獲取當前節點電壓
+        let Vd = 0, Vg = 0, Vs = 0;
+        if (drainIndex !== undefined && drainIndex >= 0) {
+            Vd = solution.get(drainIndex);
+        }
+        if (gateIndex !== undefined && gateIndex >= 0) {
+            Vg = solution.get(gateIndex);
+        }
+        if (sourceIndex !== undefined && sourceIndex >= 0) {
+            Vs = solution.get(sourceIndex);
+        }
+        
+        // 計算MOSFET電壓
+        const Vgs = Vg - Vs;
+        const Vds = Vd - Vs;
+        
+        // 計算汲極電流
+        const Id = this.evaluateDrainCurrent(Vgs, Vds);
+        
+        // 在殘差向量中加入電流項 (KCL: ∑I = 0)
+        if (drainIndex !== undefined && drainIndex >= 0) {
+            residual.addAt(drainIndex, Id);  // 電流流入汲極
+        }
+        
+        if (sourceIndex !== undefined && sourceIndex >= 0) {
+            residual.addAt(sourceIndex, -Id); // 電流流出源極
+        }
+        
+        // 處理體二極體 (如果導通)
+        const bodyDiodeOn = this.isBodyDiodeOn();
+        if (bodyDiodeOn) {
+            // 簡化的體二極體電流模型
+            const VfEffective = this.modelType === 'NMOS' ? -this.Vf_body : this.Vf_body;
+            const Idiode = (Vs - Vd - VfEffective) / this.Ron_body;
+            
+            if (drainIndex !== undefined && drainIndex >= 0) {
+                residual.addAt(drainIndex, Idiode);
+            }
+            if (sourceIndex !== undefined && sourceIndex >= 0) {
+                residual.addAt(sourceIndex, -Idiode);
+            }
+        }
+    }
+
+    /**
+     * 蓋印雅可比矩陣 (Newton-Raphson法)
+     * @param {Matrix} jacobian 雅可比矩陣
+     * @param {Vector} solution 當前解向量
+     * @param {Map<string, number>} nodeMap 節點映射
+     */
+    stampJacobian(jacobian, solution, nodeMap) {
+        const drainIndex = nodeMap.get(this.drain);
+        const gateIndex = nodeMap.get(this.gate);
+        const sourceIndex = nodeMap.get(this.source);
+        
+        // 獲取當前節點電壓
+        let Vd = 0, Vg = 0, Vs = 0;
+        if (drainIndex !== undefined && drainIndex >= 0) {
+            Vd = solution.get(drainIndex);
+        }
+        if (gateIndex !== undefined && gateIndex >= 0) {
+            Vg = solution.get(gateIndex);
+        }
+        if (sourceIndex !== undefined && sourceIndex >= 0) {
+            Vs = solution.get(sourceIndex);
+        }
+        
+        // 計算MOSFET電壓
+        const Vgs = Vg - Vs;
+        const Vds = Vd - Vs;
+        
+        // 計算小信號參數
+        const gm = this.evaluateTransconductance(Vgs, Vds);  // ∂Id/∂Vgs
+        const gds = this.evaluateOutputConductance(Vgs, Vds); // ∂Id/∂Vds
+        
+        // 蓋印雅可比矩陣項
+        // ∂Id/∂Vd = ∂Id/∂Vds * ∂Vds/∂Vd = gds * 1 = gds
+        // ∂Id/∂Vg = ∂Id/∂Vgs * ∂Vgs/∂Vg = gm * 1 = gm
+        // ∂Id/∂Vs = ∂Id/∂Vgs * ∂Vgs/∂Vs + ∂Id/∂Vds * ∂Vds/∂Vs = gm * (-1) + gds * (-1) = -(gm + gds)
+        
+        if (drainIndex !== undefined && drainIndex >= 0) {
+            // ∂(residual_drain)/∂Vd
+            jacobian.addAt(drainIndex, drainIndex, gds);
+            
+            if (gateIndex !== undefined && gateIndex >= 0) {
+                // ∂(residual_drain)/∂Vg
+                jacobian.addAt(drainIndex, gateIndex, gm);
+            }
+            
+            if (sourceIndex !== undefined && sourceIndex >= 0) {
+                // ∂(residual_drain)/∂Vs
+                jacobian.addAt(drainIndex, sourceIndex, -(gm + gds));
+            }
+        }
+        
+        if (sourceIndex !== undefined && sourceIndex >= 0) {
+            // ∂(residual_source)/∂Vd
+            if (drainIndex !== undefined && drainIndex >= 0) {
+                jacobian.addAt(sourceIndex, drainIndex, -gds);
+            }
+            
+            // ∂(residual_source)/∂Vg
+            if (gateIndex !== undefined && gateIndex >= 0) {
+                jacobian.addAt(sourceIndex, gateIndex, -gm);
+            }
+            
+            // ∂(residual_source)/∂Vs
+            jacobian.addAt(sourceIndex, sourceIndex, gm + gds);
+        }
+        
+        // 處理體二極體雅可比項
+        const bodyDiodeOn = this.isBodyDiodeOn();
+        if (bodyDiodeOn) {
+            const Gdiode = 1 / this.Ron_body;
+            
+            if (drainIndex !== undefined && drainIndex >= 0) {
+                jacobian.addAt(drainIndex, drainIndex, -Gdiode);
+                if (sourceIndex !== undefined && sourceIndex >= 0) {
+                    jacobian.addAt(drainIndex, sourceIndex, Gdiode);
+                }
+            }
+            
+            if (sourceIndex !== undefined && sourceIndex >= 0) {
+                jacobian.addAt(sourceIndex, sourceIndex, -Gdiode);
+                if (drainIndex !== undefined && drainIndex >= 0) {
+                    jacobian.addAt(sourceIndex, drainIndex, Gdiode);
+                }
+            }
+        }
+    }
+
+    /**
      * 檢查是否需要電流變數
      * @returns {boolean}
      */
     needsCurrentVariable() {
-        return false; // 使用等效電阻模型，不需要額外電流變數
+        return false; // 非線性模型不需要額外電流變數
     }
 
     /**
