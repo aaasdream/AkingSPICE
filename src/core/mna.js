@@ -23,6 +23,9 @@ export class MNABuilder {
         // 調試選項
         this.debug = options.debug || false;
         
+        // 🔥 新增：Gmin 電導，用於解決浮動節點問題
+        this.gmin = options.gmin || 1e-12; // 預設 1 pS (picoSiemens)
+        
         // 節點映射：節點名稱 -> 矩陣索引
         this.nodeMap = new Map();
         this.nodeCount = 0;
@@ -137,6 +140,12 @@ export class MNABuilder {
         // 初始化矩陣和右手邊向量
         this.matrix = Matrix.zeros(this.matrixSize, this.matrixSize);
         this.rhs = Vector.zeros(this.matrixSize);
+
+        // 🔥 關鍵修正：自動添加 Gmin 電導
+        // 為了避免奇異矩陣，從每個非地節點到地添加一個極小的電導
+        for (let i = 0; i < this.nodeCount; i++) {
+            this.matrix.addAt(i, i, this.gmin);
+        }
 
         // 🔥 新增：在蓋章前，先更新所有非線性元件的狀態
         if (time > 0) {  // DC 分析時跳過
@@ -279,6 +288,7 @@ export class MNABuilder {
      * 🔥 修正版：支援耦合電感（互感）
      */
     stampInductor(inductor) {
+        console.log(`🔷 MNA.stampInductor called: ${inductor.name}, couplings=${inductor.couplings ? inductor.couplings.length : 'none'}, timeStep=${inductor.timeStep}`);
         const nodes = inductor.nodes;
         const L = inductor.getInductance(); // 使用 getInductance()
         
@@ -316,8 +326,10 @@ export class MNABuilder {
 
             // 🔥 3. 印花互感項
             if (inductor.couplings) {
+                console.log(`🔧 MNA processing mutual inductance for ${inductor.name}, coupling count: ${inductor.couplings.length}`);
                 // 獲取時間步長
                 const h = inductor.timeStep;
+                console.log(`   timeStep: ${h}`);
                 if (!h) {
                     throw new Error(`Inductor ${inductor.name} time step not initialized for coupling`);
                 }
@@ -325,7 +337,9 @@ export class MNABuilder {
                 for (const coupling of inductor.couplings) {
                     const otherInductor = coupling.inductor;
                     const M = coupling.mutualInductance;
-                    const polaritySign = coupling.polaritySign; // 極性符號：+1 或 -1
+                    const polaritySign = coupling.polaritySign || 1; // Default to +1 if not set
+                    
+                    console.log(`   🔗 Processing coupling: ${inductor.name} <-> ${otherInductor.name}, M=${M*1e6}µH, polarity=${polaritySign}`);
                     
                     // 獲取另一個電感的電流變數索引
                     const otherCurrIndex = this.voltageSourceMap.get(otherInductor.name);
@@ -335,11 +349,16 @@ export class MNABuilder {
 
                     // 添加互感對矩陣的貢獻 (V_L += ±M * dI_other/dt)
                     // 極性符號決定互感的正負
-                    this.matrix.addAt(currIndex, otherCurrIndex, -polaritySign * M / h);
+                    const mutualCoeff = -polaritySign * M / h;
+                    console.log(`   📊 Adding mutual term: matrix[${currIndex}][${otherCurrIndex}] += ${mutualCoeff}`);
+                    this.matrix.addAt(currIndex, otherCurrIndex, mutualCoeff);
                     
                     // 添加互感對歷史項的貢獻
-                    if (otherInductor.historyTerm !== undefined) {
-                        this.rhs.addAt(currIndex, -polaritySign * M / h * otherInductor.historyTerm);
+                    const prevCurrent = otherInductor.previousValues?.get('current') || 0;
+                    const rhsContrib = polaritySign * M / h * prevCurrent;
+                    console.log(`   📈 Adding history term: rhs[${currIndex}] += ${rhsContrib} (prevCurrent=${prevCurrent})`);
+                    if (prevCurrent !== 0) {
+                        this.rhs.addAt(currIndex, rhsContrib);
                     }
                 }
             }

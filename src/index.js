@@ -21,8 +21,8 @@ export { LCPSolver, MCPSolver, createLCPSolver, createMCPSolver } from './core/m
 // === 傳統元件模型 ===
 export { BaseComponent } from './components/base.js';
 export { Resistor } from './components/resistor.js';
-export { Capacitor } from './components/capacitor.js';
-export { Inductor, CoupledInductor } from './components/inductor.js';
+export { Capacitor } from './components/capacitor_v2.js';
+export { Inductor } from './components/inductor_v2.js';
 export { VoltageSource, CurrentSource, VCVS, VCCS, CCCS, CCVS } from './components/sources.js';
 export { ThreePhaseSource } from './components/threephase.js';
 export { MOSFET } from './components/mosfet.js';
@@ -49,7 +49,8 @@ export {
 
 // === 分析工具 ===
 // 傳統分析器
-export { TransientAnalysis } from './analysis/transient.js';
+// 位於 src/index.js
+export { TransientAnalysis, TransientResult } from './analysis/transient.js';
 export { DCAnalysis } from './analysis/dc.js';
 
 // MCP 分析器 (v2.0 新增)

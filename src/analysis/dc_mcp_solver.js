@@ -20,10 +20,11 @@ export class DC_MCP_Solver {
         this.maxIterations = options.maxIterations || 100;
         this.tolerance = options.tolerance || 1e-9;
         
-        // 創建 MNA-LCP 建構器 (DC 模式)
+        // 🔥 關鍵修正：將 options (包含 gmin) 傳遞給 MNA_LCP_Builder
         this.mnaLcpBuilder = new MNA_LCP_Builder({
             debug: this.debug,
-            isDcMode: true  // 標記為 DC 模式
+            isDcMode: true,  // 標記為 DC 模式
+            gmin: options.gmin // 🔥 確保傳遞 gmin
         });
         
         // 創建 LCP 求解器
@@ -44,6 +45,9 @@ export class DC_MCP_Solver {
             console.log('🔧 開始 DC-MCP 求解...');
         }
 
+        // 🔥 確保每次 solve 都重置 builder
+        this.mnaLcpBuilder.reset();
+        
         // 預處理元件：標記為 DC 模式
         const dcComponents = this.preprocessComponentsForDC(components);
         
@@ -80,12 +84,13 @@ export class DC_MCP_Solver {
             
             const lcpResult = await this.lcpSolver.solve(schurData.M, schurData.q);
             
-            if (!lcpResult.success) {
+            // 🔥 修正 LCP 結果判斷
+            if (!lcpResult.converged) {
                 throw new Error(`DC-MCP 求解失敗: ${lcpResult.error || 'LCP 求解失敗'}`);
             }
             
-            // 重建完整解
-            solution = this.mnaLcpBuilder.reconstructFullSolution(lcpResult.z, schurData);
+            // 🔥 修正 lcpResult 結構
+            solution = this.mnaLcpBuilder.reconstructFullSolution({ z: lcpResult.z, w: lcpResult.w }, schurData);
         }
 
         // 提取 DC 工作點
@@ -108,13 +113,10 @@ export class DC_MCP_Solver {
         for (const component of components) {
             if (component.type === 'L') {
                 // 電感在 DC 分析中視為短路
-                // 創建等效的 0V 電壓源
-                const dcInductor = {
-                    ...component,
-                    isDcEquivalent: true,
-                    dcVoltage: 0,  // 短路電壓
-                    // 保持電感的電流變量以獲得 DC 電流
-                };
+                // 🔥 關鍵修正：使用 clone() 來保持元件的類別和方法
+                const dcInductor = component.clone();
+                dcInductor.isDcEquivalent = true;
+                dcInductor.dcVoltage = 0;  // 短路電壓
                 dcComponents.push(dcInductor);
                 
             } else if (component.type === 'C') {
@@ -127,10 +129,9 @@ export class DC_MCP_Solver {
                 
             } else if (component.type.endsWith('_MCP')) {
                 // MCP 元件保持原樣，但標記為 DC 模式
-                const dcMcpComponent = {
-                    ...component,
-                    isDcMode: true
-                };
+                // 🔥 關鍵修正：同樣使用 clone()
+                const dcMcpComponent = component.clone();
+                dcMcpComponent.isDcMode = true;
                 dcComponents.push(dcMcpComponent);
                 
             } else {
@@ -152,15 +153,22 @@ export class DC_MCP_Solver {
 
         // 提取節點電壓
         for (const [nodeName, index] of mnaBuilder.nodeMap.entries()) {
-            if (index >= 0 && index < solution.size()) {
+            if (index >= 0 && index < solution.size) {
                 nodeVoltages.set(nodeName, solution.get(index));
             }
         }
 
         // 提取支路電流
         for (const [branchName, index] of mnaBuilder.voltageSourceMap.entries()) {
-            if (index >= 0 && index < solution.size()) {
+            if (index >= 0 && index < solution.size) {
                 branchCurrents.set(branchName, solution.get(index));
+            }
+        }
+        
+        // 🔥 提取額外變量中的電流（如電感電流）
+        for (const extraVar of this.mnaLcpBuilder.extraVariables) {
+            if (extraVar.type === 'current' && extraVar.index < solution.size) {
+                branchCurrents.set(extraVar.name, solution.get(extraVar.index));
             }
         }
 
@@ -202,11 +210,14 @@ export class DC_MCP_Solver {
                 state.bodyDiodeState = Math.abs(state.bodyCurrent) > 1e-12 ? 'ON' : 'OFF';
             }
 
-            // 計算端電壓
-            const vDrain = mnaBuilder.nodeMap.has(component.drain) ? 
-                solution.get(mnaBuilder.nodeMap.get(component.drain)) : 0;
-            const vSource = mnaBuilder.nodeMap.has(component.source) ? 
-                solution.get(mnaBuilder.nodeMap.get(component.source)) : 0;
+            // 計算端電壓 - 🔥 修正節點名稱屬性
+            const drainNode = component.drainNode || component.drain || component.nodes[0];
+            const sourceNode = component.sourceNode || component.source || component.nodes[1];
+            
+            const vDrain = mnaBuilder.nodeMap.has(drainNode) ? 
+                solution.get(mnaBuilder.nodeMap.get(drainNode)) : 0;
+            const vSource = mnaBuilder.nodeMap.has(sourceNode) ? 
+                solution.get(mnaBuilder.nodeMap.get(sourceNode)) : 0;
             
             state.vds = vDrain - vSource;
         }

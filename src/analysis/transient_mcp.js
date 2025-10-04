@@ -24,9 +24,9 @@ import { TransientResult } from './transient.js';
 /**
  * 擴展的 MNA 建構器，支持 LCP 約束
  */
-class MNA_LCP_Builder extends MNABuilder {
+export class MNA_LCP_Builder extends MNABuilder {
     constructor(options = {}) {
-        super();
+        super(options); // 🔥 關鍵修正：將 options 傳遞給父類 MNABuilder
         
         // === 模式控制 ===
         this.isDcMode = options.isDcMode || false;  // DC 模式標誌
@@ -195,6 +195,19 @@ class MNA_LCP_Builder extends MNABuilder {
         this.rhs = Vector.zeros(this.finalMatrixSize);
         this.lcpM = Matrix.zeros(this.lcpConstraintCount, this.finalMatrixSize);
         this.lcpQ = Vector.zeros(this.lcpConstraintCount);
+        
+        // ==================== 🔥 修正開始 🔥 ====================
+        // 在此處應用 Gmin 電導，以確保矩陣數值穩定性
+        if (this.gmin > 0) {
+            if (this.debug) {
+                console.log(`  ⚡️ 正在應用 Gmin 電導: ${this.gmin.toExponential(2)} S`);
+            }
+            // 只對應於節點電壓的對角線元素添加 Gmin
+            for (let i = 0; i < this.nodeCount; i++) {
+                this.matrix.addAt(i, i, this.gmin);
+            }
+        }
+        // ==================== 🔥 修正結束 🔥 ====================
         
         if (this.debug) {
             console.log('🔍 初始化矩陣完成，大小:', this.finalMatrixSize, 'x', this.finalMatrixSize);
@@ -507,6 +520,7 @@ class MNA_LCP_Builder extends MNABuilder {
  */
 export class MCPTransientAnalysis {
     constructor(options = {}) {
+        // 🔥 關鍵修正：將 options 傳遞給 mnaLcpBuilder
         this.mnaLcpBuilder = new MNA_LCP_Builder(options);
         this.lcpSolver = createLCPSolver({
             maxIterations: options.maxLcpIterations || 1000,
@@ -573,6 +587,24 @@ export class MCPTransientAnalysis {
             console.log(`  元件數量: ${components.length}`);
         }
         
+        // ==================== 🔥 核心架構修正開始 🔥 ====================
+        // 預處理元件列表，自動展開"元元件" (如變壓器)
+        const flatComponents = [];
+        for (const component of components) {
+            if (typeof component.getComponents === 'function') {
+                if (this.debug) {
+                    console.log(`  🧬 展開元元件 ${component.name}...`);
+                }
+                flatComponents.push(...component.getComponents());
+            } else {
+                flatComponents.push(component);
+            }
+        }
+        if (this.debug && flatComponents.length !== components.length) {
+            console.log(`  📊 元件列表已扁平化: ${components.length} -> ${flatComponents.length} 個基礎元件`);
+        }
+        // ==================== 🔥 核心架構修正結束 🔥 ====================
+
         // 初始化結果對象
         const result = new TransientResult();
         result.analysisInfo = {
@@ -583,8 +615,8 @@ export class MCPTransientAnalysis {
             convergenceStats: {}
         };
         
-        // 分析電路組成
-        const componentAnalysis = this.analyzeCircuitComponents(components);
+        // 分析電路組成 (使用扁平化後的列表)
+        const componentAnalysis = this.analyzeCircuitComponents(flatComponents);
         
         if (this.debug) {
             console.log(`  📊 電路組成分析:`);
@@ -604,12 +636,19 @@ export class MCPTransientAnalysis {
         }
         
         // === 步驟1：計算 DC 工作點 ===
-        // 🔥 修正：傳遞 params 以便使用 startTime
-        await this.computeInitialConditions(componentAnalysis.mcpComponents.concat(componentAnalysis.linearComponents), result, params);
+        // 🔥 修正：傳遞 params 以便使用 startTime (使用扁平化後的列表)
+        await this.computeInitialConditions(flatComponents, result, params);
         
         // === 步驟2：主時間循環 ===
         let currentTime = params.startTime;
         let stepCount = 0;
+        
+        console.log(`🚀 開始主時間循環:`);
+        console.log(`   起始時間: ${params.startTime}s`);
+        console.log(`   結束時間: ${params.stopTime}s`);
+        console.log(`   時間步長: ${params.timeStep}s`);
+        console.log(`   最大步數: ${this.maxTimeSteps}`);
+        console.log(`   初始條件: currentTime=${currentTime}, stopTime=${params.stopTime}`);
         
         while (currentTime < params.stopTime && stepCount < this.maxTimeSteps) {
             currentTime += params.timeStep;
@@ -620,14 +659,17 @@ export class MCPTransientAnalysis {
             }
             
             try {
-                // 更新 PWM 控制器和時變源
-                this.updateTimeVaryingElements(components, currentTime);
+                // 更新 PWM 控制器和時變源 (使用扁平化後的列表)
+                console.log(`  🔥 步驟 ${stepCount}: 開始處理 t=${currentTime.toFixed(6)}s, timeStep=${params.timeStep}`);
+                this.updateTimeVaryingElements(flatComponents, currentTime);
                 
-                // 更新伴隨模型 (電容、電感)
-                this.updateCompanionModels(components, currentTime);
+                // 更新伴隨模型 (電容、電感) - 傳遞時間步長 (使用扁平化後的列表)
+                console.log(`  ⚡ 準備調用 updateCompanionModels...`);
+                this.updateCompanionModels(flatComponents, params.timeStep);
+                console.log(`  ✅ updateCompanionModels 調用完成`);
                 
-                // 求解當前時間步
-                const success = await this.solveTimeStep(components, currentTime, result);
+                // 求解當前時間步 (使用扁平化後的列表)
+                const success = await this.solveTimeStep(flatComponents, currentTime, result);
                 
                 if (!success) {
                     console.error(`❌ 時間步失敗於 t = ${currentTime}`);
@@ -669,9 +711,9 @@ export class MCPTransientAnalysis {
             console.log('🔍 計算 DC-MCP 初始條件...');
         }
         
-        // 創建 DC-MCP 求解器
+        // 🔥 關鍵修正：將 options 傳遞給 DC-MCP 求解器，使其內部能設置 gmin
         const dcMcpSolver = await import('./dc_mcp_solver.js').then(m => 
-            m.createDC_MCP_Solver({ debug: this.debug })
+            m.createDC_MCP_Solver({ debug: this.debug, gmin: this.mnaLcpBuilder.gmin })
         );
         
         try {
@@ -775,10 +817,14 @@ export class MCPTransientAnalysis {
     /**
      * 更新伴隨模型
      */
-    updateCompanionModels(components, time) {
+    updateCompanionModels(components, timeStep) {
+        console.log(`🔧 MCPTransientAnalysis.updateCompanionModels 被調用: timeStep=${timeStep}, 組件數=${components.length}`);
         for (const component of components) {
             if (component.updateCompanionModel) {
-                component.updateCompanionModel(time);
+                console.log(`  ➡️ 調用 ${component.id || component.constructor.name}.updateCompanionModel(${timeStep})`);
+                component.updateCompanionModel(timeStep);
+            } else {
+                console.log(`  ⚠️ 跳過 ${component.id || component.constructor.name} (無 updateCompanionModel 方法)`);
             }
         }
     }
@@ -849,10 +895,43 @@ export class MCPTransientAnalysis {
             }
         }
         
+        // 🔥 確保電感電流正確提取和映射 
+        for (const component of components) {
+            if (component.type === 'L' && component.needsCurrentVariable && component.needsCurrentVariable()) {
+                console.log(`🔍 檢查電感 ${component.name} 的電流映射...`);
+                
+                // 電感電流應該已經在 branchCurrents 中，但我們確認一下
+                if (!branchCurrents.has(component.name)) {
+                    console.log(`⚠️ [${component.name}] 電流未在 branchCurrents 中找到，嘗試從 voltageSourceMap 提取...`);
+                    
+                    // 如果沒有，嘗試從 voltageSourceMap 中提取
+                    const voltageSourceIndex = this.mnaLcpBuilder.voltageSourceMap.get(component.name);
+                    if (voltageSourceIndex !== undefined) {
+                        const current = solution.get(voltageSourceIndex);
+                        branchCurrents.set(component.name, current);
+                        console.log(`📊 [${component.name}] 電感電流提取: ${current.toExponential(3)}A (從索引 ${voltageSourceIndex})`);
+                    } else {
+                        console.log(`❌ [${component.name}] voltageSourceMap 中未找到映射索引`);
+                        branchCurrents.set(component.name, 0); // 設置為 0 避免錯誤
+                    }
+                } else {
+                    const existingCurrent = branchCurrents.get(component.name);
+                    console.log(`✅ [${component.name}] 電流已存在: ${existingCurrent.toExponential(3)}A`);
+                }
+            }
+        }
+        
         // 更新元件歷史
         for (const component of components) {
             if (component.updateHistory) {
-                component.updateHistory(nodeVoltages, branchCurrents);
+                // 🔥 修复：为 inductor_v2.js 传递完整参数
+                if (component.constructor.name === 'Inductor' && component.updateHistory.length === 4) {
+                    // 传递电感所需的所有参数: (nodeVoltages, branchCurrents, currentVarName, h)
+                    component.updateHistory(nodeVoltages, branchCurrents, component.name, this.currentTimeStep || 1e-6);
+                } else {
+                    // 对其他组件使用标准调用
+                    component.updateHistory(nodeVoltages, branchCurrents);
+                }
             }
         }
         

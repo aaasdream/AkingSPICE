@@ -60,6 +60,11 @@ export class AkingSPICE {
         } else {
             this._components.push(component);
         }
+
+        // 🔥 關鍵修正：只要有元件被加入，就將求解器標記為已初始化
+        if (this._components.length > 0) {
+            this.isInitialized = true;
+        }
     }
 
     // 🔥 新增：addComponents 方法，用於陣列

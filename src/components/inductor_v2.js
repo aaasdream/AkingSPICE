@@ -120,12 +120,16 @@ export class Inductor extends LinearTwoTerminal {
      * @param {number} h 當前時間步長
      */
     updateCompanionModel(h) {
+        console.log(`🔍 Inductor_v2.updateCompanionModel called: name=${this.name}, h=${h}`);
+        
         if (!h || h <= 0) {
-            return; // DC分析或無效步長
+            console.log(`  ⚠️ Skipping update, invalid h=${h}`);
+            return; // DC analysis or invalid step
         }
 
         const L = this.getInductance();
         this.currentTimeStep = h;
+        this.timeStep = h;  // Also set timeStep for MNA compatibility
         
         if (this.integrationMethod === 'trapezoidal') {
             // 梯形法伴隨模型:
@@ -162,6 +166,11 @@ export class Inductor extends LinearTwoTerminal {
     updateHistory(nodeVoltages, branchCurrents, currentVarName, h) {
         const current = branchCurrents.get(currentVarName || this.name) || 0;
         const previousCurrent = this.previousValues.get('current') || this.ic || 0;
+
+        // 簡化調試信息 - 只在電流非零或變壓器電感時報告
+        if (Math.abs(current) > 1e-12 || this.name.includes('T1')) {
+            console.log(`� [${this.name}] updateHistory: current=${current.toExponential(3)}A, prevCurrent=${previousCurrent.toExponential(3)}A`);
+        }
 
         // 更新並儲存當前的導數和狀態值
         this.previous_didt = (h > 0) ? (current - previousCurrent) / h : 0;
@@ -265,6 +274,8 @@ export class Inductor extends LinearTwoTerminal {
         const n2Index = nodeMap.get(this.nodes[1]);
         const currentIndex = voltageSourceMap.get(this.name);
         
+        console.log(`🔵 [${this.name}] stamp called: currentIndex=${currentIndex}, couplings=${this.couplings ? this.couplings.length : 'undefined'}`);
+        
         if (currentIndex !== undefined) {
             // 電感的伴隨模型: v = Req * i + Veq
             if (n1Index !== undefined) {
@@ -276,9 +287,54 @@ export class Inductor extends LinearTwoTerminal {
                 matrix.set(n2Index, currentIndex, -1);
             }
             
-            // 添加等效電阻和電壓源
+            // 添加等效電阻和電壓源 (自感部分)
             matrix.addAt(currentIndex, currentIndex, -this.equivalentResistance);
             rhs.addAt(currentIndex, this.equivalentVoltageSource);
+
+            // ==================== 🔥 新增代碼開始 🔥 ====================
+            // 處理互感 (Coupling) - 變壓器耦合邏輯
+            // 變壓器的電壓方程: V_L1 = L1*di1/dt + M*di2/dt
+            console.log(`🔍 [${this.name}] Checking couplings: exists=${!!this.couplings}, count=${this.couplings ? this.couplings.length : 0}`);
+            if (this.couplings) {
+                const h = this.currentTimeStep; // time step
+                console.log(`🔧 [${this.name}] Processing mutual inductance: h=${h}, coupling count=${this.couplings.length}`);
+                if (!h || h <= 0) {
+                    console.log(`⚠️ [${this.name}] Invalid time step, skipping mutual inductance`);
+                    return; // Cannot process mutual inductance in DC analysis
+                }
+
+                for (const coupling of this.couplings) {
+                    const otherInductor = coupling.inductor;
+                    const M = coupling.mutualInductance;
+                    
+                    const otherCurrIndex = voltageSourceMap.get(otherInductor.name);
+                    console.log(`🔗 [${this.name}] 處理與 ${otherInductor.name} 的耦合: M=${M*1e6}µH, otherIdx=${otherCurrIndex}`);
+                    
+                    if (otherCurrIndex === undefined) {
+                        console.warn(`❌ [MNA] 耦合電感 ${otherInductor.name} 的電流變數未找到 (for ${this.name})`);
+                        continue;
+                    }
+
+                    // 互感項的伴隨模型貢獻: V_M = M * dI_other/dt
+                    // 離散化後約等於: M/h * (I_other_n - I_other_{n-1})
+                    // 這會在電壓方程中增加兩個部分：
+                    // 1. 對 MNA 矩陣的貢獻: - (M/h) * I_other_n
+                    // 2. 對 RHS 向量的貢獻: + (M/h) * I_other_{n-1}
+
+                    const mutualCoeff = -M / h;
+                    console.log(`🧮 [${this.name}] 互感係數: -M/h = ${mutualCoeff} (添加到 matrix[${currentIndex}][${otherCurrIndex}])`);
+
+                    // 1. 修改 MNA 矩陣：增加對另一個電感電流的依賴
+                    matrix.addAt(currentIndex, otherCurrIndex, mutualCoeff);
+
+                    // 2. 修改 RHS 向量：加入歷史項的貢獻
+                    const otherPreviousCurrent = otherInductor.previousValues.get('current') || otherInductor.ic || 0;
+                    const rhsContribution = (M / h) * otherPreviousCurrent;
+                    console.log(`📊 [${this.name}] RHS 歷史項: (M/h)*I_prev = ${rhsContribution} (I_prev=${otherPreviousCurrent})`);
+                    rhs.addAt(currentIndex, rhsContribution);
+                }
+            }
+            // ==================== 🔥 新增代碼結束 🔥 ====================
         }
     }
 

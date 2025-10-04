@@ -4,7 +4,7 @@
  */
 
 import { BaseComponent } from './base.js';
-import { Inductor } from './inductor.js';
+import { Inductor } from './inductor_v2.js';
 
 export class MultiWindingTransformer {
     /**

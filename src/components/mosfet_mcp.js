@@ -78,30 +78,24 @@ export class MOSFET_MCP extends BaseComponent {
     /**
      * 預先註冊 MCP 變量和約束
      */
+    /**
+     * 預先註冊 MCP 變量和約束
+     */
     registerVariables(mnaBuilder) {
-        // === 正確的 MNA 架構：變量索引 = 方程索引 ===
-        
-        // 註冊通道電流變量
+        // === 1. 通道變量和方程 ===
+        // 註冊通道電流變量，並為其保留一個MNA方程的位置
         this.channelCurrentIndex = mnaBuilder.addExtraVariable(`${this.name}_Ids`);
-        // 通道方程索引與變量索引相同 (對角結構)
         this.channelEquationIndex = this.channelCurrentIndex;
         
-        // 註冊體二極管電流變量  
+        // === 2. 體二極體變量和約束 (LCP) ===
+        // 註冊體二極管電流變量 (純 LCP 變量，無 MNA 方程)
         this.bodyCurrentIndex = mnaBuilder.addExtraVariable(`${this.name}_Ibody`);
-        // 體電流方程索引與變量索引相同
-        this.bodyEquationIndex = this.bodyCurrentIndex;
         
-        // 註冊體二極管輔助變量
-        this.bodyAuxiliaryIndex = mnaBuilder.addExtraVariable(`${this.name}_w`);
-        // w 定義方程索引與變量索引相同
-        this.bodyAuxiliaryEquationIndex = this.bodyAuxiliaryIndex;
-        
-        // 註冊體二極管互補約束 (LCP 部分)
+        // 只為體二極管註冊一個 LCP 約束
         this.bodyComplementarityIndex = mnaBuilder.addComplementarityEquation();
         
         if (mnaBuilder.debug) {
-            console.log(`    📝 ${this.name}: 通道電流[${this.channelCurrentIndex}], 體電流[${this.bodyCurrentIndex}], 輔助變量w[${this.bodyAuxiliaryIndex}]`);
-            console.log(`    📝 ${this.name}: 通道方程[${this.channelEquationIndex}], 體電流方程[${this.bodyEquationIndex}], w定義方程[${this.bodyAuxiliaryEquationIndex}], LCP[${this.bodyComplementarityIndex}]`);
+            console.log(`    📝 ${this.name}: 通道電流[${this.channelCurrentIndex}] (MNA), 體電流[${this.bodyCurrentIndex}] (LCP)`);
         }
     }
 
@@ -115,15 +109,23 @@ export class MOSFET_MCP extends BaseComponent {
         // === 使用預註冊的電流變量 ===
         
         // === KCL 約束：總電流 = 通道電流 + 體二極管電流 ===
-        // 電流從 Drain 流向 Source (正向定義)
+        // 通道電流 Ids 從 Drain 流向 Source (正向定義)
         if (nD >= 0) {
-            mnaBuilder.addToMatrix(nD, this.channelCurrentIndex, 1.0);   // +Ids 離開Drain
-            mnaBuilder.addToMatrix(nD, this.bodyCurrentIndex, 1.0);      // +Ibody 離開Drain  
+            mnaBuilder.addToMatrix(nD, this.channelCurrentIndex, 1.0);   // +Ids 離開 Drain
         }
         if (nS >= 0) {
-            mnaBuilder.addToMatrix(nS, this.channelCurrentIndex, -1.0);  // -Ids 進入Source
-            mnaBuilder.addToMatrix(nS, this.bodyCurrentIndex, -1.0);     // -Ibody 進入Source
+            mnaBuilder.addToMatrix(nS, this.channelCurrentIndex, -1.0);  // -Ids 進入 Source
         }
+
+        // ==================== 🔥 修正開始 🔥 ====================
+        // 體二極管電流 Ibody 從 Source 流向 Drain (符合二極管物理方向和LCP z>=0約束)
+        if (nD >= 0) {
+            mnaBuilder.addToMatrix(nD, this.bodyCurrentIndex, -1.0);     // 電流流入 Drain，因此是負值
+        }
+        if (nS >= 0) {
+            mnaBuilder.addToMatrix(nS, this.bodyCurrentIndex, 1.0);      // 電流從 Source 流出，因此是正值
+        }
+        // ==================== 🔥 修正結束 🔥 ====================
 
         // === MOSFET 通道約束 ===
         this.addChannelConstraints(mnaBuilder, nD, nS);
@@ -166,45 +168,43 @@ export class MOSFET_MCP extends BaseComponent {
      * - 正向導通條件：Vds > Vf_body
      * 互補條件：0 ≤ (Vds - Vf_body) ⊥ Ibody ≥ 0
      */
+    /**
+     * 添加體二極管互補約束 (純 LCP 實現)
+     * 互補條件：0 ≤ (Vsd - Vf_body) ⊥ Ibody ≥ 0
+     * 其中 Vsd = Vs - Vd，模擬從 Source 到 Drain 的物理二極體。
+     * Ibody 仍定義為 D->S 電流，但其行為由 Vsd 決定。
+     */
     addBodyDiodeConstraints(mnaBuilder, nD, nS) {
-        // === 步驟1：體二極管電流的 MNA 約束 ===
-        // 為 Ibody 變量創建約束：通過 LCP 求解，這裡設為自由變量
-        // 方程：Ibody = 0 (預設截止，將由 LCP 約束覆蓋)
-        mnaBuilder.addToMatrix(this.bodyEquationIndex, this.bodyCurrentIndex, 1.0);
-        mnaBuilder.addToRHS(this.bodyEquationIndex, 0.0);
+        // === 步驟 1: Ibody 是純 LCP 變量，不需要 MNA 方程 ===
+        // 不要為 this.bodyCurrentIndex 添加任何 MNA 行。
+
+        // === 步驟 2: 直接定義 LCP 約束 w = Mz + q ===
+        // 對於體二極管: w = Vsd - Ron_body*Ibody - Vf_body
+        //               w = (Vs - Vd) - Ron_body*Ibody - Vf_body
         
-        // === 步驟2：輔助變量 w 的定義方程 ===  
-        // 體二極管模型 (Source → Drain)：
-        // w = (Vd - Vs) - Ron_body*Ibody - Vf_body  
-        // 重排為：w - (Vd - Vs) + Ron_body*Ibody = -Vf_body
-        
-        mnaBuilder.addToMatrix(this.bodyAuxiliaryEquationIndex, this.bodyAuxiliaryIndex, 1.0);  // +w
-        
-        // 電壓項：(Vd - Vs) = Vds，Source到Drain的電壓
+        // ==================== 🔥 修正開始 🔥 ====================
+        // w 對 Vd 的依賴 (-1.0 * Vd)
         if (nD >= 0) {
-            mnaBuilder.addToMatrix(this.bodyAuxiliaryEquationIndex, nD, -1.0);  // -Vd  
+            mnaBuilder.setLCPMatrix(this.bodyComplementarityIndex, nD, -1.0);
         }
+        // w 對 Vs 的依賴 (+1.0 * Vs)
         if (nS >= 0) {
-            mnaBuilder.addToMatrix(this.bodyAuxiliaryEquationIndex, nS, 1.0);   // +Vs
+            mnaBuilder.setLCPMatrix(this.bodyComplementarityIndex, nS, 1.0);
         }
+        // ==================== 🔥 修正結束 🔥 ====================
         
-        // 體二極管電流項
-        mnaBuilder.addToMatrix(this.bodyAuxiliaryEquationIndex, this.bodyCurrentIndex, this.Ron_body);  // +Ron_body*Ibody
+        // w 對 Ibody 的依賴 (-Ron_body * Ibody)
+        mnaBuilder.setLCPMatrix(this.bodyComplementarityIndex, this.bodyCurrentIndex, -this.Ron_body);
         
-        // 右側常數項
-        mnaBuilder.addToRHS(this.bodyAuxiliaryEquationIndex, -this.Vf_body);  // = -Vf_body
+        // 常數項 q (-Vf_body)
+        mnaBuilder.setLCPVector(this.bodyComplementarityIndex, -this.Vf_body);
         
-        // === 步驟3：設置 LCP 約束 ===
-        // 互補條件：0 ≤ w ⊥ Ibody ≥ 0
-        // w 直接映射到 LCP
-        mnaBuilder.setLCPMatrix(this.bodyComplementarityIndex, this.bodyAuxiliaryIndex, 1.0);  // w -> LCP
-        mnaBuilder.setLCPVector(this.bodyComplementarityIndex, 0.0);         // 無額外常數
-        
-        // 建立互補映射：w ⊥ Ibody  
+        // === 步驟 3: 建立互補映射 ===
+        // 將 w[bodyComplementarityIndex] 與 z[bodyCurrentIndex] (即 Ibody) 關聯
         mnaBuilder.mapLCPVariable(this.bodyComplementarityIndex, this.bodyCurrentIndex);
         
         if (mnaBuilder.debug) {
-            console.log(`    🔌 ${this.name}: 體電流方程[${this.bodyEquationIndex}], w定義[${this.bodyAuxiliaryEquationIndex}], LCP[${this.bodyComplementarityIndex}]`);
+            console.log(`  � ${this.name} Body Diode: w[${this.bodyComplementarityIndex}] ⊥ Ibody[${this.bodyCurrentIndex}]`);
         }
     }
 
