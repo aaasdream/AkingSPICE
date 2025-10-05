@@ -617,6 +617,9 @@ export class MNA_LCP_Builder extends MNABuilder {
  */
 export class MCPTransientAnalysis {
     constructor(options = {}) {
+        // 存儲選項供後續使用
+        this.options = options;
+        
         // 🔥 關鍵修正：將 options 傳遞給 mnaLcpBuilder
         this.mnaLcpBuilder = new MNA_LCP_Builder(options);
         this.lcpSolver = createLCPSolver({
@@ -640,9 +643,18 @@ export class MCPTransientAnalysis {
         // 收斂控制
         this.convergenceTolerance = options.convergenceTolerance || 1e-9;
         
+        // 🔥 任務二：二階預估器選項
+        this.previousSolution = null; // 用於存儲完整的上一個解向量（任務三節點阻尼也需要）
+        
+        // 🔥 任務三：節點阻尼機制選項
+        // 默認啟用節點阻尼，最大電壓變化 5V (適用於開關電源)
+        this.maxVoltageStep = options.maxVoltageStep || 5.0;          // 單步最大電壓變化 (V)
+        this.dampingFactor = options.dampingFactor || 0.8;            // 阻尼因子 (0~1)
+        this.enableNodeDamping = options.enableNodeDamping !== false; // 默認啟用節點阻尼
+        
         // 調試和監控
         this.debug = options.debug || false;
-        this.collectStatistics = options.collectStatistics || false;
+        this.collectStatistics = options.collectStatistics !== false; // 默認啟用統計收集
         
         this.statistics = {
             totalTimeSteps: 0,
@@ -897,6 +909,125 @@ export class MCPTransientAnalysis {
         
         return result;
     }
+    
+    // ==================== 🔥 任務二：二階預估器實現 🔥 ====================
+    
+    /**
+     * 預估下一個時間步的解
+     * 使用線性外插法基於前兩個時間點預估 t_n 的解
+     * @param {TransientResult} result - 當前結果對象
+     * @param {number} currentTime - 當前時間 t_n
+     * @param {number} timeStep - 當前時間步長 h_n
+     * @returns {Map} 預估的節點電壓 Map
+     */
+    _predictSolution(result, currentTime, timeStep) {
+        if (this.options.enablePredictor === false) {
+            return this.previousNodeVoltages || new Map();
+        }
+        
+        const timeVector = result.timeVector;
+        if (timeVector.length < 2) {
+            // 歷史點不夠，無法預估，返回上一個解
+            if (this.debug) {
+                console.log('🔮 預估器：歷史點不足，使用上一個解');
+            }
+            return this.previousNodeVoltages || new Map();
+        }
+
+        const t_n = currentTime;
+        const t_nm1 = timeVector[timeVector.length - 1];
+        const t_nm2 = timeVector[timeVector.length - 2];
+
+        const h_n = timeStep;
+        const h_nm1 = t_nm1 - t_nm2;
+
+        if (h_nm1 <= 1e-12) { // 避免除以零
+            if (this.debug) {
+                console.log('🔮 預估器：上一步長過小，使用上一個解');
+            }
+            return this.previousNodeVoltages || new Map();
+        }
+
+        const rho = h_n / h_nm1;  // 步長比例
+        const predictedVoltages = new Map();
+        let maxPredictionChange = 0;
+
+        // 對每個節點進行線性外插預估
+        for (const [node, voltageArray] of Object.entries(result.voltageMatrix)) {
+            if (voltageArray.length >= 2) {
+                const v_nm1 = voltageArray[voltageArray.length - 1];      // V_{n-1}
+                const v_nm2 = voltageArray[voltageArray.length - 2];      // V_{n-2}
+                
+                // 預估公式: V_p = V_{n-1} + rho * (V_{n-1} - V_{n-2})
+                const v_p = v_nm1 + rho * (v_nm1 - v_nm2);
+                predictedVoltages.set(node, v_p);
+                
+                // 計算預估的變化量
+                const change = Math.abs(v_p - v_nm1);
+                maxPredictionChange = Math.max(maxPredictionChange, change);
+            }
+        }
+        
+        if (this.debug) {
+            console.log(`🔮 預估器：rho=${rho.toFixed(3)}, 最大預估變化=${maxPredictionChange.toFixed(4)}V`);
+        }
+        
+        return predictedVoltages;
+    }
+
+    /**
+     * 🔥 任務三：節點阻尼機制
+     * 限制節點電壓的單步變化幅度，防止數值震盪和發散
+     * 
+     * @param {Map} nodeVoltages - 當前求解的節點電壓
+     * @param {number} time - 當前時間
+     * @returns {Map} 應用阻尼後的節點電壓
+     */
+    _applyNodeDamping(nodeVoltages, time) {
+        const dampedVoltages = new Map();
+        let maxChange = 0;
+        let dampingApplied = false;
+        
+        for (const [node, currentVoltage] of nodeVoltages) {
+            if (node === 'gnd' || node === '0') {
+                // 地節點始終為 0，不需要阻尼
+                dampedVoltages.set(node, currentVoltage);
+                continue;
+            }
+            
+            const previousVoltage = this.previousSolution[node] || 0;
+            const voltageChange = currentVoltage - previousVoltage;
+            const absChange = Math.abs(voltageChange);
+            
+            maxChange = Math.max(maxChange, absChange);
+            
+            if (absChange > this.maxVoltageStep) {
+                // 應用阻尼：限制電壓變化幅度
+                const sign = Math.sign(voltageChange);
+                const limitedChange = sign * this.maxVoltageStep;
+                
+                // 使用阻尼因子進一步減小變化
+                const dampedChange = limitedChange * this.dampingFactor;
+                const dampedVoltage = previousVoltage + dampedChange;
+                
+                dampedVoltages.set(node, dampedVoltage);
+                dampingApplied = true;
+                
+                if (this.debug) {
+                    console.log(`🛠️ 節點 ${node} 阻尼: ${currentVoltage.toFixed(3)}V → ${dampedVoltage.toFixed(3)}V (變化 ${voltageChange.toFixed(3)}V → ${dampedChange.toFixed(3)}V)`);
+                }
+            } else {
+                // 變化在允許範圍內，不需要阻尼
+                dampedVoltages.set(node, currentVoltage);
+            }
+        }
+        
+        if (this.debug && dampingApplied) {
+            console.log(`🛠️ t=${time.toExponential(3)}s: 節點阻尼生效, 最大變化=${maxChange.toFixed(3)}V`);
+        }
+        
+        return dampedVoltages;
+    }
 
     // ==================== 🔥 重構後的批次模式 run 方法 🔥 ====================
     
@@ -1125,8 +1256,14 @@ export class MCPTransientAnalysis {
      */
     async solveTimeStep(components, time, result, timeStep) {
         try {
-            // === 建立 MNA-LCP 系統 ===
+            // === 步驟 1: 預估解 ===
+            const predictedVoltages = this._predictSolution(result, time, timeStep);
+            
+            // === 步驟 2: 建立 MNA-LCP 系統，傳入預估解 ===
             this.mnaLcpBuilder.reset();
+            // 將預估解設定為 "上一個解"，供 preUpdateMCPStates 使用
+            this.mnaLcpBuilder.previousNodeVoltages = predictedVoltages;
+            
             const schurData = this.mnaLcpBuilder.buildMNA_LCP_System(components, time);
             
             if (schurData.isLinear) {
@@ -1173,7 +1310,12 @@ export class MCPTransientAnalysis {
      */
     extractAndStoreSolution(solution, components, time, result, timeStep) {
         // 提取節點電壓
-        const nodeVoltages = this.mnaLcpBuilder.extractNodeVoltages(solution);
+        let nodeVoltages = this.mnaLcpBuilder.extractNodeVoltages(solution);
+        
+        // 🔥 任務三：節點阻尼機制
+        if (this.enableNodeDamping && this.previousSolution) {
+            nodeVoltages = this._applyNodeDamping(nodeVoltages, time);
+        }
         
         // 更新電壓控制的 MOSFET 狀態
         for (const component of components) {
@@ -1233,6 +1375,11 @@ export class MCPTransientAnalysis {
                 // 所有元件現在都支持統一的 updateHistory(solutionData, timeStep) API
                 component.updateHistory(solutionData, timeStep);
             }
+        }
+        
+        // 更新預估器歷史
+        if (this.options.enablePredictor !== false) {
+            this.previousSolution = Object.fromEntries(nodeVoltages);
         }
         
         // 存儲到結果

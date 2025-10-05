@@ -28,6 +28,7 @@ export class BaseComponent {
         
         // 暫態分析相關
         this.timeStep = null;
+        this.previousTimeStep = null; // 🔥 新增：追蹤上一個時間步長
         this.previousValues = new Map(); // 存儲歷史值
         this.historyTerm = 0;
         
@@ -116,6 +117,7 @@ export class BaseComponent {
      */
     initTransient(timeStep, method = 'backward_euler') {
         this.timeStep = timeStep;
+        this.previousTimeStep = timeStep; // 🔥 初始化時，假設前一個步長相同
         this.integrationMethod = method;
         this.previousValues.clear();
         this.historyTerm = 0;
@@ -157,6 +159,12 @@ export class BaseComponent {
             
             this.previousValues.set('voltage', currentVoltage);
             this.operatingPoint.voltage = currentVoltage;
+        }
+        
+        // 🔥 更新時間步長歷史 - 在方法末尾
+        if (timeStep !== undefined && timeStep !== null) {
+            this.previousTimeStep = this.timeStep;
+            this.timeStep = timeStep;
         }
     }
 

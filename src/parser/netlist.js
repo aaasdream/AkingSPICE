@@ -279,13 +279,46 @@ export class NetlistParser {
         // 解析 MCP MOSFET 參數
         const params = this.parseParameters(tokens.slice(4));
         
+        // 輔助函數：解析工程記號值
+        const parseEngValue = (value, defaultVal) => {
+            if (value === undefined || value === null) return defaultVal;
+            if (typeof value === 'number') return value;
+            
+            // 使用與 BaseComponent.parseValue 相同的邏輯
+            const trimmedValue = String(value).trim();
+            
+            // 工程記號對應表
+            const suffixes = {
+                'T': 1e12, 'G': 1e9, 'MEG': 1e6, 'M': 1e6, 'K': 1e3, 'k': 1e3,
+                'm': 1e-3, 'u': 1e-6, 'µ': 1e-6, 'n': 1e-9, 'p': 1e-12, 'f': 1e-15
+            };
+            
+            // 特殊處理MEG
+            if (trimmedValue.toUpperCase().endsWith('MEG')) {
+                const numPart = parseFloat(trimmedValue.slice(0, -3));
+                return !isNaN(numPart) ? numPart * 1e6 : defaultVal;
+            }
+            
+            // 處理其他後綴
+            for (const [suffix, multiplier] of Object.entries(suffixes)) {
+                if (trimmedValue.endsWith(suffix)) {
+                    const numPart = parseFloat(trimmedValue.slice(0, -suffix.length));
+                    return !isNaN(numPart) ? numPart * multiplier : defaultVal;
+                }
+            }
+            
+            // 直接解析數字
+            const numValue = parseFloat(trimmedValue);
+            return !isNaN(numValue) ? numValue : defaultVal;
+        };
+        
         const mosfetParams = {
-            Ron: params.Ron || params.ron || 1e-3,           // 1mΩ 導通電阻
-            Roff: params.Roff || params.roff || 1e12,        // 1TΩ 截止電阻（理論無限大）
-            Vth: params.Vth || params.vth || 2.0,            // 2V 閾值電壓
-            type: params.type || params.channelType || 'NMOS', // NMOS 或 PMOS
-            Vf_body: params.Vf_body || params.vf_body || 0.7, // 體二極管導通電壓
-            Ron_body: params.Ron_body || params.ron_body || 5e-3, // 體二極管導通電阻
+            Ron: parseEngValue(params.Ron || params.ron, 1e-3),           // 1mΩ 導通電阻
+            Roff: parseEngValue(params.Roff || params.roff, 1e12),        // 1TΩ 截止電阻
+            Vth: parseEngValue(params.Vth || params.vth, 2.0),            // 2V 閾值電壓
+            type: params.type || params.channelType || 'NMOS',            // NMOS 或 PMOS
+            Vf_body: parseEngValue(params.Vf_body || params.vf_body, 0.7), // 體二極管導通電壓
+            Ron_body: parseEngValue(params.Ron_body || params.ron_body, 5e-3), // 體二極管導通電阻
             controlMode: params.controlMode || params.control_mode || 'voltage', // 控制模式
             debug: params.debug || false
         };

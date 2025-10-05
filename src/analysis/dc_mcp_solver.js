@@ -58,15 +58,12 @@ export class DC_MCP_Solver {
         }
 
         // 建立 MNA-LCP 系統 (DC模式，time=0)
-        const systemData = this.mnaLcpBuilder.buildMNA_LCP_System(dcComponents, 0);
+        const schurData = this.mnaLcpBuilder.buildMNA_LCP_System(dcComponents, 0);
         
         if (this.debug) {
             console.log(`  系統維度: ${this.mnaLcpBuilder.finalMatrixSize}`);
             console.log(`  LCP 約束數: ${this.mnaLcpBuilder.lcpConstraintCount}`);
         }
-
-        // 執行舒爾補化簡
-        const schurData = this.mnaLcpBuilder.performSchurComplement();
         
         let solution;
         

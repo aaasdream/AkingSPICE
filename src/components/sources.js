@@ -35,6 +35,79 @@ export class VoltageSource extends BaseComponent {
     }
 
     /**
+     * 解析帶 SPICE 單位的數值
+     * @param {string} valueStr 數值字符串（可能包含單位）
+     * @returns {number} 解析後的數值（基本單位）
+     */
+    parseValueWithUnit(valueStr) {
+        if (!valueStr || valueStr.trim() === '') {
+            return 0;
+        }
+        
+        const str = valueStr.toString().trim().toUpperCase();
+        
+        // 提取數值部分
+        const numMatch = str.match(/([-\d.]+(?:[eE][-+]?\d+)?)/);
+        if (!numMatch) {
+            return 0;
+        }
+        
+        const baseValue = parseFloat(numMatch[1]);
+        
+        // SPICE 單位換算表 (注意：SPICE 工程記號不區分具體單位類型)
+        const unitMultipliers = {
+            // 完整電壓單位
+            'V': 1,
+            'MV': 1e-3,
+            'UV': 1e-6,
+            'NV': 1e-9,
+            'PV': 1e-12,
+            'KV': 1e3,
+            
+            // 完整時間單位  
+            'S': 1,
+            'MS': 1e-3,
+            'US': 1e-6,
+            'NS': 1e-9,
+            'PS': 1e-12,
+            
+            // 頻率單位
+            'HZ': 1,
+            'KHZ': 1e3,
+            'MHZ': 1e6,
+            'GHZ': 1e9,
+            
+            // SPICE 工程記號 (無具體單位，通用)
+            'T': 1e12,   // Tera
+            'G': 1e9,    // Giga
+            'MEG': 1e6,  // Mega (特殊)
+            'M': 1e6,    // Mega  
+            'K': 1e3,    // Kilo
+            'U': 1e-6,   // Micro (SPICE 標準用 u/U)
+            'N': 1e-9,   // Nano
+            'P': 1e-12,  // Pico
+            'F': 1e-15,  // Femto
+            
+            // 無單位
+            '': 1
+        };
+        
+        // 尋找單位後綴（按長度從長到短排序以避免錯誤匹配）
+        const sortedUnits = Object.keys(unitMultipliers)
+            .filter(unit => unit !== '')  // 排除空字符串
+            .sort((a, b) => b.length - a.length);  // 長單位優先匹配
+        
+        for (const unit of sortedUnits) {
+            if (str.endsWith(unit)) {
+                return baseValue * unitMultipliers[unit];
+            }
+        }
+        
+        // 如果沒有匹配的單位，返回基本數值
+        return baseValue;
+    }
+
+    /**
      * 解析源配置
      * @param {number|Object|string} source 源描述
      * @returns {Object} 標準化的源配置
@@ -108,18 +181,24 @@ export class VoltageSource extends BaseComponent {
             };
         }
         
-        // 脈衝波: "PULSE(v1 v2 td tr tf pw per)" - 支援科學記號
-        const pulseMatch = str.match(/^PULSE\(\s*([-\d.]+(?:[eE][-+]?\d+)?)\s+([-\d.]+(?:[eE][-+]?\d+)?)\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*([-\d.]+(?:[eE][-+]?\d+)?)?\s*\)$/);
+        // 脈衝波: "PULSE(v1 v2 td tr tf pw per)" 或 "PULSE v1 v2 td tr tf pw per" - 支援科學記號和 SPICE 單位
+        let pulseMatch = str.match(/^PULSE\(\s*([-\d.]+(?:[eE][-+]?\d+)?)[A-Z]*\s+([-\d.]+(?:[eE][-+]?\d+)?)[A-Z]*\s*([-\d.]+(?:[eE][-+]?\d+)?[A-Z]*\s*)?\s*([-\d.]+(?:[eE][-+]?\d+)?[A-Z]*\s*)?\s*([-\d.]+(?:[eE][-+]?\d+)?[A-Z]*\s*)?\s*([-\d.]+(?:[eE][-+]?\d+)?[A-Z]*\s*)?\s*([-\d.]+(?:[eE][-+]?\d+)?[A-Z]*\s*)?\s*\)$/);
+        
+        // 如果括號格式不匹配，嘗試空格分隔格式
+        if (!pulseMatch) {
+            pulseMatch = str.match(/^PULSE\s+([-\d.]+(?:[eE][-+]?\d+)?[A-Z]*)\s+([-\d.]+(?:[eE][-+]?\d+)?[A-Z]*)\s*([-\d.]+(?:[eE][-+]?\d+)?[A-Z]*\s*)?\s*([-\d.]+(?:[eE][-+]?\d+)?[A-Z]*\s*)?\s*([-\d.]+(?:[eE][-+]?\d+)?[A-Z]*\s*)?\s*([-\d.]+(?:[eE][-+]?\d+)?[A-Z]*\s*)?\s*([-\d.]+(?:[eE][-+]?\d+)?[A-Z]*\s*)?$/);
+        }
+        
         if (pulseMatch) {
             return {
                 type: 'PULSE',
-                v1: parseFloat(pulseMatch[1]),
-                v2: parseFloat(pulseMatch[2]),
-                td: parseFloat(pulseMatch[3] || '0'),      // 延遲時間
-                tr: parseFloat(pulseMatch[4] || '1e-9'),   // 上升時間
-                tf: parseFloat(pulseMatch[5] || '1e-9'),   // 下降時間
-                pw: parseFloat(pulseMatch[6] || '1e-6'),   // 脈寬
-                per: parseFloat(pulseMatch[7] || '2e-6')   // 周期
+                v1: this.parseValueWithUnit(pulseMatch[1]),
+                v2: this.parseValueWithUnit(pulseMatch[2]),
+                td: this.parseValueWithUnit(pulseMatch[3] || '0'),      // 延遲時間
+                tr: this.parseValueWithUnit(pulseMatch[4] || '1e-9'),   // 上升時間
+                tf: this.parseValueWithUnit(pulseMatch[5] || '1e-9'),   // 下降時間
+                pw: this.parseValueWithUnit(pulseMatch[6] || '1e-6'),   // 脈寬
+                per: this.parseValueWithUnit(pulseMatch[7] || '2e-6')   // 周期
             };
         }
         

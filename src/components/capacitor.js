@@ -124,7 +124,7 @@ export class Capacitor extends LinearTwoTerminal {
         }
 
         const C = this.getCapacitance();
-        this.currentTimeStep = h;
+        this.currentTimeStep = h; // 這是 h_n
         
         // 更新步數計數器
         if (stepCount !== null) {
@@ -132,27 +132,39 @@ export class Capacitor extends LinearTwoTerminal {
         }
         
         if (this.stepCount <= 1) {
-            // 🎯 第一步: 後向歐拉伴隨模型
-            // 方程: C * (v_n - v_{n-1}) / h = i_n
-            // 重組: (C/h) * v_n = i_n + (C/h) * v_{n-1}
+            // 🎯 第一步: 仍然使用後向歐拉法 (BE)
+            // 方程: i_n = C * (v_n - v_{n-1}) / h
+            // => i_n = (C/h) * v_n - (C/h) * v_{n-1}
             this.equivalentConductance = C / h;
             const v_nm1 = this.previousValues.get('voltage') || this.ic || 0;
-            this.historyCurrentSource = this.equivalentConductance * v_nm1;
+            // Ieq 是歷史項，注意符號
+            this.historyCurrentSource = (C / h) * v_nm1;
             
         } else {
-            // 🚀 第二步及以後: Gear 2 (BDF2) 伴隨模型
-            // 方程: C * (3v_n - 4v_{n-1} + v_{n-2}) / (2h) = i_n
-            // 重組: (3C/2h) * v_n = i_n + (4C/2h)*v_{n-1} - (C/2h)*v_{n-2}
-            this.equivalentConductance = 3 * C / (2 * h);
+            // 🚀 第二步及以後: 使用變步長 Gear 2 (BDF2)
+            const h_n = h;
+            const h_nm1 = this.previousTimeStep || h; // 如果沒有歷史，就用當前步長
+
+            // 根據理論公式計算 α, β, γ
+            const alpha = (2 * h_n + h_nm1) / (h_n * (h_n + h_nm1));
+            const beta = -(h_n + h_nm1) / (h_n * h_nm1);
+            const gamma = h_n / (h_nm1 * (h_n + h_nm1));
+
+            // 電容方程: i_n = C * v'_n
+            // 代入 BDF2: i_n = C * (α*v_n + β*v_{n-1} + γ*v_{n-2})
+            // 整理成伴隨模型形式: i_n = (C*α)*v_n + C*(β*v_{n-1} + γ*v_{n-2})
             
-            const v_nm1 = this.previousValues.get('voltage') || this.ic || 0;      // v_{n-1}
-            const v_nm2 = this.previousValues.get('voltage_prev') || this.ic || 0; // v_{n-2}
+            this.equivalentConductance = C * alpha;
             
-            // BDF2 歷史電流源: Ieq = (4C/2h)*v_{n-1} - (C/2h)*v_{n-2}
-            const coeff_nm1 = 4 * C / (2 * h);  // = 2C/h
-            const coeff_nm2 = C / (2 * h);       // = C/(2h)
-            this.historyCurrentSource = coeff_nm1 * v_nm1 - coeff_nm2 * v_nm2;
+            const v_nm1 = this.previousValues.get('voltage') || this.ic || 0;
+            const v_nm2 = this.previousValues.get('voltage_prev') || this.ic || 0;
+            
+            // Ieq 是歷史項
+            this.historyCurrentSource = C * (beta * v_nm1 + gamma * v_nm2);
         }
+        
+        // 更新時間步長
+        this.timeStep = h;
     }
 
     /**

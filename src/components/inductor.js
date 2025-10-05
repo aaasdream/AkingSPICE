@@ -147,8 +147,7 @@ export class Inductor extends LinearTwoTerminal {
         }
 
         const L = this.getInductance();
-        this.currentTimeStep = h;
-        this.timeStep = h;  // Also set timeStep for MNA compatibility
+        this.currentTimeStep = h; // 這是 h_n
         
         // 更新步數計數器
         if (stepCount !== null) {
@@ -156,31 +155,46 @@ export class Inductor extends LinearTwoTerminal {
         }
         
         if (this.stepCount <= 1) {
-            // 🎯 第一步: 後向歐拉伴隨模型
-            // 方程: L * (i_n - i_{n-1}) / h + R * i_n = v_n
-            // 重組: (L/h + R) * i_n = v_n + (L/h) * i_{n-1}
+            // 🎯 第一步: 仍然使用後向歐拉法 (BE)
+            // 方程: v_n = L * (i_n - i_{n-1}) / h + R*i_n
+            // => v_n = (L/h + R)*i_n - (L/h)*i_{n-1}
             this.equivalentResistance = (L / h) + this.resistance;
             const i_nm1 = this.previousValues.get('current') || this.ic || 0;
-            this.equivalentVoltageSource = -(L / h) * i_nm1;
+            // Veq 是歷史項，注意符號
+            this.equivalentVoltageSource = (L / h) * i_nm1;
             
             console.log(`  📐 BE模式: Req=${this.equivalentResistance}, Veq=${this.equivalentVoltageSource}`);
             
         } else {
-            // 🚀 第二步及以後: Gear 2 (BDF2) 伴隨模型
-            // 方程: L * (3i_n - 4i_{n-1} + i_{n-2}) / (2h) + R * i_n = v_n
-            // 重組: (3L/2h + R) * i_n = v_n + (4L/2h)*i_{n-1} - (L/2h)*i_{n-2}
-            this.equivalentResistance = (3 * L / (2 * h)) + this.resistance;
+            // 🚀 第二步及以後: 使用變步長 Gear 2 (BDF2)
+            const h_n = h;
+            const h_nm1 = this.previousTimeStep || h; // 如果沒有歷史，就用當前步長
+
+            // 變步長 BDF2 正確公式：設 r = h_n/h_{n-1}
+            // di/dt ≈ (α*i_n + β*i_{n-1} + γ*i_{n-2}) / h_n
+            const r = h_n / h_nm1; // 步長比
+            const alpha = (1 + 2*r) / (1 + r);
+            const beta = -(1 + r);
+            const gamma = (r * r) / (1 + r);
+
+            // 電感方程: v_n = R*i_n + L * di/dt
+            // 代入 BDF2: v_n = R*i_n + L * (α*i_n + β*i_{n-1} + γ*i_{n-2}) / h_n
+            // 整理成伴隨模型形式: v_n = (R + L*α/h_n)*i_n + L*(β*i_{n-1} + γ*i_{n-2})/h_n
             
-            const i_nm1 = this.previousValues.get('current') || this.ic || 0;      // i_{n-1}
-            const i_nm2 = this.previousValues.get('current_prev') || this.ic || 0; // i_{n-2}
+            this.equivalentResistance = this.resistance + L * alpha / h_n;
             
-            // 🔥 關鍵修正：BDF2 等效電壓源 Veq = (4L/2h)*i_{n-1} - (L/2h)*i_{n-2}
-            const coeff_nm1 = 4 * L / (2 * h);  // = 2L/h
-            const coeff_nm2 = L / (2 * h);       // = L/(2h)
-            this.equivalentVoltageSource = coeff_nm1 * i_nm1 - coeff_nm2 * i_nm2;
+            const i_nm1 = this.previousValues.get('current') || this.ic || 0;
+            const i_nm2 = this.previousValues.get('current_prev') || this.ic || 0;
             
-            console.log(`  🚀 BDF2模式: Req=${this.equivalentResistance}, Veq=${this.equivalentVoltageSource} (i_nm1=${i_nm1}, i_nm2=${i_nm2})`);
+            // Veq 是歷史項，包含正確的時間步長歸一化
+            this.equivalentVoltageSource = L * (beta * i_nm1 + gamma * i_nm2) / h_n;
+            
+            console.log(`  🚀 BDF2模式 (h_n=${h_n.toExponential(2)}, h_nm1=${h_nm1.toExponential(2)}): Req=${this.equivalentResistance}, Veq=${this.equivalentVoltageSource} (i_nm1=${i_nm1.toExponential(2)}, i_nm2=${i_nm2.toExponential(2)})`);
         }
+        
+        // 在 updateHistory 中會更新 this.previousTimeStep = this.timeStep
+        // 所以這裡只需更新 this.timeStep
+        this.timeStep = h;
     }
 
     /**

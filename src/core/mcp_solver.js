@@ -47,21 +47,57 @@ export class LCPSolver {
             };
         }
 
-        // === 第1步：檢查平凡解 z=0 ===
-        // 如果 q ≥ 0，則 z=0, w=q 是解
+        // === 第1步：檢查平凡解 z=0 ===  
+        // 🔥 修正：不要立即返回平凡解，而是先尋找非平凡解
+        // 如果 q ≥ 0，則 z=0, w=q 是一個可行解，但可能不是唯一解
         const qNonNegative = this.checkVectorNonNegative(q);
+        let trivialSolution = null;
+        
         if (qNonNegative) {
-            const z = Array(n).fill(0);
-            const w = q.data.slice(); // 複製 q
+            trivialSolution = {
+                z: Array(n).fill(0),
+                w: q.data.slice(),
+                converged: true,
+                iterations: 0
+            };
             
             if (this.debug) {
-                console.log('✅ 平凡解 z=0 滿足條件');
+                console.log('✅ 平凡解 z=0 是可行解，但繼續尋找非平凡解...');
             }
-            
-            return { z, w, converged: true, iterations: 0 };
         }
 
-        // === 第2步：初始化 Tableau ===
+        // === 第2步：特殊處理簡單情況 ===
+        // 🔥 新增：對於 1×1 情況，嘗試直接求解 M*z + q = 0
+        if (n === 1 && qNonNegative) {
+            const M_val = M.get(0, 0);
+            const q_val = q.get(0);
+            
+            if (this.debug) {
+                console.log(`🧮 1×1 LCP: M=${M_val.toFixed(6)}, q=${q_val.toFixed(6)}`);
+            }
+            
+            // 嘗試求解 M*z + q = 0 (對應 w = 0)
+            if (Math.abs(M_val) > this.pivotTolerance) {
+                const z_val = -q_val / M_val;
+                if (z_val >= -this.zeroTolerance) {
+                    // 找到非平凡解！
+                    const w_val = 0; // 因為我們設置 w = M*z + q = 0
+                    
+                    if (this.debug) {
+                        console.log(`✅ 找到非平凡解: z=${z_val.toFixed(6)}, w=${w_val}`);
+                    }
+                    
+                    return {
+                        z: [z_val],
+                        w: [w_val],
+                        converged: true,
+                        iterations: 0
+                    };
+                }
+            }
+        }
+
+        // === 第3步：初始化 Tableau ===
         // 建立增廣矩陣 [M  -I  -e | -q]
         // 其中 e 是人工變量向量 [1, 1, ..., 1]'
         const tableau = this.initializeTableau(M, q, n);
@@ -70,15 +106,26 @@ export class LCPSolver {
         const basis = Array(n).fill(0).map((_, i) => n + i);
 
         // === 第3步：尋找第一個離開變量 ===
-        // 選擇 q 中最小（最負）的分量對應的變量離開
-        let pivotRow = this.findInitialLeavingVariable(q);
-        if (pivotRow === -1) {
-            return { 
-                z: null, w: null, 
-                converged: false, 
-                error: '無法找到初始離開變量',
-                iterations: 0 
-            };
+        // 🔥 修正：當 q ≥ 0 時，使用人工變量方法尋找非平凡解
+        let pivotRow;
+        if (qNonNegative) {
+            // 當 q ≥ 0 時，我們有平凡解，但為了尋找非平凡解
+            // 選擇第一個變量強制離開基（標準 Lemke 算法做法）
+            pivotRow = 0;
+            if (this.debug) {
+                console.log('🔄 q ≥ 0，使用人工變量方法尋找非平凡解，選擇變量 0 離開');
+            }
+        } else {
+            // 選擇 q 中最小（最負）的分量對應的變量離開
+            pivotRow = this.findInitialLeavingVariable(q);
+            if (pivotRow === -1) {
+                return { 
+                    z: null, w: null, 
+                    converged: false, 
+                    error: '無法找到初始離開變量',
+                    iterations: 0 
+                };
+            }
         }
 
         // 人工變量 z_0 進入基 (列索引 2n)
@@ -121,6 +168,7 @@ export class LCPSolver {
                     console.log(`   解的範數: ||z|| = ${this.vectorNorm(solution.z)}`);
                 }
                 
+                // 🔥 修正：優先返回非平凡解
                 return {
                     z: solution.z,
                     w: solution.w,
@@ -149,6 +197,14 @@ export class LCPSolver {
             pivotCol = enteringVar;
         }
 
+        // 🔥 修正：如果找不到非平凡解但有平凡解可用，返回平凡解
+        if (trivialSolution) {
+            if (this.debug) {
+                console.log('⚠️  無法找到非平凡解，返回平凡解 z=0');
+            }
+            return trivialSolution;
+        }
+        
         return { 
             z: null, w: null, 
             converged: false, 
