@@ -1,154 +1,72 @@
 /**
- * AkingSPICE - JavaScript Solver for Power Electronics
- * 主入口文件 - 現已支持混合互補問題 (MCP) 仿真！
+ * AkingSPICE - JavaScript SPICE Solver for Power Electronics
+ * 核心引擎入口 - 僅包含必要的核心組件導出
  * 
- * v2.0 新特性：
- * - MCP瞬態分析：專為電力電子開關電路設計
- * - 優化的DC分析策略：Newton優先，Homotopy備用
- * - 互補約束建模：精確處理開關不連續性
+ * 職責：
+ * - 導出核心求解器和分析引擎
+ * - 導出基礎組件類別
+ * - 提供統一的模組接口
+ * 
+ * 不包含：
+ * - 便利函數和工具 (見 utils/)
+ * - 電路模板 (見 templates/) 
+ * - 高階封裝 (見 environments/)
  */
 
-import { AkingSPICE } from './core/solver.js';
-import { NetlistParser } from './parser/netlist.js';
+// === 核心引擎 ===
+export { AkingSPICE } from './core/solver.js';
+export { NetlistParser } from './parser/netlist.js';
 
-// 導出主要類別
-export { AkingSPICE };
-export { NetlistParser };
-
-// === 核心求解器 ===
+// === 求解器 ===
 export { LCPSolver, MCPSolver, createLCPSolver, createMCPSolver } from './core/mcp_solver.js';
 
-// === 傳統元件模型 ===
+// === 分析引擎 (MCP 專用) ===
+export { MCPTransientAnalysis, createMCPTransientAnalysis, TransientResult } from './analysis/transient_mcp.js';
+export { DC_MCP_Solver, createDC_MCP_Solver } from './analysis/dc_mcp_solver.js';
+
+// === 步進式仿真 API ===
+export { StepwiseSimulator, createStepwiseSimulator } from './analysis/stepwise_simulation.js';
+
+// === 基礎組件 ===
 export { BaseComponent } from './components/base.js';
+
+// === 線性組件 (MCP 兼容版本) ===
 export { Resistor } from './components/resistor.js';
-export { Capacitor } from './components/capacitor_v2.js';
-export { Inductor } from './components/inductor_v2.js';
+export { Capacitor } from './components/capacitor.js'; // 重命名後的 v2 版本
+export { Inductor } from './components/inductor.js';   // 重命名後的 v2 版本
+
+// === 信號源 ===
 export { VoltageSource, CurrentSource, VCVS, VCCS, CCCS, CCVS } from './components/sources.js';
 export { ThreePhaseSource } from './components/threephase.js';
-export { MOSFET } from './components/mosfet.js';
-export { VoltageControlledMOSFET } from './components/vcmosfet.js';
-export { Diode } from './components/diode.js';
-export { NonlinearDiode } from './components/nonlinear-diode.js';
-export { MultiWindingTransformer } from './components/transformer.js';
 
-// === MCP 元件模型 (v2.0 新增) ===
+// === MCP 組件 (唯一支援的非線性元件) ===
+
 export { 
-    Diode_MCP, 
+    Diode_MCP as MCPDiode,
     createMCPDiode, 
     createFastRecoveryDiode, 
     createSchottkyDiode 
 } from './components/diode_mcp.js';
 
 export { 
-    MOSFET_MCP, 
+    MOSFET_MCP as MCPMOSFET,
     PWMController,
     createNMOSSwitch, 
     createPMOSSwitch, 
     createPowerMOSFET 
 } from './components/mosfet_mcp.js';
 
-// === 分析工具 ===
-// 傳統分析器
-// 位於 src/index.js
-export { TransientAnalysis, TransientResult } from './analysis/transient.js';
-export { DCAnalysis } from './analysis/dc.js';
+// 複雜組件
+export { MultiWindingTransformer } from './components/transformer.js';
 
-// MCP 分析器 (v2.0 新增)
-export { 
-    MCPTransientAnalysis, 
-    createMCPTransientAnalysis 
-} from './analysis/transient_mcp.js';
-
-// === 便利導出：快速創建完整的分析環境 ===
-
-/**
- * 創建電力電子分析環境
- * 包含所有必要的 MCP 工具
- */
-export function createPowerElectronicsEnvironment(options = {}) {
-    return {
-        // MCP 分析器
-        mcpTransient: createMCPTransientAnalysis(options.mcp || {}),
-        
-        // 優化的 DC 分析器
-        dc: new DCAnalysis(),
-        
-        // MCP 元件構造函數
-        components: {
-            // 開關元件
-            nmos: (name, d, s, g, params) => createNMOSSwitch(name, d, s, g, params),
-            pmos: (name, d, s, g, params) => createPMOSSwitch(name, d, s, g, params), 
-            powerMos: (name, d, s, g, params) => createPowerMOSFET(name, d, s, g, params),
-            
-            // 二極管
-            diode: (name, a, c, params) => createMCPDiode(name, a, c, params),
-            fastDiode: (name, a, c, params) => createFastRecoveryDiode(name, a, c, params),
-            schottky: (name, a, c, params) => createSchottkyDiode(name, a, c, params),
-            
-            // PWM 控制
-            pwm: (freq, duty, phase) => new PWMController(freq, duty, phase),
-            
-            // 線性元件
-            R: (name, n1, n2, value) => new Resistor(name, [n1, n2], value),
-            L: (name, n1, n2, value, ic) => new Inductor(name, [n1, n2], value, { ic: ic }),
-            C: (name, n1, n2, value, ic) => new Capacitor(name, [n1, n2], value, { ic: ic }),
-            V: (name, n1, n2, value) => new VoltageSource(name, [n1, n2], value)
-        },
-        
-        // LCP 求解器
-        lcpSolver: createLCPSolver(options.lcp || {}),
-        
-        // 調試和統計
-        debug: options.debug || false
-    };
-}
-
-/**
- * 創建 Buck 轉換器模板
- */
-export function createBuckConverterTemplate(params = {}) {
-    const {
-        inputVoltage = 12,
-        dutyCycle = 0.5,
-        frequency = 200e3,
-        inductance = 100e-6,
-        capacitance = 470e-6,
-        loadResistance = 5,
-        switchParams = {},
-        diodeParams = {}
-    } = params;
-    
-    return {
-        components: [
-            new VoltageSource('VIN', ['VIN', '0'], inputVoltage),
-            createNMOSSwitch('M1', 'SW', 'VIN', 'GATE', switchParams),
-            createMCPDiode('D1', '0', 'SW', diodeParams),
-            new Inductor('L1', ['SW', 'VOUT'], inductance),
-            new Capacitor('C1', ['VOUT', '0'], capacitance), 
-            new Resistor('RL', ['VOUT', '0'], loadResistance)
-        ],
-        pwmController: new PWMController(frequency, dutyCycle),
-        expectedOutput: inputVoltage * dutyCycle
-    };
-}
-
-/**
- * 版本信息
- */
+// === 版本信息 ===
 export const VERSION = {
     major: 2,
-    minor: 0,
+    minor: 1,
     patch: 0,
-    name: 'MCP Edition',
-    description: '支持混合互補問題的電力電子專業仿真器',
-    features: [
-        'MCP瞬態分析',
-        '互補約束開關模型', 
-        '優化的DC求解策略',
-        'Lemke算法LCP求解器',
-        '電力電子元件庫'
-    ]
+    name: 'Refactored Edition',
+    description: 'Clean Architecture SPICE Engine'
 };
 
 // 預設導出主求解器
-export default AkingSPICE;
+export { AkingSPICE as default } from './core/solver.js';

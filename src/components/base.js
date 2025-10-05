@@ -123,17 +123,41 @@ export class BaseComponent {
 
     /**
      * 更新歷史狀態 (在每個時間步結束時調用)
-     * @param {Map<string, number>} nodeVoltages 節點電壓
-     * @param {Map<string, number>} branchCurrents 支路電流
+     * 🔥 Gear 2 升級版：自動管理多個歷史點
+     * @param {Object} solutionData 求解數據 {nodeVoltages, branchCurrents, getBranchCurrent()}
+     * @param {number} timeStep 時間步長
      */
-    updateHistory(nodeVoltages, branchCurrents) {
-        // 基類預設實現 - 子類應該覆蓋這個方法
-        const v1 = nodeVoltages.get(this.nodes[0]) || 0;
-        const v2 = nodeVoltages.get(this.nodes[1]) || 0;
-        const voltage = v1 - v2;
+    updateHistory(solutionData, timeStep) {
+        // 統一 API - 支援向後相容和新格式
+        let nodeVoltages, branchCurrents;
         
-        this.previousValues.set('voltage', voltage);
-        this.operatingPoint.voltage = voltage;
+        if (solutionData && typeof solutionData === 'object' && solutionData.nodeVoltages) {
+            // 新的統一格式
+            nodeVoltages = solutionData.nodeVoltages;
+            branchCurrents = solutionData.branchCurrents;
+        } else {
+            // 向後相容：舊格式 updateHistory(nodeVoltages, branchCurrents)
+            nodeVoltages = solutionData;
+            branchCurrents = timeStep; // 在舊格式中，第二個參數是 branchCurrents
+            timeStep = arguments[2]; // 第三個參數才是 timeStep
+        }
+        
+        // --- 基類預設實現 ---
+        // 僅更新電壓，電流由具體子類（如電阻）計算
+        if (this.nodes && this.nodes.length >= 2) {
+            const v1 = nodeVoltages.get(this.nodes[0]) || 0;
+            const v2 = nodeVoltages.get(this.nodes[1]) || 0;
+            const currentVoltage = v1 - v2;
+
+            // 🔥 核心變更：自動將前一個值推到更早的歷史
+            // 將 'voltage' -> 'voltage_prev'
+            if (this.previousValues.has('voltage')) {
+                this.previousValues.set('voltage_prev', this.previousValues.get('voltage'));
+            }
+            
+            this.previousValues.set('voltage', currentVoltage);
+            this.operatingPoint.voltage = currentVoltage;
+        }
     }
 
     /**
@@ -162,22 +186,21 @@ export class BaseComponent {
     }
 
     /**
-     * 克隆元件
+     * 克隆元件 - 基類實現，應被子類覆蓋
+     * @param {Object} overrides 覆蓋參數
      * @returns {BaseComponent}
      */
-    clone() {
-        // 對於具體的元件類型，使用正確的構造函數參數
-        if (this.constructor.name === 'Resistor' || 
-            this.constructor.name === 'Capacitor' || 
-            this.constructor.name === 'Inductor') {
-            return new this.constructor(this.name, this.nodes, this.rawValue, this.params);
-        } else if (this.constructor.name === 'VoltageSource' || 
-                   this.constructor.name === 'CurrentSource') {
-            return new this.constructor(this.name, this.nodes, this.rawValue, this.params);
-        } else {
-            // 默認的BaseComponent構造函數
-            return new this.constructor(this.name, this.type, this.nodes, this.rawValue, this.params);
-        }
+    clone(overrides = {}) {
+        // 🔥 注意：此為回退實現，建議各組件實現自己的 clone 方法
+        console.warn(`Component ${this.constructor.name} should implement its own clone() method`);
+        
+        const newName = overrides.name || this.name;
+        const newNodes = overrides.nodes ? [...overrides.nodes] : [...this.nodes];
+        const newValue = overrides.value !== undefined ? overrides.value : this.rawValue;
+        const newParams = overrides.params ? { ...this.params, ...overrides.params } : { ...this.params };
+        
+        // 默認的 BaseComponent 構造函數
+        return new this.constructor(newName, this.type, newNodes, newValue, newParams);
     }
 
     /**

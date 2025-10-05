@@ -1,12 +1,23 @@
 /**
- * AkingSPICE 主求解器類別
+ * AkingSPICE 主求解器類別 - 🔥 清潔架構版本
  * 
- * 這是使用者的主要介面，整合了網表解析、電路分析和結果管理
+ * 職責：
+ * - 網表解析和電路初始化
+ * - 批次分析 (.tran/.dc 指令)
+ * - DC 工作點分析
+ * - 元件和模型管理
+ * 
+ * 不包含：
+ * - 步進式仿真控制 (使用 StepwiseSimulator)
+ * - 互動式狀態查詢 (使用 StepwiseSimulator.getCircuitState())
+ * - 元件參數動態修改 (使用 StepwiseSimulator.modifyComponent())
+ * 
+ * 架構原則：關注點分離，消除耦合
  */
 
 import { NetlistParser } from '../parser/netlist.js';
-import { TransientAnalysis, TransientUtils, TransientResult } from '../analysis/transient.js';
-import { DCAnalysis } from '../analysis/dc.js';
+import { MCPTransientAnalysis, TransientResult } from '../analysis/transient_mcp.js';
+import { DC_MCP_Solver } from '../analysis/dc_mcp_solver.js';
 
 /**
  * AkingSPICE 主求解器
@@ -14,8 +25,8 @@ import { DCAnalysis } from '../analysis/dc.js';
 export class AkingSPICE {
     constructor(netlist = null) {
         this.parser = new NetlistParser();
-        this.transientAnalysis = new TransientAnalysis();
-        this.dcAnalysis = new DCAnalysis();
+        this.transientAnalysis = new MCPTransientAnalysis();
+        this.dcAnalysis = new DC_MCP_Solver();
         
         // 電路數據
         this._components = []; // 使用內部變數儲存
@@ -121,9 +132,9 @@ export class AkingSPICE {
             const cmd = analysisCommand.trim().toLowerCase();
             
             if (cmd.startsWith('.tran')) {
-                return await this.runTransientAnalysis(analysisCommand);
+                return await this.runMCPTransientAnalysis(analysisCommand);
             } else if (cmd.startsWith('.dc') || cmd.startsWith('.op')) {
-                return await this.runDCAnalysis();
+                return await this.runDCMCPAnalysis();
             } else {
                 throw new Error(`Unsupported analysis command: ${analysisCommand}`);
             }
@@ -135,66 +146,102 @@ export class AkingSPICE {
             
             if (analysis.type === 'TRAN') {
                 const tranCommand = `.tran ${analysis.tstep} ${analysis.tstop} ${analysis.tstart || '0'} ${analysis.tmax || analysis.tstep}`;
-                return await this.runTransientAnalysis(tranCommand);
+                return await this.runMCPTransientAnalysis(tranCommand);
             } else if (analysis.type === 'DC') {
-                return await this.runDCAnalysis();
+                return await this.runDCMCPAnalysis();
             }
         }
 
-        // 預設執行DC分析
-        console.log('No analysis specified, running DC analysis');
-        return await this.runDCAnalysis();
+        // 預設執行 DC-MCP 分析
+        console.log('No analysis specified, running DC-MCP analysis');
+        return await this.runDCMCPAnalysis();
     }
 
     /**
-     * 執行暫態分析
+     * 執行 MCP 暫態分析
      * @param {string} tranCommand 暫態分析指令
      * @returns {Object} 暫態分析結果
      */
-    async runTransientAnalysis(tranCommand) {
-        console.log(`Running transient analysis: ${tranCommand}`);
+    async runMCPTransientAnalysis(tranCommand) {
+        console.log(`Running MCP transient analysis: ${tranCommand}`);
         
         try {
             // 解析暫態分析參數
-            const params = TransientUtils.parseTranCommand(tranCommand);
+            const params = this.parseTranCommand(tranCommand);
             params.debug = this.debug;
             
-            // 執行分析
+            // 執行 MCP 分析
             const result = await this.transientAnalysis.run(this.components, params);
             
             // 保存結果
             this.results.set('tran', result);
             this.lastResult = result;
             
-            console.log(`Transient analysis completed: ${result.timeVector.length} time points`);
+            console.log(`MCP transient analysis completed: ${result.timeVector.length} time points`);
             return result;
             
         } catch (error) {
-            console.error('Transient analysis failed:', error);
+            console.error('MCP transient analysis failed:', error);
             throw error;
         }
     }
 
     /**
-     * 執行DC分析
-     * @returns {Object} DC分析結果
+     * 解析 .TRAN 命令
+     * @param {string} tranCommand 暫態分析命令
+     * @returns {Object} 參數對象
      */
-    async runDCAnalysis() {
-        console.log('Running DC analysis...');
+    parseTranCommand(tranCommand) {
+        const tokens = tranCommand.trim().split(/\s+/);
+        if (tokens.length < 3) {
+            throw new Error('Invalid .TRAN command format. Expected: .TRAN <tstep> <tstop> [tstart] [tmax]');
+        }
+
+        const parseValue = (str) => {
+            if (typeof str === 'number') return str;
+            
+            const match = str.match(/^([0-9.]+)([a-zA-Z]*)$/);
+            if (!match) return parseFloat(str);
+            
+            const [, value, unit] = match;
+            const num = parseFloat(value);
+            
+            const multipliers = {
+                'f': 1e-15, 'p': 1e-12, 'n': 1e-9, 'u': 1e-6, 'μ': 1e-6,
+                'm': 1e-3, 'k': 1e3, 'K': 1e3, 'M': 1e6, 'G': 1e9
+            };
+            
+            return num * (multipliers[unit] || 1);
+        };
+
+        return {
+            timeStep: parseValue(tokens[1]),
+            stopTime: parseValue(tokens[2]),
+            startTime: tokens[3] ? parseValue(tokens[3]) : 0,
+            maxTimeStep: tokens[4] ? parseValue(tokens[4]) : parseValue(tokens[1])
+        };
+    }
+
+    /**
+     * 執行 DC-MCP 分析
+     * @returns {Object} DC-MCP 分析結果
+     */
+    async runDCMCPAnalysis() {
+        console.log('Running DC-MCP analysis...');
         
         try {
             const options = { debug: this.debug };
-            const result = await this.dcAnalysis.analyze(this.components, options);
+            const result = await this.dcAnalysis.solve(this.components);
             
             // 保存結果
             this.results.set('dc', result);
             this.lastResult = result;
             
-            console.log('DC analysis completed');
+            console.log('DC-MCP analysis completed');
             return result;
             
         } catch (error) {
-            console.error('DC analysis failed:', error);
+            console.error('DC-MCP analysis failed:', error);
             throw error;
         }
     }
@@ -256,7 +303,8 @@ export class AkingSPICE {
      */
     setDebug(enabled) {
         this.debug = enabled;
-        this.transientAnalysis.setDebug(enabled);
+        // MCP 分析器通過構造函數選項設置調試模式
+        this.transientAnalysis = new MCPTransientAnalysis({ debug: enabled });
         this.dcAnalysis.setDebug(enabled);
     }
 
@@ -380,277 +428,18 @@ export class AkingSPICE {
         this.parser.reset();
     }
 
-    // ==================== 步進式模擬控制 API ====================
-    
-    /**
-     * 初始化步進式暫態分析
-     * @param {Object} params 參數 {startTime, stopTime, timeStep, maxIterations}
-     * @returns {boolean} 初始化是否成功
-     */
-    async initSteppedTransient(params = {}) {
-        try {
-            if (!this.isInitialized) {
-                throw new Error('Circuit not initialized. Load a netlist first.');
-            }
-
-            // 設置默認參數
-            this.steppedParams = {
-                startTime: params.startTime || 0,
-                stopTime: params.stopTime || 1e-3,  // 1ms
-                timeStep: params.timeStep || 1e-6,   // 1μs
-                maxIterations: params.maxIterations || 10
-            };
-
-            // 先設置參數再初始化
-            this.transientAnalysis.setParameters({
-                timeStep: this.steppedParams.timeStep,
-                startTime: this.steppedParams.startTime,
-                stopTime: this.steppedParams.stopTime,
-                maxIterations: this.steppedParams.maxIterations
-            });
-            
-            // 創建 result 對象
-            this.transientAnalysis.result = new TransientResult();
-            
-            // 初始化暫態分析
-            await this.transientAnalysis.initialize(this.components, this.steppedParams.timeStep);
-            
-            // 重置狀態
-            this.currentTime = this.steppedParams.startTime;
-            this.currentIteration = 0;
-            this.isSteppedMode = true;
-            this.steppedResults = {
-                time: [],
-                voltages: [],
-                currents: [],
-                componentStates: []
-            };
-
-            console.log(`步進式暫態分析初始化完成:`);
-            console.log(`  時間範圍: ${this.steppedParams.startTime}s 到 ${this.steppedParams.stopTime}s`);
-            console.log(`  時間步長: ${this.steppedParams.timeStep}s`);
-            console.log(`  最大迭代數: ${this.steppedParams.maxIterations}`);
-
-            return true;
-
-        } catch (error) {
-            console.error(`步進式暫態分析初始化失敗: ${error.message}`);
-            return false;
-        }
-    }
-
-    /**
-     * 執行一個時間步
-     * @param {Object} controlInputs 控制輸入 {gateName: state, ...}
-     * @returns {Object} 當前時間步的結果
-     */
-    step(controlInputs = {}) {
-        if (!this.isSteppedMode) {
-            throw new Error('Step mode not initialized. Call initSteppedTransient() first.');
-        }
-
-        if (this.isFinished()) {
-            console.warn('Simulation already finished');
-            return null;
-        }
-
-        try {
-            // 更新控制輸入 (如 MOSFET 開關狀態)
-            this.updateControlInputs(controlInputs);
-            
-            // 執行一個時間步
-            const stepResult = this.transientAnalysis.solveTimeStep(
-                this.currentTime, 
-                this.steppedParams.maxIterations
-            );
-
-            // 記錄結果 - 將 Map 轉換為普通物件
-            const nodeVoltagesObj = Object.fromEntries(stepResult.nodeVoltages);
-            const branchCurrentsObj = Object.fromEntries(stepResult.branchCurrents);
-            
-            this.steppedResults.time.push(this.currentTime);
-            this.steppedResults.voltages.push({...nodeVoltagesObj});
-            this.steppedResults.currents.push({...branchCurrentsObj});
-            
-            // 記錄元件狀態 (特別是 MOSFET 等可控元件)
-            const componentStates = {};
-            for (const component of this.components) {
-                if (component.getOperatingStatus) {
-                    componentStates[component.name] = component.getOperatingStatus();
-                }
-            }
-            this.steppedResults.componentStates.push(componentStates);
-
-            // 準備下一步
-            this.currentTime += this.steppedParams.timeStep;
-            this.currentIteration++;
-
-            // 返回當前步驟的結果 - 將 Map 轉換為普通物件
-            return {
-                time: this.currentTime - this.steppedParams.timeStep,
-                iteration: this.currentIteration - 1,
-                nodeVoltages: Object.fromEntries(stepResult.nodeVoltages),
-                branchCurrents: Object.fromEntries(stepResult.branchCurrents),
-                componentStates: componentStates,
-                converged: stepResult.converged
-            };
-
-        } catch (error) {
-            console.error(`Time step ${this.currentIteration} failed: ${error.message}`);
-            throw error;
-        }
-    }
-
-    /**
-     * 檢查模擬是否完成
-     * @returns {boolean} 是否完成
-     */
-    isFinished() {
-        return this.isSteppedMode && (this.currentTime >= this.steppedParams.stopTime);
-    }
-
-    /**
-     * 獲取當前模擬時間
-     * @returns {number} 當前時間 (秒)
-     */
-    getCurrentTime() {
-        return this.currentTime || 0;
-    }
-
-    /**
-     * 更新控制輸入 (如 MOSFET 閘極狀態)
-     * @param {Object} controlInputs 控制輸入映射 {componentName: state, ...}
-     */
-    updateControlInputs(controlInputs) {
-        for (const [componentName, state] of Object.entries(controlInputs)) {
-            const component = this.components.find(c => c.name === componentName);
-            if (component && component.setGateState) {
-                component.setGateState(state);
-                if (this.debug) {
-                    console.log(`Updated ${componentName} gate state: ${state ? 'ON' : 'OFF'}`);
-                }
-            } else if (component && component.setValue) {
-                // 支援其他類型的控制輸入
-                component.setValue(state);
-            }
-        }
-    }
-
-    /**
-     * 設置特定元件的閘極狀態 (便捷方法)
-     * @param {string} componentName 元件名稱
-     * @param {boolean} state 閘極狀態
-     */
-    setGateState(componentName, state) {
-        this.updateControlInputs({[componentName]: state});
-    }
-
-    /**
-     * 獲取節點電壓
-     * @param {string} nodeName 節點名稱
-     * @returns {number} 電壓值 (V)
-     */
-    getVoltage(nodeName) {
-        if (!this.isSteppedMode || this.steppedResults.voltages.length === 0) {
-            return 0;
-        }
-        
-        const lastVoltages = this.steppedResults.voltages[this.steppedResults.voltages.length - 1];
-        return lastVoltages[nodeName] || 0;
-    }
-
-    /**
-     * 獲取支路電流 (通過元件)
-     * @param {string} componentName 元件名稱  
-     * @returns {number} 電流值 (A)
-     */
-    getCurrent(componentName) {
-        if (!this.isSteppedMode || this.steppedResults.currents.length === 0) {
-            return 0;
-        }
-        
-        const lastCurrents = this.steppedResults.currents[this.steppedResults.currents.length - 1];
-        return lastCurrents[componentName] || 0;
-    }
-
-    /**
-     * 獲取元件工作狀態
-     * @param {string} componentName 元件名稱
-     * @returns {Object} 元件狀態
-     */
-    getComponentState(componentName) {
-        if (!this.isSteppedMode || this.steppedResults.componentStates.length === 0) {
-            return null;
-        }
-        
-        const lastStates = this.steppedResults.componentStates[this.steppedResults.componentStates.length - 1];
-        return lastStates[componentName] || null;
-    }
-
-    /**
-     * 獲取完整的步進式模擬結果
-     * @returns {Object} 完整結果
-     */
-    getSteppedResults() {
-        return this.isSteppedMode ? this.steppedResults : null;
-    }
-
-    /**
-     * 運行完整的步進式模擬 (帶控制函數)
-     * @param {Function} controlFunction 控制函數 (time) => {componentName: state, ...}
-     * @param {Object} params 模擬參數
-     * @returns {Object} 完整模擬結果
-     */
-    async runSteppedSimulation(controlFunction, params = {}) {
-        console.log('開始步進式模擬...');
-        
-        if (!(await this.initSteppedTransient(params))) {
-            throw new Error('Failed to initialize stepped simulation');
-        }
-
-        const results = [];
-        let stepCount = 0;
-
-        while (!this.isFinished()) {
-            // 獲取當前時間的控制輸入
-            const controlInputs = controlFunction ? controlFunction(this.currentTime) : {};
-            
-            // 執行一步
-            const stepResult = this.step(controlInputs);
-            if (stepResult) {
-                results.push(stepResult);
-                stepCount++;
-
-                // 進度報告
-                if (stepCount % 1000 === 0) {
-                    const progress = ((this.currentTime - this.steppedParams.startTime) / 
-                                    (this.steppedParams.stopTime - this.steppedParams.startTime)) * 100;
-                    console.log(`模擬進度: ${progress.toFixed(1)}% (${stepCount} steps)`);
-                }
-            }
-        }
-
-        console.log(`步進式模擬完成: ${stepCount} 個時間步`);
-        return {
-            steps: results,
-            summary: {
-                totalSteps: stepCount,
-                simulationTime: this.steppedParams.stopTime - this.steppedParams.startTime,
-                timeStep: this.steppedParams.timeStep
-            }
-        };
-    }
-
-    /**
-     * 重置步進式模擬狀態
-     */
-    resetSteppedMode() {
-        this.isSteppedMode = false;
-        this.currentTime = 0;
-        this.currentIteration = 0;
-        this.steppedParams = null;
-        this.steppedResults = null;
-    }
+    // ==================== 核心求解方法 - 🔥 移除重複步進式 API ====================
+    //
+    // 🔥 重要變更：已移除以下步進式方法，現由 StepwiseSimulator 專門處理：
+    // - initSteppedTransient() → 使用 StepwiseSimulator.initialize()
+    // - step() → 使用 StepwiseSimulator.stepForward()
+    // - isFinished() → 使用 StepwiseSimulator.isCompleted
+    // - getCurrentTime() → 使用 StepwiseSimulator.currentTime
+    // - updateControlInputs() → 使用 StepwiseSimulator.modifyComponent()
+    // - getVoltage/getCurrent/getComponentState() → 使用 StepwiseSimulator.getCircuitState()
+    // - runSteppedSimulation() → 使用 StepwiseSimulator with control loop
+    //
+    // 此變更消除了架構耦合，實現了關注點分離
 
     /**
      * 獲取求解器版本信息
@@ -659,20 +448,25 @@ export class AkingSPICE {
     static getVersionInfo() {
         return {
             name: 'AkingSPICE',
-            version: '0.1.0',
-            description: 'JavaScript Solver for Power Electronics',
+            version: '2.1.0',
+            description: 'Clean Architecture JavaScript SPICE Engine for Power Electronics',
             features: [
                 'Modified Nodal Analysis (MNA)',
-                'LU decomposition solver',
-                'Backward Euler transient analysis',
-                'DC operating point analysis',
+                'LU decomposition solver', 
+                'MCP-based transient analysis',
+                'DC-MCP operating point analysis',
                 'SPICE-compatible netlist format',
                 'Basic passive components (R, L, C)',
                 'Independent sources (V, I)',
                 'Controlled sources (VCVS, VCCS)',
-                'MOSFET with body diode model',
-                'Stepped simulation control API'
+                'MCP nonlinear components (Diode, MOSFET)',
+                'Decoupled stepping simulation via StepwiseSimulator'
             ],
+            architecture: {
+                coreEngine: 'Batch analysis and DC solving',
+                steppingAPI: 'Handled by separate StepwiseSimulator class',
+                decoupling: 'Eliminated coupling between solver and stepping logic'
+            },
             author: 'AkingSPICE Development Team',
             license: 'MIT'
         };

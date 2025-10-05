@@ -627,7 +627,7 @@ export class NumericalUtils {
     }
 
     /**
-     * 檢查向量的收斂性 (用於Newton-Raphson迭代)
+     * 檢查向量的收斂性 (用於迭代求解)
      * @param {Vector} x1 舊解
      * @param {Vector} x2 新解
      * @param {number} tolerance 收斂容差

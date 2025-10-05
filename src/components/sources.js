@@ -57,6 +57,15 @@ export class VoltageSource extends BaseComponent {
         
         // 如果是對象，直接使用
         if (typeof source === 'object') {
+            // 檢查是否有 PWM 配置
+            if (source.pwm) {
+                return {
+                    type: 'PWM',
+                    dc: source.dc || 0,
+                    ...source
+                };
+            }
+            
             return {
                 type: source.type || 'DC',
                 ...source
@@ -114,6 +123,17 @@ export class VoltageSource extends BaseComponent {
             };
         }
         
+        // 如果無法解析，嘗試作為簡單的 DC 值
+        const numValue = parseFloat(sourceStr.replace(/[^\d.-]/g, ''));
+        if (!isNaN(numValue)) {
+            return {
+                type: 'DC',
+                dc: numValue,
+                amplitude: numValue,
+                offset: numValue
+            };
+        }
+        
         throw new Error(`Cannot parse voltage source: ${sourceStr}`);
     }
 
@@ -141,6 +161,9 @@ export class VoltageSource extends BaseComponent {
             case 'DC':
                 return config.dc || 0;
                 
+            case 'PWM':
+                return this.getPWMValue(time, config);
+                
             case 'SINE':
                 return this.getSineValue(time, config);
                 
@@ -152,6 +175,9 @@ export class VoltageSource extends BaseComponent {
                 
             case 'PWL':
                 return this.getPWLValue(time, config);
+            
+            case 'dc':
+                return config.value || 0;
                 
             default:
                 console.warn(`Unknown voltage source type: ${config.type}`);
@@ -203,6 +229,38 @@ export class VoltageSource extends BaseComponent {
         } else {
             // 低電平
             return v1;
+        }
+    }
+
+    /**
+     * 計算 PWM 波值
+     */
+    getPWMValue(time, config) {
+        const { pwm, dc } = config;
+        
+        if (!pwm) {
+            return dc || 0;
+        }
+        
+        const { amplitude, frequency, dutyCycle, phase = 0 } = pwm;
+        
+        // 計算周期和相位偏移
+        const period = 1.0 / frequency;
+        const phaseOffset = (phase / 360.0) * period; // 相位轉換為時間偏移
+        const adjustedTime = time - phaseOffset;
+        
+        if (adjustedTime < 0) {
+            return dc || 0; // 相位延遲期間返回 DC 值
+        }
+        
+        // 計算在周期內的位置
+        const cycleTime = adjustedTime % period;
+        const dutyTime = period * dutyCycle;
+        
+        if (cycleTime < dutyTime) {
+            return (dc || 0) + amplitude; // 高電平
+        } else {
+            return dc || 0; // 低電平
         }
     }
 
@@ -303,6 +361,80 @@ export class VoltageSource extends BaseComponent {
             this.sourceConfig.offset = newValue;
         }
     }
+
+    /**
+     * 更新時變電壓源的當前值（供瞬態分析調用）
+     * @param {number} time 當前時間
+     */
+    updateTimeVarying(time) {
+        // 只更新非DC源
+        if (this.sourceConfig.type !== 'DC') {
+            this.value = this.getValue(time);
+        }
+    }
+
+    /**
+     * 獲取當前時刻的電壓值（公開接口）
+     * @param {number} time 當前時間
+     * @returns {number} 電壓值
+     */
+    getCurrentValue(time) {
+        return this.getValue(time);
+    }
+
+    /**
+     * MNA 矩陣印花 - 電壓源需要額外的電流變數
+     * @param {Matrix} matrix MNA 導納矩陣
+     * @param {Vector} rhs 右手邊向量
+     * @param {Map} nodeMap 節點映射
+     * @param {Map} voltageSourceMap 電壓源映射
+     * @param {number} time 當前時間
+     */
+    stamp(matrix, rhs, nodeMap, voltageSourceMap, time) {
+        // 獲取節點索引，接地節點返回 -1
+        const getNodeIndex = (nodeName) => {
+            if (nodeName === '0' || nodeName === 'gnd') {
+                return -1;
+            }
+            return nodeMap.get(nodeName);
+        };
+        
+        const n1 = getNodeIndex(this.nodes[0]); // 正端
+        const n2 = getNodeIndex(this.nodes[1]); // 負端
+        const currIndex = voltageSourceMap.get(this.name);
+        
+        if (currIndex === undefined) {
+            throw new Error(`Voltage source ${this.name} current variable not found`);
+        }
+
+        // B 矩陣和 C 矩陣: 電流約束
+        if (n1 >= 0) {
+            matrix.addAt(n1, currIndex, 1);
+            matrix.addAt(currIndex, n1, 1);
+        }
+        if (n2 >= 0) {
+            matrix.addAt(n2, currIndex, -1);
+            matrix.addAt(currIndex, n2, -1);
+        }
+
+        // E 向量: 電壓約束
+        const voltage = this.getValue(time);
+        rhs.addAt(currIndex, voltage);
+    }
+
+    /**
+     * 克隆電壓源元件，支持參數覆蓋
+     * @param {Object} overrides 覆蓋參數 {name?, nodes?, source?, params?}
+     * @returns {VoltageSource} 新的電壓源實例
+     */
+    clone(overrides = {}) {
+        const newName = overrides.name || this.name;
+        const newNodes = overrides.nodes ? [...overrides.nodes] : [...this.nodes];
+        const newSource = overrides.source !== undefined ? overrides.source : this.rawSource;
+        const newParams = overrides.params ? { ...this.params, ...overrides.params } : { ...this.params };
+        
+        return new VoltageSource(newName, newNodes, newSource, newParams);
+    }
 }
 
 /**
@@ -396,6 +528,51 @@ export class CurrentSource extends BaseComponent {
         
         return `${this.name}: ${this.nodes[0]}→${this.nodes[1]} ${valueStr}`;
     }
+
+    /**
+     * MNA 矩陣印花 - 電流源直接影響節點電流
+     * @param {Matrix} matrix MNA 導納矩陣
+     * @param {Vector} rhs 右手邊向量
+     * @param {Map} nodeMap 節點映射
+     * @param {Map} voltageSourceMap 電壓源映射
+     * @param {number} time 當前時間
+     */
+    stamp(matrix, rhs, nodeMap, voltageSourceMap, time) {
+        // 獲取節點索引，接地節點返回 -1
+        const getNodeIndex = (nodeName) => {
+            if (nodeName === '0' || nodeName === 'gnd') {
+                return -1;
+            }
+            return nodeMap.get(nodeName);
+        };
+        
+        const n1 = getNodeIndex(this.nodes[0]); // 電流流出的節點
+        const n2 = getNodeIndex(this.nodes[1]); // 電流流入的節點
+        
+        const current = this.getValue(time);
+        
+        // I 向量: 注入電流
+        if (n1 >= 0) {
+            rhs.addAt(n1, -current);
+        }
+        if (n2 >= 0) {
+            rhs.addAt(n2, current);
+        }
+    }
+
+    /**
+     * 克隆電流源元件，支持參數覆蓋
+     * @param {Object} overrides 覆蓋參數 {name?, nodes?, source?, params?}
+     * @returns {CurrentSource} 新的電流源實例
+     */
+    clone(overrides = {}) {
+        const newName = overrides.name || this.name;
+        const newNodes = overrides.nodes ? [...overrides.nodes] : [...this.nodes];
+        const newSource = overrides.source !== undefined ? overrides.source : this.rawSource;
+        const newParams = overrides.params ? { ...this.params, ...overrides.params } : { ...this.params };
+        
+        return new CurrentSource(newName, newNodes, newSource, newParams);
+    }
 }
 
 /**
@@ -425,6 +602,64 @@ export class VCVS extends BaseComponent {
     toString() {
         return `${this.name}: ${this.outputNodes[0]}-${this.outputNodes[1]} = ${this.gain} * (${this.controlNodes[0]}-${this.controlNodes[1]})`;
     }
+
+    /**
+     * MNA 矩陣印花 - 壓控電壓源 (VCVS)
+     * E * V_control = V_output
+     * @param {Matrix} matrix MNA 導納矩陣
+     * @param {Vector} rhs 右手邊向量
+     * @param {Map} nodeMap 節點映射
+     * @param {Map} voltageSourceMap 電壓源映射
+     * @param {number} time 當前時間
+     */
+    stamp(matrix, rhs, nodeMap, voltageSourceMap, time) {
+        // 獲取節點索引，接地節點返回 -1
+        const getNodeIndex = (nodeName) => {
+            if (nodeName === '0' || nodeName === 'gnd') {
+                return -1;
+            }
+            return nodeMap.get(nodeName);
+        };
+        
+        const no1 = getNodeIndex(this.outputNodes[0]);
+        const no2 = getNodeIndex(this.outputNodes[1]);
+        const nc1 = getNodeIndex(this.controlNodes[0]);
+        const nc2 = getNodeIndex(this.controlNodes[1]);
+        const currIndex = voltageSourceMap.get(this.name);
+
+        // 類似電壓源的處理，但右手邊是控制電壓的函數
+        if (no1 >= 0) {
+            matrix.addAt(no1, currIndex, 1);
+            matrix.addAt(currIndex, no1, 1);
+        }
+        if (no2 >= 0) {
+            matrix.addAt(no2, currIndex, -1);
+            matrix.addAt(currIndex, no2, -1);
+        }
+
+        // 控制關係: V_out = gain * (V_c1 - V_c2)
+        if (nc1 >= 0) {
+            matrix.addAt(currIndex, nc1, -this.gain);
+        }
+        if (nc2 >= 0) {
+            matrix.addAt(currIndex, nc2, this.gain);
+        }
+    }
+
+    /**
+     * 克隆 VCVS 元件，支持參數覆蓋
+     * @param {Object} overrides 覆蓋參數 {name?, outputNodes?, controlNodes?, gain?, params?}
+     * @returns {VCVS} 新的 VCVS 實例
+     */
+    clone(overrides = {}) {
+        const newName = overrides.name || this.name;
+        const newOutputNodes = overrides.outputNodes ? [...overrides.outputNodes] : [...this.outputNodes];
+        const newControlNodes = overrides.controlNodes ? [...overrides.controlNodes] : [...this.controlNodes];
+        const newGain = overrides.gain !== undefined ? overrides.gain : this.gain;
+        const newParams = overrides.params ? { ...this.params, ...overrides.params } : { ...this.params };
+        
+        return new VCVS(newName, newOutputNodes, newControlNodes, newGain, newParams);
+    }
 }
 
 /**
@@ -453,6 +688,59 @@ export class VCCS extends BaseComponent {
 
     toString() {
         return `${this.name}: I(${this.outputNodes[0]}→${this.outputNodes[1]}) = ${this.transconductance} * V(${this.controlNodes[0]}-${this.controlNodes[1]})`;
+    }
+
+    /**
+     * MNA 矩陣印花 - 壓控電流源 (VCCS)  
+     * I_output = gm * V_control
+     * @param {Matrix} matrix MNA 導納矩陣
+     * @param {Vector} rhs 右手邊向量
+     * @param {Map} nodeMap 節點映射
+     * @param {Map} voltageSourceMap 電壓源映射
+     * @param {number} time 當前時間
+     */
+    stamp(matrix, rhs, nodeMap, voltageSourceMap, time) {
+        // 獲取節點索引，接地節點返回 -1
+        const getNodeIndex = (nodeName) => {
+            if (nodeName === '0' || nodeName === 'gnd') {
+                return -1;
+            }
+            return nodeMap.get(nodeName);
+        };
+        
+        const no1 = getNodeIndex(this.outputNodes[0]);
+        const no2 = getNodeIndex(this.outputNodes[1]);
+        const nc1 = getNodeIndex(this.controlNodes[0]);
+        const nc2 = getNodeIndex(this.controlNodes[1]);
+
+        // G 矩陣的修改: 添加跨導項
+        if (no1 >= 0 && nc1 >= 0) {
+            matrix.addAt(no1, nc1, this.transconductance);
+        }
+        if (no1 >= 0 && nc2 >= 0) {
+            matrix.addAt(no1, nc2, -this.transconductance);
+        }
+        if (no2 >= 0 && nc1 >= 0) {
+            matrix.addAt(no2, nc1, -this.transconductance);
+        }
+        if (no2 >= 0 && nc2 >= 0) {
+            matrix.addAt(no2, nc2, this.transconductance);
+        }
+    }
+
+    /**
+     * 克隆 VCCS 元件，支持參數覆蓋
+     * @param {Object} overrides 覆蓋參數 {name?, outputNodes?, controlNodes?, transconductance?, params?}
+     * @returns {VCCS} 新的 VCCS 實例
+     */
+    clone(overrides = {}) {
+        const newName = overrides.name || this.name;
+        const newOutputNodes = overrides.outputNodes ? [...overrides.outputNodes] : [...this.outputNodes];
+        const newControlNodes = overrides.controlNodes ? [...overrides.controlNodes] : [...this.controlNodes];
+        const newTransconductance = overrides.transconductance !== undefined ? overrides.transconductance : this.transconductance;
+        const newParams = overrides.params ? { ...this.params, ...overrides.params } : { ...this.params };
+        
+        return new VCCS(newName, newOutputNodes, newControlNodes, newTransconductance, newParams);
     }
 }
 

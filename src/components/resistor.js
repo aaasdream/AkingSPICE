@@ -73,18 +73,65 @@ export class Resistor extends LinearTwoTerminal {
      * @param {Map<string, number>} nodeVoltages 節點電壓
      * @param {Map<string, number>} branchCurrents 支路電流
      */
-    updateHistory(nodeVoltages, branchCurrents) {
-        super.updateHistory(nodeVoltages, branchCurrents);
+    updateHistory(solutionData, timeStep) {
+        super.updateHistory(solutionData, timeStep);
+
+        // 向後相容性處理
+        let nodeVoltages;
+        if (solutionData && solutionData.nodeVoltages) {
+            nodeVoltages = solutionData.nodeVoltages;
+        } else {
+            nodeVoltages = solutionData;
+        }
 
         // 計算並存儲電流
         const current = this.getCurrent(nodeVoltages);
         this.previousValues.set('current', current);
+        this.operatingPoint.current = current;
 
         // 計算功耗
         this.operatingPoint.power = this.operatingPoint.voltage * current;
     }
 
 
+
+    /**
+     * MNA 矩陣印花 - 在節點 i 和 j 之間添加電導 G = 1/R
+     * @param {Matrix} matrix MNA 導納矩陣
+     * @param {Vector} rhs 右手邊向量
+     * @param {Map} nodeMap 節點映射
+     * @param {Map} voltageSourceMap 電壓源映射
+     * @param {number} time 當前時間
+     */
+    stamp(matrix, rhs, nodeMap, voltageSourceMap, time) {
+        const conductance = this.getConductance();
+        
+        // 獲取節點索引，接地節點返回 -1
+        const getNodeIndex = (nodeName) => {
+            if (nodeName === '0' || nodeName === 'gnd') {
+                return -1;
+            }
+            return nodeMap.get(nodeName);
+        };
+        
+        const n1 = getNodeIndex(this.nodes[0]);
+        const n2 = getNodeIndex(this.nodes[1]);
+
+        // G 矩陣印花: G[i,i] += G, G[j,j] += G, G[i,j] -= G, G[j,i] -= G
+        if (n1 >= 0) {
+            matrix.addAt(n1, n1, conductance);
+            if (n2 >= 0) {
+                matrix.addAt(n1, n2, -conductance);
+            }
+        }
+        
+        if (n2 >= 0) {
+            matrix.addAt(n2, n2, conductance);
+            if (n1 >= 0) {
+                matrix.addAt(n2, n1, -conductance);
+            }
+        }
+    }
 
     /**
      * 檢查是否超過功率額定值
@@ -117,6 +164,20 @@ export class Resistor extends LinearTwoTerminal {
      */
     isValid() {
         return super.isValid() && this.value > 0;
+    }
+
+    /**
+     * 克隆電阻元件，支持參數覆蓋
+     * @param {Object} overrides 覆蓋參數 {name?, nodes?, value?, params?}
+     * @returns {Resistor} 新的電阻實例
+     */
+    clone(overrides = {}) {
+        const newName = overrides.name || this.name;
+        const newNodes = overrides.nodes ? [...overrides.nodes] : [...this.nodes];
+        const newValue = overrides.value !== undefined ? overrides.value : this.value;
+        const newParams = overrides.params ? { ...this.params, ...overrides.params } : { ...this.params };
+        
+        return new Resistor(newName, newNodes, newValue, newParams);
     }
 
     toString() {

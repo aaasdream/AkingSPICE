@@ -1,0 +1,25 @@
+{
+  "name": "akingspice-project",
+  "version": "1.0.0",
+  "description": "AkingSPICE - JavaScript Solver for Power Electronics",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "node --experimental-modules src/index.js",
+    "build": "echo \"Build not configured yet\"",
+    "lint": "echo \"Linting not configured yet\""
+  },
+  "keywords": [
+    "spice",
+    "circuit-simulation",
+    "power-electronics",
+    "javascript",
+    "solver"
+  ],
+  "author": "",
+  "license": "ISC",
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

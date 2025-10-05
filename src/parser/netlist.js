@@ -8,7 +8,8 @@ import { Resistor } from '../components/resistor.js';
 import { Capacitor } from '../components/capacitor.js';
 import { Inductor } from '../components/inductor.js';
 import { VoltageSource, CurrentSource, VCVS, VCCS } from '../components/sources.js';
-import { MOSFET } from '../components/mosfet.js';
+import { MOSFET_MCP } from '../components/mosfet_mcp.js';
+import { Diode_MCP } from '../components/diode_mcp.js';
 
 /**
  * 網表解析器
@@ -182,6 +183,9 @@ export class NetlistParser {
                 case 'M':
                     component = this.parseMOSFET(tokens);
                     break;
+                case 'D':
+                    component = this.parseDiode(tokens);
+                    break;
                 case '.':
                     this.parseDirective(tokens);
                     break;
@@ -257,9 +261,9 @@ export class NetlistParser {
     }
 
     /**
-     * 解析 MOSFET
-     * 格式: M<name> <drain> <source> <gate> [Ron=<value>] [Roff=<value>] [Vf=<value>]
-     * @returns {MOSFET} 創建的 MOSFET 組件
+     * 解析 MOSFET (MCP 版本)
+     * 格式: M<name> <drain> <source> <gate> [Ron=<value>] [Vth=<value>] [type=<NMOS|PMOS>] [Vf_body=<value>]
+     * @returns {MOSFET_MCP} 創建的 MCP MOSFET 組件
      */
     parseMOSFET(tokens) {
         if (tokens.length < 4) {
@@ -270,24 +274,56 @@ export class NetlistParser {
         const drain = tokens[1];
         const source = tokens[2];
         const gate = tokens[3];
-        // 完整節點信息，但只有 drain 和 source 會被用於 MNA 矩陣
         const allNodes = [drain, source, gate];
         
-        // 解析 MOSFET 參數
+        // 解析 MCP MOSFET 參數
         const params = this.parseParameters(tokens.slice(4));
         
-        // 參數會通過 MOSFET 構造函數中的 parseValue 方法處理
         const mosfetParams = {
-            Ron: params.Ron || params.ron || '1m',        // 默認 1mΩ
-            Roff: params.Roff || params.roff || '1M',     // 默認 1MΩ  
-            Vf_diode: params.Vf || params.vf || params.Vf_diode || '0.7',
-            Von_diode: params.Von_diode || params.von_diode || '1m',
-            Roff_diode: params.Roff_diode || params.roff_diode || '1M'
+            Ron: params.Ron || params.ron || 1e-3,           // 1mΩ 導通電阻
+            Roff: params.Roff || params.roff || 1e12,        // 1TΩ 截止電阻（理論無限大）
+            Vth: params.Vth || params.vth || 2.0,            // 2V 閾值電壓
+            type: params.type || params.channelType || 'NMOS', // NMOS 或 PMOS
+            Vf_body: params.Vf_body || params.vf_body || 0.7, // 體二極管導通電壓
+            Ron_body: params.Ron_body || params.ron_body || 5e-3, // 體二極管導通電阻
+            controlMode: params.controlMode || params.control_mode || 'voltage', // 控制模式
+            debug: params.debug || false
         };
         
-        const mosfet = new MOSFET(name, allNodes, mosfetParams);
+        const mosfet = new MOSFET_MCP(name, allNodes, mosfetParams);
         this.components.push(mosfet);
         return mosfet;
+    }
+
+    /**
+     * 解析二極管 (MCP 版本)
+     * 格式: D<name> <anode> <cathode> [Vf=<value>] [Ron=<value>]
+     * @returns {Diode_MCP} 創建的 MCP 二極管組件
+     */
+    parseDiode(tokens) {
+        if (tokens.length < 3) {
+            throw new Error('Diode requires at least 3 tokens: D<name> <anode> <cathode>');
+        }
+        
+        const name = tokens[0];
+        const anode = tokens[1];
+        const cathode = tokens[2];
+        const nodes = [anode, cathode];
+        
+        // 解析 MCP 二極管參數
+        const params = this.parseParameters(tokens.slice(3));
+        
+        const diodeParams = {
+            Vf: params.Vf || params.vf || 0.7,              // 導通電壓
+            Ron: params.Ron || params.ron || 1e-3,           // 導通電阻
+            Isat: params.Isat || params.isat || 1e-12,       // 反向飽和電流
+            n: params.n || params.ideality || 1.0,           // 理想因子
+            debug: params.debug || false
+        };
+        
+        const diode = new Diode_MCP(name, nodes, diodeParams);
+        this.components.push(diode);
+        return diode;
     }
 
     /**

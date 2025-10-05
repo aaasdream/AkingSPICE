@@ -173,7 +173,18 @@ export class Diode_MCP extends BaseComponent {
     /**
      * 更新狀態歷史 (瞬態分析用)
      */
-    updateHistory(nodeVoltages, branchCurrents) {
+    updateHistory(solutionData, timeStep) {
+        // 統一 API 支持
+        let nodeVoltages, branchCurrents;
+        if (solutionData && solutionData.nodeVoltages) {
+            nodeVoltages = solutionData.nodeVoltages;
+            branchCurrents = solutionData.branchCurrents;
+        } else {
+            // 向後相容
+            nodeVoltages = solutionData;
+            branchCurrents = arguments[1];
+        }
+        
         const v1 = nodeVoltages.get(this.nodes[0]) || 0;
         const v2 = nodeVoltages.get(this.nodes[1]) || 0;
         
@@ -216,6 +227,28 @@ export class Diode_MCP extends BaseComponent {
         return `${this.name}(MCP): Vd=${this.previousVoltage.toFixed(3)}V, ` +
                `Id=${this.previousCurrent.toExponential(3)}A, ` +
                `State=${this.currentState}`;
+    }
+
+    /**
+     * 克隆 MCP 二極管元件，支持參數覆蓋
+     * @param {Object} overrides 覆蓋參數 {name?, nodes?, params?}
+     * @returns {Diode_MCP} 新的 MCP 二極管實例
+     */
+    clone(overrides = {}) {
+        const newName = overrides.name || this.name;
+        const newNodes = overrides.nodes ? [...overrides.nodes] : [...this.nodes];
+        const newParams = overrides.params ? { ...this.params, ...overrides.params } : { ...this.params };
+        
+        const cloned = new Diode_MCP(newName, newNodes, newParams);
+        
+        // 深度複製 MCP 狀態
+        cloned.Vf = this.Vf;
+        cloned.Ron = this.Ron;
+        cloned.currentState = this.currentState;
+        cloned.previousVoltage = this.previousVoltage;
+        cloned.previousCurrent = this.previousCurrent;
+        
+        return cloned;
     }
 
     /**

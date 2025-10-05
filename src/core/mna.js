@@ -173,315 +173,28 @@ export class MNABuilder {
 
     /**
      * 將元件的貢獻添加到MNA矩陣中 (Stamping)
+     * 🔥 重構版：優先使用元件自己的 stamp 方法，實現真正的物件導向
      * @param {BaseComponent} component 電路元件
      * @param {number} time 當前時間
      */
     stampComponent(component, time) {
-        switch (component.type) {
-            case 'R':
-                this.stampResistor(component);
-                break;
-            case 'C':
-                this.stampCapacitor(component);
-                break;
-            case 'L':
-                this.stampInductor(component);
-                break;
-            case 'V':
-                this.stampVoltageSource(component, time);
-                break;
-            case 'I':
-                this.stampCurrentSource(component, time);
-                break;
-            case 'VCVS': // 壓控電壓源
-                this.stampVCVS(component);
-                break;
-            case 'VCCS': // 壓控電流源
-                this.stampVCCS(component);
-                break;
-            default:
-                if (typeof component.stamp === 'function') {
-                    // 允許自定義元件實現自己的stamp方法
-                    component.stamp(this.matrix, this.rhs, this.nodeMap, this.voltageSourceMap, time);
-                } else {
-                    console.warn(`Unknown component type: ${component.type} (${component.name})`);
-                }
-        }
-    }
-
-    /**
-     * 電阻的MNA印記
-     * 在節點i和j之間添加電導 G = 1/R
-     */
-    stampResistor(resistor) {
-        const nodes = resistor.nodes;
-        const conductance = 1 / resistor.value;
-        
-        const n1 = this.getNodeIndex(nodes[0]);
-        const n2 = this.getNodeIndex(nodes[1]);
-
-        // G矩陣的印記: G[i,i] += G, G[j,j] += G, G[i,j] -= G, G[j,i] -= G
-        if (n1 >= 0) {
-            this.matrix.addAt(n1, n1, conductance);
-            if (n2 >= 0) {
-                this.matrix.addAt(n1, n2, -conductance);
-            }
-        }
-        
-        if (n2 >= 0) {
-            this.matrix.addAt(n2, n2, conductance);
-            if (n1 >= 0) {
-                this.matrix.addAt(n2, n1, -conductance);
-            }
-        }
-    }
-
-    /**
-     * 電容的MNA印記 (用於暫態分析)
-     * 使用伴隨模型，支持不同的積分方法
-     */
-    stampCapacitor(capacitor) {
-        if (!capacitor.timeStep) {
-            // 在DC分析中，電容視為開路
+        // 🔥 優先檢查元件是否有自己的 stamp 方法
+        if (typeof component.stamp === 'function') {
+            // 使用元件自己的 stamp 方法 - 真正的物件導向封裝
+            component.stamp(this.matrix, this.rhs, this.nodeMap, this.voltageSourceMap, time);
             return;
         }
 
-        const nodes = capacitor.nodes;
-        // 使用組件自己的等效電導 (支持梯形法)
-        const Geq = capacitor.equivalentConductance;
-
-        const n1 = this.getNodeIndex(nodes[0]);
-        const n2 = this.getNodeIndex(nodes[1]);
-
-        // 等效電導的印記
-        if (n1 >= 0) {
-            this.matrix.addAt(n1, n1, Geq);
-            if (n2 >= 0) {
-                this.matrix.addAt(n1, n2, -Geq);
-            }
-        }
-        
-        if (n2 >= 0) {
-            this.matrix.addAt(n2, n2, Geq);
-            if (n1 >= 0) {
-                this.matrix.addAt(n2, n1, -Geq);
-            }
-        }
-
-        // 歷史電流項 (右手邊)
-        if (capacitor.historyCurrentSource !== undefined) {
-            if (n1 >= 0) {
-                this.rhs.addAt(n1, capacitor.historyCurrentSource);
-            }
-            if (n2 >= 0) {
-                this.rhs.addAt(n2, -capacitor.historyCurrentSource);
-            }
-        }
+        // 🔥 所有主要組件現在都有自己的 stamp 方法
+        // 如果到了這裡，說明組件沒有實現 stamp 方法
+        console.warn(`Component ${component.name} (type: ${component.type}) has no stamp method - please implement one for proper object-oriented design`);
     }
 
-    /**
-     * 電感的MNA印記 (需要電流變數)
-     * 使用伴隨模型: v_L(t) = L * di/dt ≈ L/h * (i(t) - i(t-h))
-     */
-    /**
-     * 電感的MNA印記 (需要電流變數)
-     * 🔥 修正版：支援耦合電感（互感）
-     */
-    stampInductor(inductor) {
-        console.log(`🔷 MNA.stampInductor called: ${inductor.name}, couplings=${inductor.couplings ? inductor.couplings.length : 'none'}, timeStep=${inductor.timeStep}`);
-        const nodes = inductor.nodes;
-        const L = inductor.getInductance(); // 使用 getInductance()
-        
-        const n1 = this.getNodeIndex(nodes[0]);
-        const n2 = this.getNodeIndex(nodes[1]);
-        const currIndex = this.voltageSourceMap.get(inductor.name);
-        
-        if (currIndex === undefined) {
-            throw new Error(`Inductor ${inductor.name} current variable not found`);
-        }
 
-        // B矩陣和C矩陣：電流從節點流出的關係
-        // V_n1 - V_n2 - V_L = 0  =>  V_n1 - V_n2 = V_L
-        if (n1 >= 0) {
-            this.matrix.addAt(n1, currIndex, 1);
-            this.matrix.addAt(currIndex, n1, 1);
-        }
-        if (n2 >= 0) {
-            this.matrix.addAt(n2, currIndex, -1);
-            this.matrix.addAt(currIndex, n2, -1);
-        }
 
-        // D矩陣：電感的電壓-電流關係
-        if (inductor.timeStep) {
-            // 暫態分析：使用組件的等效電阻 (支持梯形法)
-            const Req = inductor.equivalentResistance;
-            
-            // 1. 印花等效電阻項
-            this.matrix.addAt(currIndex, currIndex, -Req);
-            
-            // 2. 印花歷史電壓源項
-            if (inductor.historyVoltageSource !== undefined) {
-                this.rhs.addAt(currIndex, -inductor.historyVoltageSource);
-            }
 
-            // 🔥 3. 印花互感項
-            if (inductor.couplings) {
-                console.log(`🔧 MNA processing mutual inductance for ${inductor.name}, coupling count: ${inductor.couplings.length}`);
-                // 獲取時間步長
-                const h = inductor.timeStep;
-                console.log(`   timeStep: ${h}`);
-                if (!h) {
-                    throw new Error(`Inductor ${inductor.name} time step not initialized for coupling`);
-                }
-                
-                for (const coupling of inductor.couplings) {
-                    const otherInductor = coupling.inductor;
-                    const M = coupling.mutualInductance;
-                    const polaritySign = coupling.polaritySign || 1; // Default to +1 if not set
-                    
-                    console.log(`   🔗 Processing coupling: ${inductor.name} <-> ${otherInductor.name}, M=${M*1e6}µH, polarity=${polaritySign}`);
-                    
-                    // 獲取另一個電感的電流變數索引
-                    const otherCurrIndex = this.voltageSourceMap.get(otherInductor.name);
-                    if (otherCurrIndex === undefined) {
-                        throw new Error(`Coupled inductor ${otherInductor.name} not found for ${inductor.name}`);
-                    }
 
-                    // 添加互感對矩陣的貢獻 (V_L += ±M * dI_other/dt)
-                    // 極性符號決定互感的正負
-                    const mutualCoeff = -polaritySign * M / h;
-                    console.log(`   📊 Adding mutual term: matrix[${currIndex}][${otherCurrIndex}] += ${mutualCoeff}`);
-                    this.matrix.addAt(currIndex, otherCurrIndex, mutualCoeff);
-                    
-                    // 添加互感對歷史項的貢獻
-                    const prevCurrent = otherInductor.previousValues?.get('current') || 0;
-                    const rhsContrib = polaritySign * M / h * prevCurrent;
-                    console.log(`   📈 Adding history term: rhs[${currIndex}] += ${rhsContrib} (prevCurrent=${prevCurrent})`);
-                    if (prevCurrent !== 0) {
-                        this.rhs.addAt(currIndex, rhsContrib);
-                    }
-                }
-            }
-        } else {
-            // DC 分析：電感表現為短路，V_L = 0
-            // 直接設置電壓約束 V_n1 - V_n2 = 0
-            // 這已經在上面的 B 和 C 矩陣中處理了
-            
-            // 添加電感的寄生電阻（如果有的話）
-            const R = inductor.resistance || 1e-9; // 添加極小電阻避免數值問題
-            this.matrix.addAt(currIndex, currIndex, -R);
-        }
-    }
 
-    /**
-     * 電壓源的MNA印記
-     */
-    stampVoltageSource(voltageSource, time) {
-        const nodes = voltageSource.nodes;
-        const n1 = this.getNodeIndex(nodes[0]); // 正端
-        const n2 = this.getNodeIndex(nodes[1]); // 負端
-        const currIndex = this.voltageSourceMap.get(voltageSource.name);
-        
-        if (currIndex === undefined) {
-            throw new Error(`Voltage source ${voltageSource.name} current variable not found`);
-        }
-
-        // B矩陣和C矩陣: 電流約束
-        if (n1 >= 0) {
-            this.matrix.addAt(n1, currIndex, 1);
-            this.matrix.addAt(currIndex, n1, 1);
-        }
-        if (n2 >= 0) {
-            this.matrix.addAt(n2, currIndex, -1);
-            this.matrix.addAt(currIndex, n2, -1);
-        }
-
-        // E向量: 電壓約束
-        const voltage = voltageSource.getValue(time);
-        this.rhs.addAt(currIndex, voltage);
-    }
-
-    /**
-     * 電流源的MNA印記
-     */
-    stampCurrentSource(currentSource, time) {
-        const nodes = currentSource.nodes;
-        const n1 = this.getNodeIndex(nodes[0]); // 電流流出的節點
-        const n2 = this.getNodeIndex(nodes[1]); // 電流流入的節點
-        
-        const current = currentSource.getValue(time);
-        
-        // I向量: 注入電流
-        if (n1 >= 0) {
-            this.rhs.addAt(n1, -current);
-        }
-        if (n2 >= 0) {
-            this.rhs.addAt(n2, current);
-        }
-    }
-
-    /**
-     * 壓控電壓源 (VCVS) 的印記
-     * E * V_control = V_output
-     */
-    stampVCVS(vcvs) {
-        const outputNodes = [vcvs.nodes[0], vcvs.nodes[1]]; // 輸出節點
-        const controlNodes = [vcvs.nodes[2], vcvs.nodes[3]]; // 控制節點
-        const gain = vcvs.value;
-        
-        const no1 = this.getNodeIndex(outputNodes[0]);
-        const no2 = this.getNodeIndex(outputNodes[1]);
-        const nc1 = this.getNodeIndex(controlNodes[0]);
-        const nc2 = this.getNodeIndex(controlNodes[1]);
-        const currIndex = this.voltageSourceMap.get(vcvs.name);
-
-        // 類似電壓源的處理，但右手邊是控制電壓的函數
-        if (no1 >= 0) {
-            this.matrix.addAt(no1, currIndex, 1);
-            this.matrix.addAt(currIndex, no1, 1);
-        }
-        if (no2 >= 0) {
-            this.matrix.addAt(no2, currIndex, -1);
-            this.matrix.addAt(currIndex, no2, -1);
-        }
-
-        // 控制關係: V_out = gain * (V_c1 - V_c2)
-        if (nc1 >= 0) {
-            this.matrix.addAt(currIndex, nc1, -gain);
-        }
-        if (nc2 >= 0) {
-            this.matrix.addAt(currIndex, nc2, gain);
-        }
-    }
-
-    /**
-     * 壓控電流源 (VCCS) 的印記  
-     * I_output = gm * V_control
-     */
-    stampVCCS(vccs) {
-        const outputNodes = [vccs.nodes[0], vccs.nodes[1]]; // 輸出節點
-        const controlNodes = [vccs.nodes[2], vccs.nodes[3]]; // 控制節點
-        const transconductance = vccs.value; // gm
-        
-        const no1 = this.getNodeIndex(outputNodes[0]);
-        const no2 = this.getNodeIndex(outputNodes[1]);
-        const nc1 = this.getNodeIndex(controlNodes[0]);
-        const nc2 = this.getNodeIndex(controlNodes[1]);
-
-        // G矩陣的修改: 添加跨導項
-        if (no1 >= 0 && nc1 >= 0) {
-            this.matrix.addAt(no1, nc1, transconductance);
-        }
-        if (no1 >= 0 && nc2 >= 0) {
-            this.matrix.addAt(no1, nc2, -transconductance);
-        }
-        if (no2 >= 0 && nc1 >= 0) {
-            this.matrix.addAt(no2, nc1, -transconductance);
-        }
-        if (no2 >= 0 && nc2 >= 0) {
-            this.matrix.addAt(no2, nc2, transconductance);
-        }
-    }
 
     /**
      * 獲取節點在矩陣中的索引
@@ -564,7 +277,7 @@ export class MNABuilder {
     }
 
     /**
-     * 獲取節點映射 (用於 Newton-Raphson 求解器)
+     * 獲取節點映射
      * @returns {Map<string, number>} 節點名稱到矩陣索引的映射
      */
     getNodeMap() {
@@ -572,7 +285,7 @@ export class MNABuilder {
     }
     
     /**
-     * 獲取矩陣大小 (用於 Newton-Raphson 求解器)
+     * 獲取矩陣大小
      * @returns {number} 矩陣維度
      */
     getMatrixSize() {

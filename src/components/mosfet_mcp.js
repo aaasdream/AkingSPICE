@@ -55,9 +55,15 @@ export class MOSFET_MCP extends BaseComponent {
         // === 控制模式 ===
         this.controlMode = params.controlMode || 'external';  // 'external', 'voltage', 'logic'
         this.pwmController = null;                            // PWM控制器引用
+        this.needsVoltageUpdate = false;                     // 預設不需要電壓更新
+        
+        // 如果有閘極節點且是電壓控制模式，則需要電壓更新
+        if (this.gateNode && this.controlMode === 'voltage') {
+            this.needsVoltageUpdate = true;
+        }
         
         if (params.debug) {
-            console.log(`🔌 創建 MCP MOSFET ${name}: ${this.channelType}, Ron=${this.Ron}Ω, Vth=${this.Vth}V`);
+            console.log(`🔌 創建 MCP MOSFET ${name}: ${this.channelType}, Ron=${this.Ron}Ω, Vth=${this.Vth}V, controlMode=${this.controlMode}`);
         }
     }
 
@@ -217,15 +223,38 @@ export class MOSFET_MCP extends BaseComponent {
         const nG = mnaBuilder.getNodeIndex(this.gateNode);
         if (nG < 0) return;
         
-        // 簡化實現：根據 Vgs 設定開關狀態
-        // 實際的 MCP 實現會更復雜，需要額外的互補約束
+        // 簡化實現：在每個時間步檢查閘極電壓並更新狀態
+        // 這裡不添加額外的 MCP 約束，而是在求解後更新狀態
         
-        // 這裡可以添加：
-        // - Vgs > Vth 時的導通條件
-        // - Vgs < Vth 時的截止條件
-        // - 閾值附近的平滑過渡
+        // 標記需要電壓更新
+        this.needsVoltageUpdate = true;
+        this.gateNodeIndex = nG;
+        this.sourceNodeIndex = mnaBuilder.getNodeIndex(this.sourceNode);
+    }
+    
+    /**
+     * 基於節點電壓更新閘極狀態
+     */
+    updateFromNodeVoltages(nodeVoltages) {
+        if (!this.needsVoltageUpdate) return;
         
-        // 為簡化演示，暫時使用外部控制模式
+        const vg = nodeVoltages.get(this.gateNode) || 0;
+        const vs = nodeVoltages.get(this.sourceNode) || 0;
+        const vgs = vg - vs;
+        
+        const oldState = this.gateState;
+        
+        if (this.channelType === 'NMOS') {
+            this.gateState = vgs > this.Vth;
+        } else { // PMOS
+            this.gateState = vgs < this.Vth;
+        }
+        
+        this.gateVoltage = vg;
+        
+        if (oldState !== this.gateState) {
+            console.log(`  🎚️ ${this.name} 閘極: ${this.gateState ? 'ON' : 'OFF'} (Vgs=${vgs.toFixed(2)}V)`);
+        }
     }
 
     /**
@@ -282,7 +311,18 @@ export class MOSFET_MCP extends BaseComponent {
     /**
      * 更新歷史狀態
      */
-    updateHistory(nodeVoltages, branchCurrents) {
+    updateHistory(solutionData, timeStep) {
+        // 統一 API 支持
+        let nodeVoltages, branchCurrents;
+        if (solutionData && solutionData.nodeVoltages) {
+            nodeVoltages = solutionData.nodeVoltages;
+            branchCurrents = solutionData.branchCurrents;
+        } else {
+            // 向後相容
+            nodeVoltages = solutionData;
+            branchCurrents = arguments[1];
+        }
+        
         const vd = nodeVoltages.get(this.drainNode) || 0;
         const vs = nodeVoltages.get(this.sourceNode) || 0;
         
@@ -346,6 +386,31 @@ export class MOSFET_MCP extends BaseComponent {
                `Ich=${op.channelCurrent.toExponential(3)}A, ` +
                `Ibody=${op.bodyCurrent.toExponential(3)}A, ` +
                `Region=${op.operatingRegion}`;
+    }
+
+    /**
+     * 克隆 MCP MOSFET 元件，支持參數覆蓋
+     * @param {Object} overrides 覆蓋參數 {name?, nodes?, params?}
+     * @returns {MOSFET_MCP} 新的 MCP MOSFET 實例
+     */
+    clone(overrides = {}) {
+        const newName = overrides.name || this.name;
+        const newNodes = overrides.nodes ? [...overrides.nodes] : [...this.nodes];
+        const newParams = overrides.params ? { ...this.params, ...overrides.params } : { ...this.params };
+        
+        const cloned = new MOSFET_MCP(newName, newNodes, newParams);
+        
+        // 深度複製 MCP 狀態
+        cloned.mosfetType = this.mosfetType;
+        cloned.Ron = this.Ron;
+        cloned.Vth = this.Vth;
+        cloned.Vf_body = this.Vf_body;
+        cloned.Ron_body = this.Ron_body;
+        cloned.previousVds = this.previousVds;
+        cloned.channelCurrent = this.channelCurrent;
+        cloned.bodyCurrent = this.bodyCurrent;
+        
+        return cloned;
     }
 
     /**

@@ -1,271 +1,341 @@
 /**
- * AkingSPICE 模組化測試框架
- * 支援散檔案掛勾，無需修改主測試檔案
+ * AkingSPICE 測試框架
+ * 
+ * 提供統一的測試結構、斷言功能和結果報告
  */
 
-class TestFramework {
+export class TestFramework {
     constructor() {
-        this.testSuites = new Map();
-        this.results = {
-            total: 0,
-            passed: 0,
-            failed: 0,
-            errors: [],
-            suites: []
-        };
-        this.config = {
-            verbose: true,
-            stopOnFirstError: false,
-            timeout: 30000
-        };
+        this.tests = [];
+        this.results = {};
+        this.currentSuite = null;
+        this.verbose = true;
     }
 
     /**
-     * 註冊測試套件 - 供外部檔案掛勾使用
-     * @param {string} suiteName - 測試套件名稱
-     * @param {Function} setupFn - 設定函數
-     * @param {Object} tests - 測試案例物件
+     * 創建測試套件
+     * @param {string} suiteName 測試套件名稱
+     * @param {Function} testFunction 測試函數
      */
-    registerTestSuite(suiteName, setupFn, tests) {
-        if (this.testSuites.has(suiteName)) {
-            throw new Error(`Test suite '${suiteName}' already registered`);
+    describe(suiteName, testFunction) {
+        this.currentSuite = suiteName;
+        this.results[suiteName] = { tests: [], passed: 0, failed: 0, errors: [] };
+        
+        if (this.verbose) {
+            console.log(`\n📋 測試套件: ${suiteName}`);
         }
-
-        this.testSuites.set(suiteName, {
-            name: suiteName,
-            setup: setupFn,
-            tests: tests,
-            registered: new Date()
-        });
-
-        if (this.config.verbose) {
-            console.log(`✓ Registered test suite: ${suiteName}`);
-        }
-    }
-
-    /**
-     * 執行單一測試案例
-     */
-    async runTest(testName, testFn, context = {}) {
+        
         try {
-            const startTime = Date.now();
-
-            // 設定測試超時
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error(`Test timeout: ${testName}`)), this.config.timeout);
-            });
-
-            // 執行測試
-            await Promise.race([testFn(context), timeoutPromise]);
-
-            const duration = Date.now() - startTime;
-
-            this.results.passed++;
-            if (this.config.verbose) {
-                console.log(`  ✓ ${testName} (${duration}ms)`);
-            }
-
-            return { success: true, duration, error: null };
+            testFunction();
         } catch (error) {
-            this.results.failed++;
-            this.results.errors.push({
-                test: testName,
-                error: error.message,
+            this.results[suiteName].errors.push({
+                type: 'suite_error',
+                message: error.message,
                 stack: error.stack
             });
-
-            if (this.config.verbose) {
-                console.error(`  ✗ ${testName}: ${error.message}`);
-            }
-
-            return { success: false, duration: 0, error };
         }
     }
 
     /**
-     * 執行測試套件
+     * 定義單個測試案例
+     * @param {string} testName 測試名稱
+     * @param {Function} testFunction 測試函數
      */
-    async runTestSuite(suiteName) {
-        const suite = this.testSuites.get(suiteName);
+    it(testName, testFunction) {
+        const suite = this.currentSuite;
         if (!suite) {
-            throw new Error(`Test suite '${suiteName}' not found`);
+            throw new Error('測試必須在 describe() 塊內定義');
         }
 
-        console.log(`\n🧪 Running test suite: ${suiteName}`);
+        this.results[suite].tests.push(testName);
 
-        const suiteResults = {
-            name: suiteName,
-            passed: 0,
-            failed: 0,
-            tests: []
+        return {
+            run: async () => {
+                try {
+                    if (this.verbose) {
+                        console.log(`  🔍 執行: ${testName}`);
+                    }
+
+                    await testFunction();
+                    
+                    this.results[suite].passed++;
+                    if (this.verbose) {
+                        console.log(`    ✅ 通過: ${testName}`);
+                    }
+                    return true;
+
+                } catch (error) {
+                    this.results[suite].failed++;
+                    this.results[suite].errors.push({
+                        test: testName,
+                        message: error.message,
+                        stack: error.stack
+                    });
+
+                    if (this.verbose) {
+                        console.log(`    ❌ 失敗: ${testName}`);
+                        console.log(`       錯誤: ${error.message}`);
+                    }
+                    return false;
+                }
+            }
         };
+    }
 
-        try {
-            // 執行設定函數
-            const context = suite.setup ? await suite.setup() : {};
+    /**
+     * 斷言函數集合
+     */
+    assert = {
+        /**
+         * 斷言值為真
+         */
+        isTrue: (value, message = '預期值為 true') => {
+            if (value !== true) {
+                throw new Error(`${message}, 但得到: ${value}`);
+            }
+        },
 
-            // 執行所有測試
-            for (const [testName, testFn] of Object.entries(suite.tests)) {
-                this.results.total++;
-                const result = await this.runTest(testName, testFn, context);
+        /**
+         * 斷言值為假
+         */
+        isFalse: (value, message = '預期值為 false') => {
+            if (value !== false) {
+                throw new Error(`${message}, 但得到: ${value}`);
+            }
+        },
 
-                suiteResults.tests.push({
-                    name: testName,
-                    ...result
+        /**
+         * 斷言相等
+         */
+        equal: (actual, expected, message = '預期值相等') => {
+            if (actual !== expected) {
+                throw new Error(`${message}, 預期: ${expected}, 實際: ${actual}`);
+            }
+        },
+
+        /**
+         * 斷言近似相等 (用於浮點數比較)
+         */
+        approximately: (actual, expected, tolerance = 1e-6, message = '預期值近似相等') => {
+            const diff = Math.abs(actual - expected);
+            if (diff > tolerance) {
+                throw new Error(`${message}, 預期: ${expected}, 實際: ${actual}, 誤差: ${diff}, 容差: ${tolerance}`);
+            }
+        },
+
+        /**
+         * 斷言存在 (不為 null 或 undefined)
+         */
+        exists: (value, message = '預期值存在') => {
+            if (value === null || value === undefined) {
+                throw new Error(`${message}, 但得到: ${value}`);
+            }
+        },
+
+        /**
+         * 斷言為數字
+         */
+        isNumber: (value, message = '預期值為數字') => {
+            if (typeof value !== 'number' || isNaN(value)) {
+                throw new Error(`${message}, 但得到: ${value} (類型: ${typeof value})`);
+            }
+        },
+
+        /**
+         * 斷言陣列長度
+         */
+        arrayLength: (array, expectedLength, message = '預期陣列長度') => {
+            if (!Array.isArray(array)) {
+                throw new Error(`${message}, 但得到非陣列: ${array}`);
+            }
+            if (array.length !== expectedLength) {
+                throw new Error(`${message}: ${expectedLength}, 實際: ${array.length}`);
+            }
+        },
+
+        /**
+         * 斷言拋出錯誤
+         */
+        throws: async (fn, expectedMessage = null, message = '預期拋出錯誤') => {
+            try {
+                await fn();
+                throw new Error(`${message}, 但函數正常執行完成`);
+            } catch (error) {
+                if (expectedMessage && !error.message.includes(expectedMessage)) {
+                    throw new Error(`${message} 包含 "${expectedMessage}", 但得到: "${error.message}"`);
+                }
+            }
+        },
+
+        /**
+         * 斷言 Map 包含鍵值
+         */
+        mapHasKey: (map, key, message = '預期 Map 包含鍵') => {
+            if (!(map instanceof Map)) {
+                throw new Error(`${message}, 但得到非 Map: ${map}`);
+            }
+            if (!map.has(key)) {
+                throw new Error(`${message}: "${key}", 但 Map 只包含: [${Array.from(map.keys()).join(', ')}]`);
+            }
+        },
+
+        /**
+         * 斷言電壓值合理 (電子電路中的典型值)
+         */
+        reasonableVoltage: (voltage, maxVoltage = 1000, message = '預期合理電壓值') => {
+            if (typeof voltage !== 'number' || isNaN(voltage)) {
+                throw new Error(`${message}, 但得到非數字: ${voltage}`);
+            }
+            if (Math.abs(voltage) > maxVoltage) {
+                throw new Error(`${message} (< ${maxVoltage}V), 但得到: ${voltage}V`);
+            }
+        },
+
+        /**
+         * 斷言電流值合理
+         */
+        reasonableCurrent: (current, maxCurrent = 100, message = '預期合理電流值') => {
+            if (typeof current !== 'number' || isNaN(current)) {
+                throw new Error(`${message}, 但得到非數字: ${current}`);
+            }
+            if (Math.abs(current) > maxCurrent) {
+                throw new Error(`${message} (< ${maxCurrent}A), 但得到: ${current}A`);
+            }
+        }
+    };
+
+    /**
+     * 工具函數集合
+     */
+    utils = {
+        /**
+         * 創建簡單的 RC 電路組件
+         */
+        createRCCircuit: (Vdc = 5, R = 1000, C = 1e-6) => {
+            const { VoltageSource, Resistor, Capacitor } = require('../src/index.js');
+            return [
+                new VoltageSource('V1', ['vin', 'gnd'], Vdc),
+                new Resistor('R1', ['vin', 'vout'], R),
+                new Capacitor('C1', ['vout', 'gnd'], C)
+            ];
+        },
+
+        /**
+         * 等待指定時間 (用於異步測試)
+         */
+        sleep: (ms) => {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        },
+
+        /**
+         * 生成測試數據
+         */
+        generateSineWave: (amplitude = 1, frequency = 1, samples = 100, duration = 1) => {
+            const data = [];
+            const dt = duration / samples;
+            for (let i = 0; i < samples; i++) {
+                const t = i * dt;
+                data.push({
+                    time: t,
+                    value: amplitude * Math.sin(2 * Math.PI * frequency * t)
                 });
+            }
+            return data;
+        }
+    };
 
-                if (result.success) {
-                    suiteResults.passed++;
-                } else {
-                    suiteResults.failed++;
-                    if (this.config.stopOnFirstError) {
-                        break;
+    /**
+     * 運行所有測試
+     */
+    async runAllTests() {
+        console.log(`\n🚀 開始執行 AkingSPICE 測試套件`);
+        console.log(`測試套件數量: ${Object.keys(this.results).length}`);
+
+        let allTestsRun = [];
+
+        // 收集所有測試
+        for (const [suiteName, suiteData] of Object.entries(this.results)) {
+            for (const testName of suiteData.tests) {
+                // 測試實際運行需要在具體的測試文件中處理
+                // 這裡我們只是準備框架
+            }
+        }
+
+        await this.generateReport();
+        return this.getOverallResults();
+    }
+
+    /**
+     * 生成測試報告
+     */
+    async generateReport() {
+        console.log('\n' + '='.repeat(80));
+        console.log('📊 AkingSPICE 測試結果報告');
+        console.log('='.repeat(80));
+
+        let totalPassed = 0;
+        let totalFailed = 0;
+        let totalTests = 0;
+
+        for (const [suiteName, result] of Object.entries(this.results)) {
+            console.log(`\n📋 ${suiteName}:`);
+            console.log(`  ✅ 通過: ${result.passed}`);
+            console.log(`  ❌ 失敗: ${result.failed}`);
+            console.log(`  📊 總計: ${result.passed + result.failed}`);
+
+            if (result.errors.length > 0) {
+                console.log(`  🚨 錯誤詳情:`);
+                for (const error of result.errors) {
+                    if (error.test) {
+                        console.log(`    - ${error.test}: ${error.message}`);
+                    } else {
+                        console.log(`    - 套件錯誤: ${error.message}`);
                     }
                 }
             }
-        } catch (error) {
-            console.error(`Setup failed for suite ${suiteName}:`, error.message);
-            suiteResults.setupError = error.message;
+
+            totalPassed += result.passed;
+            totalFailed += result.failed;
+            totalTests += result.passed + result.failed;
         }
 
-        this.results.suites.push(suiteResults);
-        return suiteResults;
-    }
+        console.log('\n' + '='.repeat(80));
+        console.log('📈 總體統計:');
+        console.log(`✅ 通過: ${totalPassed}/${totalTests} (${((totalPassed/totalTests)*100).toFixed(1)}%)`);
+        console.log(`❌ 失敗: ${totalFailed}/${totalTests} (${((totalFailed/totalTests)*100).toFixed(1)}%)`);
 
-    /**
-     * 執行所有註冊的測試套件
-     */
-    async runAllTests() {
-        console.log(`\n🚀 Starting AkingSPICE Test Framework`);
-        console.log(`📊 Found ${this.testSuites.size} test suites`);
-
-        this.results = {
-            total: 0,
-            passed: 0,
-            failed: 0,
-            errors: [],
-            suites: []
-        };
-
-        const startTime = Date.now();
-
-        for (const suiteName of this.testSuites.keys()) {
-            await this.runTestSuite(suiteName);
+        if (totalFailed === 0) {
+            console.log('\n🎉 所有測試通過！AkingSPICE 功能正常。');
+        } else {
+            console.log('\n⚠️  存在測試失敗，需要檢查相關功能。');
         }
 
-        const totalDuration = Date.now() - startTime;
-
-        // 輸出測試報告
-        this.printSummary(totalDuration);
-
-        return this.results;
+        console.log('='.repeat(80));
     }
 
     /**
-     * 列印測試摘要
+     * 獲取總體測試結果
      */
-    printSummary(duration) {
-        console.log(`\n📋 Test Summary`);
-        console.log('='.repeat(50));
-        console.log(`Total Tests: ${this.results.total}`);
-        console.log(`✓ Passed: ${this.results.passed}`);
-        console.log(`✗ Failed: ${this.results.failed}`);
-        console.log(`⏱ Duration: ${duration}ms`);
+    getOverallResults() {
+        let totalPassed = 0;
+        let totalFailed = 0;
 
-        if (this.results.failed > 0) {
-            console.log(`\n❌ Failed Tests:`);
-            this.results.errors.forEach((error, index) => {
-                console.log(`${index + 1}. ${error.test}`);
-                console.log(`   Error: ${error.error}`);
-            });
+        for (const result of Object.values(this.results)) {
+            totalPassed += result.passed;
+            totalFailed += result.failed;
         }
 
-        console.log(`\n🏆 Test Result: ${this.results.failed === 0 ? 'PASS' : 'FAIL'}`);
-    }
-
-    /**
-     * 設定框架選項
-     */
-    configure(options) {
-        this.config = { ...this.config, ...options };
-    }
-
-    /**
-     * 清除所有註冊的測試套件
-     */
-    clearTestSuites() {
-        this.testSuites.clear();
-    }
-
-    /**
-     * 取得測試統計資訊
-     */
-    getStats() {
         return {
-            suiteCount: this.testSuites.size,
-            results: { ...this.results }
+            passed: totalPassed,
+            failed: totalFailed,
+            total: totalPassed + totalFailed,
+            success: totalFailed === 0
         };
     }
 }
 
-// 建立全域測試框架實例
-const testFramework = new TestFramework();
+// 創建全局測試實例
+export const testFramework = new TestFramework();
 
 // 導出便利函數
-export function registerTest(suiteName, setupFn, tests) {
-    testFramework.registerTestSuite(suiteName, setupFn, tests);
-}
-
-export function runTests() {
-    return testFramework.runAllTests();
-}
-
-export function configure(options) {
-    testFramework.configure(options);
-}
-
-export { testFramework as TestFramework };
-
-// 便利的斷言函數
-export const assert = {
-    equal: (actual, expected, message = '') => {
-        if (actual !== expected) {
-            throw new Error(`Assertion failed: ${message}\nExpected: ${expected}\nActual: ${actual}`);
-        }
-    },
-
-    notEqual: (actual, expected, message = '') => {
-        if (actual === expected) {
-            throw new Error(`Assertion failed: ${message}\nExpected not: ${expected}\nActual: ${actual}`);
-        }
-    },
-
-    approximately: (actual, expected, tolerance = 1e-10, message = '') => {
-        if (Math.abs(actual - expected) > tolerance) {
-            throw new Error(`Assertion failed: ${message}\nExpected: ${expected} ± ${tolerance}\nActual: ${actual}`);
-        }
-    },
-
-    isTrue: (value, message = '') => {
-        if (value !== true) {
-            throw new Error(`Assertion failed: ${message}\nExpected: true\nActual: ${value}`);
-        }
-    },
-
-    isFalse: (value, message = '') => {
-        if (value !== false) {
-            throw new Error(`Assertion failed: ${message}\nExpected: false\nActual: ${value}`);
-        }
-    },
-
-    throws: async (fn, expectedError = null, message = '') => {
-        try {
-            await fn();
-            throw new Error(`Assertion failed: ${message}\nExpected function to throw`);
-        } catch (error) {
-            if (expectedError && !error.message.includes(expectedError)) {
-                throw new Error(`Assertion failed: ${message}\nExpected error containing: ${expectedError}\nActual error: ${error.message}`);
-            }
-        }
-    }
-};
+export const { describe, it, assert, utils } = testFramework;

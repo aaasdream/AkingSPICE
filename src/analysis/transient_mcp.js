@@ -19,7 +19,49 @@
 import { Matrix, Vector, LUSolver } from '../core/linalg.js';
 import { MNABuilder } from '../core/mna.js';
 import { LCPSolver, createLCPSolver } from '../core/mcp_solver.js';
-import { TransientResult } from './transient.js';
+import { MOSFET_MCP } from '../components/mosfet_mcp.js'; // 🔥 新增：用於自適應步長的事件檢測
+// 创建一个简单的 TransientResult 类作为临时解决方案
+export class TransientResult {
+    constructor() {
+        this.timeVector = [];
+        this.voltageMatrix = {};
+        this.currentMatrix = {};
+        this.analysisInfo = {};
+        this.dcOperatingPoint = null;
+    }
+
+    addTimePoint(time, nodeVoltages, branchCurrents) {
+        this.timeVector.push(time);
+        
+        // 初始化电压矩阵
+        for (const [node, voltage] of nodeVoltages) {
+            if (!this.voltageMatrix[node]) {
+                this.voltageMatrix[node] = [];
+            }
+            this.voltageMatrix[node].push(voltage);
+        }
+        
+        // 初始化电流矩阵
+        for (const [component, current] of branchCurrents) {
+            if (!this.currentMatrix[component]) {
+                this.currentMatrix[component] = [];
+            }
+            this.currentMatrix[component].push(current);
+        }
+    }
+
+    getTimeVector() {
+        return this.timeVector;
+    }
+
+    getVoltage(nodeName) {
+        return this.voltageMatrix[nodeName] || [];
+    }
+
+    getCurrent(componentName) {
+        return this.currentMatrix[componentName] || [];
+    }
+}
 
 /**
  * 擴展的 MNA 建構器，支持 LCP 約束
@@ -216,6 +258,9 @@ export class MNA_LCP_Builder extends MNABuilder {
         // === 第5步：處理線性元件 (傳統 MNA) ===
         this.stampLinearComponents(components, time);
         
+        // === 第5.5步：預更新電壓控制的 MCP 元件狀態 ===
+        this.preUpdateMCPStates(components, time);
+        
         // === 第6步：處理 MCP 元件 ===
         this.stampMCPComponents(components, time);
         
@@ -296,6 +341,58 @@ export class MNA_LCP_Builder extends MNABuilder {
         }
     }
     
+    /**
+     * 預更新電壓控制的 MCP 元件狀態
+     */
+    preUpdateMCPStates(components, time) {
+        if (this.debug) {
+            console.log('🔧 預更新電壓控制 MCP 元件狀態...');
+        }
+        
+        for (const component of components) {
+            if (component.type === 'M_MCP' && component.controlMode === 'voltage' && component.gateNode) {
+                if (this.debug) {
+                    console.log(`  🎚️ 預更新 ${component.name} 閘極狀態 (controlMode=${component.controlMode})`);
+                }
+                // 使用前一個時間步的電壓作為估計
+                if (this.previousNodeVoltages) {
+                    component.updateFromNodeVoltages(this.previousNodeVoltages);
+                    if (this.debug) {
+                        const vg = this.previousNodeVoltages.get(component.gateNode) || 0;
+                        const vs = this.previousNodeVoltages.get(component.sourceNode) || 0;
+                        console.log(`  🔍 使用前次電壓 ${component.name}: Vg=${vg}V, Vs=${vs}V, Vgs=${vg-vs}V`);
+                    }
+                } else {
+                    // 初始時間步，檢查電壓源的值
+                    let gateVoltage = 0;
+                    if (this.debug) {
+                        console.log(`  🔍 初始化時間步，查找 ${component.name} 閘極電壓源 (節點: ${component.gateNode})`);
+                    }
+                    for (const src of components) {
+                        if (this.debug) {
+                            console.log(`    🔍 檢查組件 ${src.name} (type: ${src.type}, nodes: ${src.nodes})`);
+                        }
+                        if ((src.type === 'VoltageSource' || src.type === 'V') && src.nodes.includes(component.gateNode)) {
+                            gateVoltage = src.getValue(time);
+                            if (this.debug) {
+                                console.log(`  ✅ 發現閘極電壓源 ${src.name}: ${gateVoltage}V @ t=${time}s`);
+                            }
+                            break;
+                        }
+                    }
+                    // 建立一個臨時的節點電壓映射
+                    const tempVoltages = new Map();
+                    tempVoltages.set(component.gateNode, gateVoltage);
+                    tempVoltages.set(component.sourceNode, 0); // 假設 source 接地或較低電壓
+                    if (this.debug) {
+                        console.log(`  🔧 建立臨時電壓: ${component.gateNode}=${gateVoltage}V, ${component.sourceNode}=0V`);
+                    }
+                    component.updateFromNodeVoltages(tempVoltages);
+                }
+            }
+        }
+    }
+
     /**
      * 處理 MCP 元件
      */
@@ -530,12 +627,18 @@ export class MCPTransientAnalysis {
         
         // 算法參數
         this.maxTimeSteps = options.maxTimeSteps || 1e6;
-        this.minTimeStep = options.minTimeStep || 1e-12;
-        this.maxTimeStep = options.maxTimeStep || 1e-3;
+        
+        // 🔥 新增：自適應步長參數
+        this.minTimeStep = options.minTimeStep || 1e-9;    // 最小步長 1ns - 開關瞬間使用
+        this.maxTimeStep = options.maxTimeStep || 1e-6;    // 最大步長 1μs - 穩定期間使用  
+        this.stepIncreaseFactor = options.stepIncreaseFactor || 1.2; // 步長增加因子
+        this.adaptiveTimeStep = options.adaptiveTimeStep !== false; // 默認啟用自適應步長
+        
+        // 🔥 新增：用於事件檢測的 MOSFET 狀態追蹤
+        this.previousMosfetStates = new Map();
         
         // 收斂控制
         this.convergenceTolerance = options.convergenceTolerance || 1e-9;
-        this.maxNewtonIterations = options.maxNewtonIterations || 20;
         
         // 調試和監控
         this.debug = options.debug || false;
@@ -571,23 +674,22 @@ export class MCPTransientAnalysis {
         };
     }
 
+    // ==================== 🔥 新增：正式步進 API 🔥 ====================
+    
     /**
-     * 運行 MCP 瞬態分析
-     * @param {Array} components - 電路元件列表
+     * 初始化步進式分析 - 執行所有一次性設置
+     * @param {Array} components - 元件列表
      * @param {Object} params - 分析參數 {startTime, stopTime, timeStep, ...}
-     * @returns {TransientResult} 分析結果
+     * @returns {Object} 初始化結果 {flatComponents, result, componentAnalysis}
      */
-    async run(components, params) {
-        const startTime = performance.now();
-        
+    async initializeSteppedAnalysis(components, params) {
         if (this.debug) {
-            console.log('🚀 開始 MCP 瞬態分析');
+            console.log('🚀 初始化步進式 MCP 分析');
             console.log(`  時間範圍: ${params.startTime}s → ${params.stopTime}s`);
             console.log(`  時間步長: ${params.timeStep}s`);
             console.log(`  元件數量: ${components.length}`);
         }
         
-        // ==================== 🔥 核心架構修正開始 🔥 ====================
         // 預處理元件列表，自動展開"元元件" (如變壓器)
         const flatComponents = [];
         for (const component of components) {
@@ -603,19 +705,18 @@ export class MCPTransientAnalysis {
         if (this.debug && flatComponents.length !== components.length) {
             console.log(`  📊 元件列表已扁平化: ${components.length} -> ${flatComponents.length} 個基礎元件`);
         }
-        // ==================== 🔥 核心架構修正結束 🔥 ====================
 
         // 初始化結果對象
         const result = new TransientResult();
         result.analysisInfo = {
-            method: 'MCP',
+            method: 'MCP-Stepped',
             startTime: params.startTime,
             stopTime: params.stopTime,
             timeStep: params.timeStep,
             convergenceStats: {}
         };
         
-        // 分析電路組成 (使用扁平化後的列表)
+        // 分析電路組成
         const componentAnalysis = this.analyzeCircuitComponents(flatComponents);
         
         if (this.debug) {
@@ -629,17 +730,197 @@ export class MCPTransientAnalysis {
         
         if (componentAnalysis.mcpComponents.length === 0) {
             console.warn('⚠️ 沒有 MCP 元件，建議使用傳統瞬態分析器');
-            if (this.debug) {
-                console.log('   建議：對於純線性/非線性電路，TransientAnalysis 可能更適合');
-                console.log('   MCP 分析器專為包含開關、二極體等互補約束的電路設計');
+        }
+        
+        // 計算 DC 工作點
+        await this.computeInitialConditions(flatComponents, result, params);
+        
+        // 初始化 MOSFET 狀態追蹤（如果使用自適應步長）
+        if (this.adaptiveTimeStep) {
+            this.previousMosfetStates.clear();
+            for (const component of flatComponents) {
+                if (component.constructor.name === 'MOSFET_MCP') {
+                    this.previousMosfetStates.set(component.name, component.gateState || 'unknown');
+                }
             }
         }
         
-        // === 步驟1：計算 DC 工作點 ===
-        // 🔥 修正：傳遞 params 以便使用 startTime (使用扁平化後的列表)
-        await this.computeInitialConditions(flatComponents, result, params);
+        if (this.debug) {
+            console.log('✅ 步進式分析初始化完成');
+        }
         
-        // === 步驟2：主時間循環 ===
+        return {
+            flatComponents,
+            result,
+            componentAnalysis
+        };
+    }
+    
+    /**
+     * 執行單個時間步 - 完整的步進邏輯
+     * @param {Array} flatComponents - 扁平化的元件列表
+     * @param {number} currentTime - 當前時間
+     * @param {number} timeStep - 時間步長
+     * @param {TransientResult} result - 結果對象
+     * @returns {Object} 步進結果 {success, nodeVoltages, componentCurrents, lcpStats?, actualTimeStep?}
+     */
+    async stepForwardAnalysis(flatComponents, currentTime, timeStep, result) {
+        try {
+            // 🔥 自適應步長控制邏輯（如果啟用）
+            let actualTimeStep = timeStep;
+            if (this.adaptiveTimeStep) {
+                let switchingEventDetected = false;
+                
+                // 先更新時變元件以獲取當前狀態
+                this.updateTimeVaryingElements(flatComponents, currentTime);
+                
+                // 檢測開關事件
+                for (const component of flatComponents) {
+                    if (component.constructor.name === 'MOSFET_MCP') {
+                        const previousState = this.previousMosfetStates.get(component.name);
+                        const currentState = component.gateState;
+                        
+                        if (previousState !== undefined && previousState !== currentState) {
+                            switchingEventDetected = true;
+                            if (this.debug) {
+                                console.log(`⚡️ 開關事件: ${component.name} 從 ${previousState} → ${currentState} @ t=${currentTime.toExponential(3)}s`);
+                            }
+                            break;
+                        }
+                    }
+                }
+                
+                if (switchingEventDetected) {
+                    actualTimeStep = this.minTimeStep;
+                } else {
+                    actualTimeStep = Math.min(this.maxTimeStep, actualTimeStep * this.stepIncreaseFactor);
+                }
+            }
+            
+            // 更新時變元件（如果還沒更新）
+            if (!this.adaptiveTimeStep) {
+                this.updateTimeVaryingElements(flatComponents, currentTime);
+            }
+            
+            // 🚀 更新伴隨模型 (電容、電感) - 傳遞步數支持 Gear 2
+            // 注意：為避免重複調用，只在非批量分析模式下更新伴隨模型
+            if (!this._skipCompanionModelUpdate) {
+                const stepCount = result.getTimeVector().length; // 當前步數
+                this.updateCompanionModels(flatComponents, actualTimeStep, stepCount);
+            }
+            
+            // 求解當前時間步
+            const success = await this.solveTimeStep(flatComponents, currentTime, result, actualTimeStep);
+            
+            if (!success) {
+                return { success: false, error: `時間步求解失敗於 t = ${currentTime}` };
+            }
+            
+            // 🔥 更新 MOSFET 狀態歷史（自適應步長）
+            if (this.adaptiveTimeStep) {
+                for (const component of flatComponents) {
+                    if (component.constructor.name === 'MOSFET_MCP') {
+                        this.previousMosfetStates.set(component.name, component.gateState);
+                    }
+                }
+            }
+            
+            this.statistics.totalTimeSteps++;
+            
+            // 提取最新解並返回
+            const timePoints = result.getTimeVector();
+            if (timePoints.length > 0) {
+                const nodeVoltages = new Map();
+                const componentCurrents = new Map();
+                
+                // 提取節點電壓
+                for (const [node, voltageArray] of Object.entries(result.voltageMatrix)) {
+                    if (voltageArray.length > 0) {
+                        nodeVoltages.set(node, voltageArray[voltageArray.length - 1]);
+                    }
+                }
+                
+                // 提取組件電流
+                for (const [component, currentArray] of Object.entries(result.currentMatrix)) {
+                    if (currentArray.length > 0) {
+                        componentCurrents.set(component, currentArray[currentArray.length - 1]);
+                    }
+                }
+                
+                const stepResult = {
+                    success: true,
+                    actualTimeStep: actualTimeStep,
+                    nodeVoltages: nodeVoltages,
+                    componentCurrents: componentCurrents
+                };
+                
+                // 如果有 LCP 求解統計，也包含進去
+                if (this.collectStatistics && this.statistics.lcpSolveCount > 0) {
+                    stepResult.lcpStats = {
+                        iterations: this.statistics.maxLcpIterations,
+                        avgIterations: this.statistics.avgLcpIterations
+                    };
+                }
+                
+                return stepResult;
+            }
+            
+            return { success: true, actualTimeStep: actualTimeStep };
+            
+        } catch (error) {
+            console.error(`🚨 步進分析失敗於 t=${currentTime}: ${error.message}`);
+            if (this.debug) {
+                console.error('詳細錯誤信息:', error);
+            }
+            return { success: false, error: error.message };
+        }
+    }
+    
+    /**
+     * 完成步進式分析 - 整理最終結果
+     * @param {TransientResult} result - 結果對象
+     * @param {number} executionTimeMs - 執行時間（毫秒）
+     * @returns {TransientResult} 最終結果
+     */
+    finalizeSteppedAnalysis(result, executionTimeMs) {
+        result.analysisInfo.executionTime = executionTimeMs / 1000;
+        result.analysisInfo.statistics = this.statistics;
+        
+        if (this.debug) {
+            console.log(`✅ 步進式 MCP 分析完成:`);
+            console.log(`  總步數: ${this.statistics.totalTimeSteps}`);
+            console.log(`  執行時間: ${result.analysisInfo.executionTime.toFixed(3)}s`);
+            if (this.statistics.avgLcpIterations > 0) {
+                console.log(`  平均LCP迭代: ${this.statistics.avgLcpIterations.toFixed(1)}`);
+            }
+        }
+        
+        return result;
+    }
+
+    // ==================== 🔥 重構後的批次模式 run 方法 🔥 ====================
+    
+    /**
+     * 運行 MCP 瞬態分析（批次模式 - 基於新步進 API 重構）
+     * @param {Array} components - 電路元件列表
+     * @param {Object} params - 分析參數 {startTime, stopTime, timeStep, ...}
+     * @returns {TransientResult} 分析結果
+     */
+    async run(components, params) {
+        const startTime = performance.now();
+        
+        // 🔥 重構：使用新的步進 API 重新實現批次模式
+        console.log('🚀 開始 MCP 瞬態分析（批次模式）');
+        
+        // 步驟 1: 初始化
+        const initResult = await this.initializeSteppedAnalysis(components, params);
+        if (!initResult) {
+            throw new Error('初始化失敗');
+        }
+        
+        const { flatComponents, result } = initResult;
+        
+        // 步驟 2: 主時間循環
         let currentTime = params.startTime;
         let stepCount = 0;
         
@@ -648,59 +929,38 @@ export class MCPTransientAnalysis {
         console.log(`   結束時間: ${params.stopTime}s`);
         console.log(`   時間步長: ${params.timeStep}s`);
         console.log(`   最大步數: ${this.maxTimeSteps}`);
-        console.log(`   初始條件: currentTime=${currentTime}, stopTime=${params.stopTime}`);
         
         while (currentTime < params.stopTime && stepCount < this.maxTimeSteps) {
-            currentTime += params.timeStep;
             stepCount++;
             
-            if (this.debug && stepCount % 1000 === 0) {
-                console.log(`  📅 步驟 ${stepCount}, t = ${currentTime.toFixed(6)}s`);
+            // 推進時間
+            currentTime += params.timeStep;
+            if (currentTime > params.stopTime) {
+                currentTime = params.stopTime; // 確保不超過結束時間
             }
             
-            try {
-                // 更新 PWM 控制器和時變源 (使用扁平化後的列表)
-                console.log(`  🔥 步驟 ${stepCount}: 開始處理 t=${currentTime.toFixed(6)}s, timeStep=${params.timeStep}`);
-                this.updateTimeVaryingElements(flatComponents, currentTime);
-                
-                // 更新伴隨模型 (電容、電感) - 傳遞時間步長 (使用扁平化後的列表)
-                console.log(`  ⚡ 準備調用 updateCompanionModels...`);
-                this.updateCompanionModels(flatComponents, params.timeStep);
-                console.log(`  ✅ updateCompanionModels 調用完成`);
-                
-                // 求解當前時間步 (使用扁平化後的列表)
-                const success = await this.solveTimeStep(flatComponents, currentTime, result);
-                
-                if (!success) {
-                    console.error(`❌ 時間步失敗於 t = ${currentTime}`);
-                    this.statistics.failedSteps++;
-                    
-                    // 這裡可以實施自適應步長控制
-                    break;
-                }
-                
-                this.statistics.totalTimeSteps++;
-                
-            } catch (error) {
-                console.error(`❌ 分析失敗於 t = ${currentTime}: ${error.message}`);
-                result.analysisInfo.error = error.message;
+            if (this.debug && (stepCount % 100 === 0)) {
+                console.log(`  � Gear2 步驟 ${stepCount}: t=${currentTime.toExponential(3)}s`);
+            }
+            
+            // 🚀 執行步進 - 先更新伴隨模型以傳遞正確的步數
+            this.updateCompanionModels(flatComponents, params.timeStep, stepCount);
+            
+            // 設置跳過標志以避免重複調用
+            this._skipCompanionModelUpdate = true;
+            const stepResult = await this.stepForwardAnalysis(flatComponents, currentTime, params.timeStep, result);
+            this._skipCompanionModelUpdate = false;
+            
+            if (!stepResult.success) {
+                console.error(`❌ 時間步失敗於 t = ${currentTime}: ${stepResult.error}`);
+                this.statistics.failedSteps++;
                 break;
             }
         }
         
-        // === 步驟3：整理結果 ===
+        // 步驟 3: 完成分析
         const endTime = performance.now();
-        result.analysisInfo.executionTime = (endTime - startTime) / 1000;
-        result.analysisInfo.statistics = this.statistics;
-        
-        if (this.debug) {
-            console.log(`✅ MCP 瞬態分析完成:`);
-            console.log(`  總步數: ${this.statistics.totalTimeSteps}`);
-            console.log(`  執行時間: ${result.analysisInfo.executionTime.toFixed(3)}s`);
-            console.log(`  平均LCP迭代: ${this.statistics.avgLcpIterations.toFixed(1)}`);
-        }
-        
-        return result;
+        return this.finalizeSteppedAnalysis(result, endTime - startTime);
     }
     
     /**
@@ -727,6 +987,9 @@ export class MCPTransientAnalysis {
             // 為元件設置初始條件
             this.applyDCResultToComponents(components, dcResult);
             
+            // 🔥 新增：初始化暫態元件的歷史狀態
+            this.initializeTransientComponents(components, params);
+            
             // 添加初始時間點到結果
             result.addTimePoint(params?.startTime || 0, dcResult.nodeVoltages, dcResult.branchCurrents);
             
@@ -742,17 +1005,44 @@ export class MCPTransientAnalysis {
     }
 
     /**
+     * 初始化暫態元件的歷史狀態
+     */
+    initializeTransientComponents(components, params) {
+        const timeStep = params.timeStep || 1e-6;
+        
+        for (const component of components) {
+            if (component.initTransient) {
+                console.log(`  ⚡ 初始化 ${component.name} 暫態狀態 (h=${timeStep})`);
+                component.initTransient(timeStep);
+                
+                // 檢查初始條件是否正確設定
+                if (component.type === 'L' && component.ic && Math.abs(component.ic) > 1e-12) {
+                    console.log(`    🔌 ${component.name}: ic=${component.ic*1000}mA, previousCurrent=${(component.previousValues.get('current') || 0)*1000}mA`);
+                }
+            }
+        }
+    }
+
+    /**
      * 將 DC 結果應用到元件初始條件
      */
     applyDCResultToComponents(components, dcResult) {
         for (const component of components) {
             if (component.type === 'L') {
-                // 為電感設置初始電流
-                const initialCurrent = dcResult.branchCurrents.get(component.name) || 0;
-                component.ic = initialCurrent;
+                // 🔥 修正：保持使用者設定的初始電流，不被 DC 結果覆蓋
+                const userSetIC = component.ic || 0;  // 保存使用者設定值
+                const dcCurrent = dcResult.branchCurrents.get(component.name) || 0;
                 
-                if (this.debug && Math.abs(initialCurrent) > 1e-12) {
-                    console.log(`  🔌 ${component.name}: 初始電流 = ${initialCurrent.toExponential(3)}A`);
+                // 如果使用者設定了非零初始電流，則保持；否則使用 DC 結果
+                if (Math.abs(userSetIC) > 1e-12) {
+                    // 保持使用者的初始電流設定
+                    console.log(`  🔌 ${component.name}: 保持使用者初始電流 = ${userSetIC.toExponential(3)}A (DC=${dcCurrent.toExponential(3)}A)`);
+                } else {
+                    // 使用 DC 分析結果
+                    component.ic = dcCurrent;
+                    if (this.debug && Math.abs(dcCurrent) > 1e-12) {
+                        console.log(`  🔌 ${component.name}: DC 初始電流 = ${dcCurrent.toExponential(3)}A`);
+                    }
                 }
             }
             
@@ -817,12 +1107,13 @@ export class MCPTransientAnalysis {
     /**
      * 更新伴隨模型
      */
-    updateCompanionModels(components, timeStep) {
-        console.log(`🔧 MCPTransientAnalysis.updateCompanionModels 被調用: timeStep=${timeStep}, 組件數=${components.length}`);
+    updateCompanionModels(components, timeStep, stepCount = null) {
+        console.log(`� Gear2 MCPTransientAnalysis.updateCompanionModels: timeStep=${timeStep}, stepCount=${stepCount}, 組件數=${components.length}`);
         for (const component of components) {
             if (component.updateCompanionModel) {
-                console.log(`  ➡️ 調用 ${component.id || component.constructor.name}.updateCompanionModel(${timeStep})`);
-                component.updateCompanionModel(timeStep);
+                console.log(`  ➡️ 調用 ${component.id || component.constructor.name}.updateCompanionModel(${timeStep}, ${stepCount})`);
+                // 🚀 傳遞 stepCount 參數支持 Gear 2 方法
+                component.updateCompanionModel(timeStep, stepCount);
             } else {
                 console.log(`  ⚠️ 跳過 ${component.id || component.constructor.name} (無 updateCompanionModel 方法)`);
             }
@@ -832,7 +1123,7 @@ export class MCPTransientAnalysis {
     /**
      * 求解單個時間步
      */
-    async solveTimeStep(components, time, result) {
+    async solveTimeStep(components, time, result, timeStep) {
         try {
             // === 建立 MNA-LCP 系統 ===
             this.mnaLcpBuilder.reset();
@@ -841,7 +1132,7 @@ export class MCPTransientAnalysis {
             if (schurData.isLinear) {
                 // 純線性系統
                 const solution = schurData.linearSolution;
-                return this.extractAndStoreSolution(solution, components, time, result);
+                return this.extractAndStoreSolution(solution, components, time, result, timeStep);
             }
             
             // === 求解 LCP ===
@@ -865,7 +1156,7 @@ export class MCPTransientAnalysis {
             // === 重構完整解 ===
             const fullSolution = this.mnaLcpBuilder.reconstructFullSolution(lcpResult, schurData);
             
-            return this.extractAndStoreSolution(fullSolution, components, time, result);
+            return this.extractAndStoreSolution(fullSolution, components, time, result, timeStep);
             
         } catch (error) {
             console.error(`🚨 時間步 t=${time} 求解失敗: ${error.message}`);
@@ -880,9 +1171,19 @@ export class MCPTransientAnalysis {
     /**
      * 提取並存儲解
      */
-    extractAndStoreSolution(solution, components, time, result) {
+    extractAndStoreSolution(solution, components, time, result, timeStep) {
         // 提取節點電壓
         const nodeVoltages = this.mnaLcpBuilder.extractNodeVoltages(solution);
+        
+        // 更新電壓控制的 MOSFET 狀態
+        for (const component of components) {
+            if (component.type === 'M_MCP' && component.updateFromNodeVoltages) {
+                component.updateFromNodeVoltages(nodeVoltages);
+            }
+        }
+        
+        // 存儲當前電壓供下一個時間步使用
+        this.previousNodeVoltages = new Map(nodeVoltages);
         
         // 提取支路電流 (包括 MCP 元件電流)
         const branchCurrents = this.mnaLcpBuilder.extractVoltageSourceCurrents(solution);
@@ -921,17 +1222,16 @@ export class MCPTransientAnalysis {
             }
         }
         
-        // 更新元件歷史
+        // 更新元件歷史 - 統一 API 調用
+        const solutionData = {
+            nodeVoltages: nodeVoltages,
+            branchCurrents: branchCurrents
+        };
+        
         for (const component of components) {
             if (component.updateHistory) {
-                // 🔥 修复：为 inductor_v2.js 传递完整参数
-                if (component.constructor.name === 'Inductor' && component.updateHistory.length === 4) {
-                    // 传递电感所需的所有参数: (nodeVoltages, branchCurrents, currentVarName, h)
-                    component.updateHistory(nodeVoltages, branchCurrents, component.name, this.currentTimeStep || 1e-6);
-                } else {
-                    // 对其他组件使用标准调用
-                    component.updateHistory(nodeVoltages, branchCurrents);
-                }
+                // 所有元件現在都支持統一的 updateHistory(solutionData, timeStep) API
+                component.updateHistory(solutionData, timeStep);
             }
         }
         
