@@ -14,17 +14,15 @@ export { NetlistParser };
 export { BaseComponent } from './components/base.js';
 export { Resistor } from './components/resistor.js';
 export { Capacitor } from './components/capacitor.js';
-export { Inductor, CoupledInductor } from './components/inductor.js';
-export { VoltageSource, CurrentSource, VCVS, VCCS, CCCS, CCVS } from './components/sources.js';
+export { Inductor } from './components/inductor.js';
+export { VoltageSource, CurrentSource, VCVS, VCCS } from './components/sources.js';
 export { ThreePhaseSource } from './components/threephase.js';
-export { MOSFET } from './components/mosfet.js';
-export { VoltageControlledMOSFET } from './components/vcmosfet.js';
-export { Diode } from './components/diode.js';
+export { MOSFET_MCP, createNMOSSwitch, createPMOSSwitch, PWMController } from './components/mosfet_mcp.js';
+export { Diode_MCP, createMCPDiode, createSchottkyDiode, createFastRecoveryDiode } from './components/diode_mcp.js';
 export { MultiWindingTransformer } from './components/transformer.js';
 
 // 導出分析工具
-export { TransientAnalysis } from './analysis/transient.js';
-export { DCAnalysis } from './analysis/dc.js';
+export { StepwiseSimulator } from './analysis/stepwise_simulation.js';
 
 
 

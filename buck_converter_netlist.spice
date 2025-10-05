@@ -1,0 +1,46 @@
+* Buck Converter Example Netlist - 修正版
+
+* --- 元件定義 (Component Definitions) ---
+
+* 輸入電壓源 (Input Voltage Source)
+* 從 1 號節點到 0 號節點 (GND)，提供 24V 的直流電壓
+VIN 1 0 DC 24V
+
+* MOSFET 開關 (MOSFET Switch) - 修正節點順序
+* M1: Drain(1) Source(2) Gate(3) - 正確的 AkingSPICE MCP 格式
+M1 1 2 3 NMOS Ron=10m Vth=2V
+
+* 續流二極體 (Freewheeling Diode) - 修正方向
+* D1: Anode(0) Cathode(2) - 從 GND 到開關節點
+D1 0 2 Vf=0.7 Ron=10m
+
+* 電感 (Inductor)
+* L1: 從 2 號節點到 4 號節點，電感值為 100uH，初始電流 0A
+L1 2 4 100uH IC=0
+
+* 輸出電容 (Output Capacitor)  
+* C1: 從 4 號節點到 0 號節點，電容值為 220uF，初始電壓 0V
+C1 4 0 220uF IC=0
+
+* 負載電阻 (Load Resistor)
+* RLOAD: 從 4 號節點到 0 號節點，電阻值為 5 Ohm
+RLOAD 4 0 5
+
+* --- 驅動訊號 (Driving Signal) ---
+
+* 產生脈波訊號 (Pulse Signal) 來驅動 MOSFET
+* VDRIVE: 從 3 號節點到 0 號節點
+* PULSE(V_initial V_pulsed T_delay T_rise T_fall T_pulse_width T_period)
+* 初始電壓 0V，脈波電壓 15V，延遲 0ns，上升/下降時間 10ns
+* 脈波寬度 5us，週期 10us (即 100kHz 開關頻率，50% 工作週期)
+VDRIVE 3 0 PULSE(0 15 0 10n 10n 5u 10u)
+
+* --- 模擬指令 (Simulation Commands) ---
+
+* 暫態分析 (Transient Analysis)
+* .TRAN T_step T_stop
+* 從 0 秒模擬到 100us，每 0.1us 儲存一次數據
+.TRAN 0.1u 100u
+
+* --- 結束 (End of Netlist) ---
+.END

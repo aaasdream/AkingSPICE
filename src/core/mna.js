@@ -23,8 +23,8 @@ export class MNABuilder {
         // 調試選項
         this.debug = options.debug || false;
         
-        // 🔥 新增：Gmin 電導，用於解決浮動節點問題
-        this.gmin = options.gmin || 1e-12; // 預設 1 pS (picoSiemens)
+        // 🔥 修正：增加 Gmin 電導，提供更強穩定性解決矩陣奇異問題
+        this.gmin = options.gmin || 1e-9; // 預設 1 nS (nanoSiemens) - 從 1e-12 增強
         
         // 節點映射：節點名稱 -> 矩陣索引
         this.nodeMap = new Map();

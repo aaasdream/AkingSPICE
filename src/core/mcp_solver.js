@@ -25,11 +25,19 @@ export class LCPSolver {
 
     /**
      * 求解 LCP: w = Mz + q, w ≥ 0, z ≥ 0, w'z = 0
-     * @param {Matrix} M - n×n 矩陣
-     * @param {Vector} q - n×1 向量  
+     * @param {Matrix|Array} M - n×n 矩陣
+     * @param {Vector|Array} q - n×1 向量  
      * @returns {Object} 包含 {z, w, converged, iterations, error} 的結果
      */
     solve(M, q) {
+        // 🔥 修正：支持陣列輸入
+        if (Array.isArray(M)) {
+            M = new Matrix(M);
+        }
+        if (Array.isArray(q)) {
+            q = new Vector(q);
+        }
+        
         const n = q.size;
         let iterations = 0;
 
@@ -56,7 +64,7 @@ export class LCPSolver {
         if (qNonNegative) {
             trivialSolution = {
                 z: Array(n).fill(0),
-                w: q.data.slice(),
+                w: q.data ? q.data.slice() : [...q],
                 converged: true,
                 iterations: 0
             };
@@ -453,17 +461,253 @@ export class MCPSolver {
 }
 
 /**
+ * 🚀 Quadratic Programming (QP) 求解器
+ * 作為 Lemke 失敗時的現代備用方案
+ * 
+ * 將 LCP 轉換為 QP：
+ * min 0.5 * z'Mz + q'z
+ * s.t. Mz + q >= 0, z >= 0
+ */
+export class QPSolver {
+    constructor(options = {}) {
+        this.maxIterations = options.maxIterations || 5000;
+        this.tolerance = options.tolerance || 1e-10;
+        this.debug = options.debug || false;
+    }
+    
+    /**
+     * 使用內點法求解 QP
+     */
+    solve(M, q) {
+        if (this.debug) {
+            console.log('🎯 使用 QP 內點法求解 LCP...');
+        }
+        
+        const n = q.size;
+        
+        // 內點法參數
+        let mu = 1.0;           // 障礙參數
+        const muReduction = 0.1; // μ 收縮因子
+        const minMu = 1e-10;    // 最小 μ 值
+        
+        // 初始點 (可行內點)
+        let z = new Array(n).fill(0.1);
+        let s = new Array(n).fill(0.1); // 鬆弛變量
+        
+        for (let iter = 0; iter < this.maxIterations; iter++) {
+            // 計算 KKT 條件的殘差
+            const gradLag = this.computeGradientLagrangian(M, q, z, s);
+            const residualNorm = Math.sqrt(gradLag.reduce((sum, r) => sum + r*r, 0));
+            
+            if (this.debug && iter % 100 === 0) {
+                console.log(`  QP iter ${iter}: μ=${mu.toExponential(2)}, residual=${residualNorm.toExponential(2)}`);
+            }
+            
+            // 收斂檢查
+            if (residualNorm < this.tolerance && mu < minMu) {
+                if (this.debug) {
+                    console.log(`✅ QP 收斂於 ${iter} 步`);
+                }
+                
+                // 驗證解
+                const w = new Array(n);
+                for (let i = 0; i < n; i++) {
+                    w[i] = 0;
+                    for (let j = 0; j < n; j++) {
+                        w[i] += M.get(i, j) * z[j];
+                    }
+                    w[i] += q.get(i);
+                }
+                
+                return {
+                    z: z,
+                    w: w,
+                    converged: true,
+                    iterations: iter,
+                    method: 'QP-Interior-Point'
+                };
+            }
+            
+            // 牛頓步長計算 (簡化版)
+            const deltaZ = this.computeNewtonStep(M, q, z, s, mu);
+            
+            // 線搜索和更新
+            const alpha = this.lineSearch(M, q, z, s, deltaZ);
+            for (let i = 0; i < n; i++) {
+                z[i] += alpha * deltaZ[i];
+                z[i] = Math.max(z[i], 1e-12); // 保持正性
+                
+                // 更新鬆弛變量
+                s[i] = 0;
+                for (let j = 0; j < n; j++) {
+                    s[i] += M.get(i, j) * z[j];
+                }
+                s[i] += q.get(i);
+                s[i] = Math.max(s[i], 1e-12); // 保持正性
+            }
+            
+            // 減少障礙參數
+            if (iter % 10 === 0) {
+                mu = Math.max(mu * muReduction, minMu);
+            }
+        }
+        
+        console.log('⚠️ QP 未收斂到指定精度');
+        return {
+            z: z,
+            w: null,
+            converged: false,
+            iterations: this.maxIterations,
+            error: 'QP 最大迭代數達到',
+            method: 'QP-Interior-Point'
+        };
+    }
+    
+    /**
+     * 計算拉格朗日梯度
+     */
+    computeGradientLagrangian(M, q, z, s) {
+        const n = z.length;
+        const grad = new Array(n);
+        
+        for (let i = 0; i < n; i++) {
+            grad[i] = q.get(i);
+            for (let j = 0; j < n; j++) {
+                grad[i] += M.get(i, j) * z[j];
+            }
+        }
+        
+        return grad;
+    }
+    
+    /**
+     * 計算牛頓步長 (簡化版)
+     */
+    computeNewtonStep(M, q, z, s, mu) {
+        const n = z.length;
+        const deltaZ = new Array(n);
+        
+        // 簡化的牛頓步長計算
+        for (let i = 0; i < n; i++) {
+            let Mii = M.get(i, i);
+            if (Math.abs(Mii) < 1e-12) Mii = 1e-6; // 正則化
+            
+            deltaZ[i] = -mu / (z[i] * s[i]) / Mii;
+        }
+        
+        return deltaZ;
+    }
+    
+    /**
+     * 線搜索
+     */
+    lineSearch(M, q, z, s, deltaZ) {
+        let alpha = 1.0;
+        const reduction = 0.5;
+        const minAlpha = 1e-8;
+        
+        while (alpha > minAlpha) {
+            let valid = true;
+            
+            // 檢查新點的可行性
+            for (let i = 0; i < z.length; i++) {
+                if (z[i] + alpha * deltaZ[i] <= 0) {
+                    valid = false;
+                    break;
+                }
+            }
+            
+            if (valid) return alpha;
+            alpha *= reduction;
+        }
+        
+        return minAlpha;
+    }
+}
+
+/**
+ * 🔧 增強的 LCP 求解器 - 自動回退到 QP
+ */
+export class RobustLCPSolver {
+    constructor(options = {}) {
+        this.lemkeSolver = new LCPSolver(options);
+        this.qpSolver = new QPSolver(options);
+        this.debug = options.debug || false;
+    }
+    
+    /**
+     * 求解 LCP - 自動選擇最佳方法
+     */
+    solve(M, q) {
+        if (this.debug) {
+            console.log('🛡️ 使用強健 LCP 求解器...');
+        }
+        
+        // 首先嘗試 Lemke 算法 (快速)
+        try {
+            const lemkeResult = this.lemkeSolver.solve(M, q);
+            
+            if (lemkeResult.converged) {
+                if (this.debug) {
+                    console.log('✅ Lemke 算法成功');
+                }
+                return lemkeResult;
+            } else {
+                if (this.debug) {
+                    console.log('⚠️ Lemke 失敗，切換到 QP 方法');
+                    console.log(`   失敗原因: ${lemkeResult.error}`);
+                }
+            }
+        } catch (error) {
+            if (this.debug) {
+                console.log('❌ Lemke 異常，切換到 QP 方法');
+                console.log(`   異常: ${error.message}`);
+            }
+        }
+        
+        // 回退到 QP 求解器
+        try {
+            const qpResult = this.qpSolver.solve(M, q);
+            if (this.debug) {
+                if (qpResult.converged) {
+                    console.log('✅ QP 方法成功救援');
+                } else {
+                    console.log('❌ QP 方法也失敗');
+                }
+            }
+            return qpResult;
+        } catch (error) {
+            return {
+                z: null,
+                w: null,
+                converged: false,
+                iterations: 0,
+                error: `所有方法失敗: ${error.message}`,
+                method: 'All-Failed'
+            };
+        }
+    }
+}
+
+/**
  * 創建預配置的 LCP 求解器
  */
 export function createLCPSolver(options = {}) {
     const defaultOptions = {
-        maxIterations: 1000,
+        maxIterations: 5000,      // 增加到 5000
         zeroTolerance: 1e-12,
-        pivotTolerance: 1e-15,
+        pivotTolerance: 1e-10,    // 放寬到 1e-10
         debug: false
     };
 
-    return new LCPSolver({ ...defaultOptions, ...options });
+    // 🚀 使用強健求解器作為默認選擇
+    const useRobustSolver = options.useRobustSolver !== false; // 默認啟用
+    
+    if (useRobustSolver) {
+        return new RobustLCPSolver({ ...defaultOptions, ...options });
+    } else {
+        return new LCPSolver({ ...defaultOptions, ...options });
+    }
 }
 
 /**

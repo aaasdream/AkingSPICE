@@ -89,19 +89,20 @@ export class MOSFET_MCP extends BaseComponent {
      */
     registerVariables(mnaBuilder) {
         // === 1. 通道變量和方程 ===
-        // 註冊通道電流變量，並為其保留一個MNA方程的位置
+        // 註冊通道電流變量
         this.channelCurrentIndex = mnaBuilder.addExtraVariable(`${this.name}_Ids`);
-        this.channelEquationIndex = this.channelCurrentIndex;
+        // 🔥 修正：通道電流需要一個實際的 MNA 方程
+        this.channelEquationIndex = mnaBuilder.addEquation();
         
         // === 2. 體二極體變量和約束 (LCP) ===
         // 註冊體二極管電流變量 (純 LCP 變量，無 MNA 方程)
-        this.bodyCurrentIndex = mnaBuilder.addExtraVariable(`${this.name}_Ibody`);
+        this.bodyCurrentIndex = mnaBuilder.addLCPVariable(`${this.name}_Ibody`);
         
         // 只為體二極管註冊一個 LCP 約束
         this.bodyComplementarityIndex = mnaBuilder.addComplementarityEquation();
         
         if (mnaBuilder.debug) {
-            console.log(`    📝 ${this.name}: 通道電流[${this.channelCurrentIndex}] (MNA), 體電流[${this.bodyCurrentIndex}] (LCP)`);
+            console.log(`    📝 ${this.name}: 通道電流[${this.channelCurrentIndex}] -> 方程[${this.channelEquationIndex}] (MNA), 體電流[${this.bodyCurrentIndex}] (LCP)`);
         }
     }
 
@@ -151,6 +152,10 @@ export class MOSFET_MCP extends BaseComponent {
         // 使用預先註冊的方程索引約束通道電流
         const eqIndex = this.channelEquationIndex;
         
+        if (mnaBuilder.debug) {
+            console.log(`  📐 ${this.name} 通道約束: 方程[${eqIndex}], 電流[${this.channelCurrentIndex}], 狀態=${this.gateState}`);
+        }
+        
         if (this.gateState) {
             // === 導通狀態：Vds = Ron * Ids ===
             // 方程：Vd - Vs - Ron*Ids = 0
@@ -159,11 +164,19 @@ export class MOSFET_MCP extends BaseComponent {
             mnaBuilder.addToMatrix(eqIndex, this.channelCurrentIndex, -this.Ron);  // -Ron*Ids
             mnaBuilder.addToRHS(eqIndex, 0.0);                               // = 0
             
+            if (mnaBuilder.debug) {
+                console.log(`    導通約束: Vd[${nD}] - Vs[${nS}] - ${this.Ron}*Ids[${this.channelCurrentIndex}] = 0`);
+            }
+            
         } else {
             // === 截止狀態：Ids = 0 ===  
             // 方程：Ids = 0
             mnaBuilder.addToMatrix(eqIndex, this.channelCurrentIndex, 1.0);  // Ids
             mnaBuilder.addToRHS(eqIndex, 0.0);                               // = 0
+            
+            if (mnaBuilder.debug) {
+                console.log(`    截止約束: Ids[${this.channelCurrentIndex}] = 0 (方程[${eqIndex}])`);
+            }
         }
     }
 

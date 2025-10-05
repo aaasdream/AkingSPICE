@@ -24,13 +24,13 @@ export class DC_MCP_Solver {
         this.mnaLcpBuilder = new MNA_LCP_Builder({
             debug: this.debug,
             isDcMode: true,  // 標記為 DC 模式
-            gmin: options.gmin // 🔥 確保傳遞 gmin
+            gmin: options.gmin || 1e-9 // 🔥 默認使用更強的 gmin 穩定性
         });
         
-        // 創建 LCP 求解器
+        // 創建 LCP 求解器 - 優化參數避免無界射線
         this.lcpSolver = createLCPSolver({
-            maxIterations: options.maxLcpIterations || 1000,
-            tolerance: options.lcpTolerance || 1e-12,
+            maxIterations: options.maxLcpIterations || 5000,    // 增加到 5000
+            tolerance: options.lcpTolerance || 1e-10,          // 放寬到 1e-10
             debug: this.debug
         });
     }

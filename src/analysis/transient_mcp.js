@@ -137,11 +137,32 @@ export class MNA_LCP_Builder extends MNABuilder {
     }
     
     /**
+     * 添加純LCP變量 (不參與MNA系統約束)
+     * @param {string} name - 變量名稱
+     * @returns {number} 變量索引
+     */
+    addLCPVariable(name) {
+        // LCP變量需要在完整變量空間中有索引，與MNA變量共享索引空間
+        const index = this.matrixSize + this.extraVariables.length;
+        this.extraVariables.push({
+            name,
+            index,
+            type: 'lcp'  // 標記為純LCP變量
+        });
+        
+        if (this.debug) {
+            console.log(`  ➕ 添加LCP變量 ${name} -> 索引 ${index}`);
+        }
+        
+        return index;
+    }
+
+    /**
      * 添加額外方程
      * @returns {number} 方程索引
      */
     addEquation() {
-        const index = this.matrixSize + this.extraVariables.length + this.extraEquations;
+        const index = this.matrixSize + this.extraEquations;
         this.extraEquations++;
         return index;
     }
@@ -221,7 +242,9 @@ export class MNA_LCP_Builder extends MNABuilder {
         // === 第3步：計算最終矩陣維度 ===
         // 最終大小由節點數、額外變量和顯式添加的額外方程決定
         // 注意：LCP 變量通過互補約束定義，不需要額外的 MNA 方程
-        this.finalMatrixSize = this.matrixSize + this.extraVariables.length + this.extraEquations;
+        // MNA 系統大小 = 節點方程數 + 額外MNA方程數  
+        // 注意：額外變量不自動增加方程數，只有實際的約束方程才增加
+        this.finalMatrixSize = this.matrixSize + this.extraEquations;
         
         if (this.debug) {
             console.log(`📊 系統維度分析:`);
@@ -232,10 +255,16 @@ export class MNA_LCP_Builder extends MNABuilder {
             console.log(`  最終系統: ${this.finalMatrixSize}×${this.finalMatrixSize}`);
         }
         
-        // === 第4步：初始化矩陣和向量 ===
-        this.matrix = Matrix.zeros(this.finalMatrixSize, this.finalMatrixSize);
+        // === 第4步：初始化矩陣和向量 ===  
+        // 總變量數包括所有MNA變量和LCP變量
+        const totalVariableCount = this.matrixSize + this.extraVariables.length;
+        
+        // MNA矩陣：行數=MNA方程數，列數=總變量數
+        this.matrix = Matrix.zeros(this.finalMatrixSize, totalVariableCount);
         this.rhs = Vector.zeros(this.finalMatrixSize);
-        this.lcpM = Matrix.zeros(this.lcpConstraintCount, this.finalMatrixSize);
+        
+        // LCP矩陣：行數=LCP約束數，列數=總變量數  
+        this.lcpM = Matrix.zeros(this.lcpConstraintCount, totalVariableCount);
         this.lcpQ = Vector.zeros(this.lcpConstraintCount);
         
         // ==================== 🔥 修正開始 🔥 ====================
@@ -521,13 +550,18 @@ export class MNA_LCP_Builder extends MNABuilder {
         
         const q_final = q.add(E_A_inv_b);
         
+        // 🔍 添加 M 矩陣診斷 - 檢測無界射線潛在原因
         if (this.debug) {
             console.log(`  ✅ 舒爾補完成，最終 LCP: ${M_final.rows}×${M_final.cols}`);
+            this.diagnoseLCPMatrix(M_final, q_final);
         }
         
+        // 🔧 如果檢測到問題，嘗試對角擾動修復
+        const { stabilizedM, stabilizedQ } = this.stabilizeLCPMatrix(M_final, q_final);
+        
         return {
-            M: M_final,
-            q: q_final,
+            M: stabilizedM,
+            q: stabilizedQ,
             isLinear: false,
             // 反向求解需要的數據
             A_inv_B,
@@ -570,6 +604,138 @@ export class MNA_LCP_Builder extends MNABuilder {
     }
     
     /**
+     * 🔍 診斷 LCP 矩陣 M 的數學性質
+     * 分析無界射線的潜在原因
+     */
+    diagnoseLCPMatrix(M, q) {
+        console.log('🔬 === LCP 矩陣數學診斷 ===');
+        
+        // 1. 基本信息
+        console.log(`📏 矩陣維度: ${M.rows}×${M.cols}`);
+        console.log(`📊 q 向量範數: ${this.vectorNorm(q).toExponential(3)}`);
+        
+        // 2. 對角線分析
+        const diagonalElements = [];
+        let negativeDiagonals = 0;
+        let zeroDiagonals = 0;
+        
+        for (let i = 0; i < Math.min(M.rows, M.cols); i++) {
+            const diag = M.get(i, i);
+            diagonalElements.push(diag);
+            if (diag < -1e-12) negativeDiagonals++;
+            if (Math.abs(diag) < 1e-12) zeroDiagonals++;
+        }
+        
+        console.log(`🔢 對角線元素範圍: [${Math.min(...diagonalElements).toExponential(2)}, ${Math.max(...diagonalElements).toExponential(2)}]`);
+        console.log(`❌ 負對角元素: ${negativeDiagonals}/${diagonalElements.length}`);
+        console.log(`⚠️  零對角元素: ${zeroDiagonals}/${diagonalElements.length}`);
+        
+        // 3. 對稱性檢查
+        let asymmetryError = 0;
+        if (M.rows === M.cols) {
+            for (let i = 0; i < M.rows; i++) {
+                for (let j = 0; j < M.cols; j++) {
+                    asymmetryError = Math.max(asymmetryError, Math.abs(M.get(i, j) - M.get(j, i)));
+                }
+            }
+            console.log(`🔄 對稱性誤差: ${asymmetryError.toExponential(3)} ${asymmetryError < 1e-10 ? '✅' : '❌'}`);
+        }
+        
+        // 4. 條件數估計 (簡化版)
+        const frobeniusNorm = this.matrixFrobeniusNorm(M);
+        console.log(`📐 Frobenius 範數: ${frobeniusNorm.toExponential(3)}`);
+        
+        // 5. 無界射線風險評估
+        const riskFactors = [];
+        if (negativeDiagonals > 0) riskFactors.push('負對角元素');
+        if (zeroDiagonals > 0) riskFactors.push('零對角元素');
+        if (asymmetryError > 1e-8) riskFactors.push('顯著非對稱');
+        if (frobeniusNorm > 1e6) riskFactors.push('矩陣過大');
+        
+        if (riskFactors.length > 0) {
+            console.log(`🚨 無界射線風險因子: ${riskFactors.join(', ')}`);
+            console.log('💡 建議: 增加 Gmin 正則化或使用 QP 求解器');
+        } else {
+            console.log('✅ M 矩陣看起來數值穩定');
+        }
+        
+        // 6. 詳細矩陣輸出 (小矩陣)
+        if (M.rows <= 6 && M.cols <= 6) {
+            console.log('🔍 完整 M 矩陣:');
+            M.print(4);
+            console.log('🔍 q 向量:', q.data.map(x => x.toExponential(3)).join(', '));
+        }
+        
+        console.log('=== 診斷完成 ===');
+    }
+    
+    /**
+     * 🔧 LCP 矩陣穩定化 - 對角擾動修復
+     */
+    stabilizeLCPMatrix(M, q) {
+        // 檢查是否需要穩定化
+        let needsStabilization = false;
+        const perturbationEpsilon = 1e-6;
+        
+        // 檢測負對角元素
+        for (let i = 0; i < Math.min(M.rows, M.cols); i++) {
+            if (M.get(i, i) < -1e-12) {
+                needsStabilization = true;
+                break;
+            }
+        }
+        
+        if (!needsStabilization) {
+            return { stabilizedM: M, stabilizedQ: q };
+        }
+        
+        console.log(`🔧 檢測到數值不穩定，應用對角擾動 ε=${perturbationEpsilon.toExponential()}`);
+        
+        // 創建穩定化矩陣：M' = M + εI
+        const stabilizedM = M.clone();
+        for (let i = 0; i < Math.min(M.rows, M.cols); i++) {
+            const original = stabilizedM.get(i, i);
+            stabilizedM.set(i, i, original + perturbationEpsilon);
+        }
+        
+        console.log('✅ 對角擾動完成');
+        if (this.debug) {
+            console.log('🔍 穩定化後對角線:');
+            const newDiagonals = [];
+            for (let i = 0; i < Math.min(stabilizedM.rows, stabilizedM.cols); i++) {
+                newDiagonals.push(stabilizedM.get(i, i).toExponential(3));
+            }
+            console.log('  ', newDiagonals.join(', '));
+        }
+        
+        return { stabilizedM, stabilizedQ: q }; // q 向量不變
+    }
+    
+    /**
+     * 🧮 向量 2-範數
+     */
+    vectorNorm(v) {
+        let sum = 0;
+        for (let i = 0; i < v.size; i++) {
+            sum += v.get(i) * v.get(i);
+        }
+        return Math.sqrt(sum);
+    }
+    
+    /**
+     * 🧮 矩陣 Frobenius 範數
+     */
+    matrixFrobeniusNorm(M) {
+        let sum = 0;
+        for (let i = 0; i < M.rows; i++) {
+            for (let j = 0; j < M.cols; j++) {
+                sum += M.get(i, j) * M.get(i, j);
+            }
+        }
+        return Math.sqrt(sum);
+    }
+    
+    /**
      * 從 LCP 解重構完整解
      */
     reconstructFullSolution(lcpSolution, schurData) {
@@ -577,7 +743,9 @@ export class MNA_LCP_Builder extends MNABuilder {
             return schurData.linearSolution;
         }
         
-        const fullSolution = Vector.zeros(this.finalMatrixSize);
+        // 完整解向量需要包含所有變量（MNA + LCP變量）
+        const totalVariableCount = this.matrixSize + this.extraVariables.length;
+        const fullSolution = Vector.zeros(totalVariableCount);
         
         // z 變量 (LCP 解)
         for (let i = 0; i < schurData.zcpIndices.length; i++) {
