@@ -17,9 +17,9 @@ import { Matrix, Vector } from './linalg.js';
  */
 export class LCPSolver {
     constructor(options = {}) {
-        this.maxIterations = options.maxIterations || 1000;
+        this.maxIterations = options.maxIterations || 5000;   // Increased for switching circuits
         this.zeroTolerance = options.zeroTolerance || 1e-12;
-        this.pivotTolerance = options.pivotTolerance || 1e-12;  // 放寬容差提高數值穩定性
+        this.pivotTolerance = options.pivotTolerance || 1e-10; // Slightly relaxed for stability  // 放寬容差提高數值穩定性
         this.debug = options.debug || false;
     }
 
@@ -32,10 +32,24 @@ export class LCPSolver {
     solve(M, q) {
         // 🔥 修正：支持陣列輸入
         if (Array.isArray(M)) {
-            M = new Matrix(M);
+            if (Array.isArray(M[0])) {
+                // 2D 陣列
+                M = new Matrix(M.length, M[0].length, M);
+            } else {
+                // 1D 陣列，假設為正方形矩陣
+                const n = Math.sqrt(M.length);
+                if (n !== Math.floor(n)) {
+                    throw new Error(`無法將長度為 ${M.length} 的 1D 陣列轉換為正方形矩陣`);
+                }
+                const data = [];
+                for (let i = 0; i < n; i++) {
+                    data.push(M.slice(i * n, (i + 1) * n));
+                }
+                M = new Matrix(n, n, data);
+            }
         }
         if (Array.isArray(q)) {
-            q = new Vector(q);
+            q = new Vector(q.length, q);
         }
         
         const n = q.size;
@@ -470,8 +484,8 @@ export class MCPSolver {
  */
 export class QPSolver {
     constructor(options = {}) {
-        this.maxIterations = options.maxIterations || 5000;
-        this.tolerance = options.tolerance || 1e-10;
+        this.maxIterations = options.maxIterations || 20000;  // 🔥 增加到 20000 處理開關電路
+        this.tolerance = options.tolerance || 1e-8;         // 🔥 放寬容忍度至 1e-8 適應開關電路
         this.debug = options.debug || false;
     }
     
@@ -483,30 +497,103 @@ export class QPSolver {
             console.log('🎯 使用 QP 內點法求解 LCP...');
         }
         
+        // 🔥 支持陣列輸入並驗證
+        if (Array.isArray(M)) {
+            if (Array.isArray(M[0])) {
+                M = new Matrix(M.length, M[0].length, M);
+            } else {
+                const n = Math.sqrt(M.length);
+                if (n !== Math.floor(n)) {
+                    throw new Error(`無法將長度為 ${M.length} 的 1D 陣列轉換為正方形矩陣`);
+                }
+                const data = [];
+                for (let i = 0; i < n; i++) {
+                    data.push(M.slice(i * n, (i + 1) * n));
+                }
+                M = new Matrix(n, n, data);
+            }
+        }
+        if (Array.isArray(q)) {
+            q = new Vector(q.length, q);
+        }
+        
         const n = q.size;
         
-        // 內點法參數
-        let mu = 1.0;           // 障礙參數
-        const muReduction = 0.1; // μ 收縮因子
-        const minMu = 1e-10;    // 最小 μ 值
+        // 驗證輸入
+        if (!n || n <= 0) {
+            throw new Error(`無效的向量大小: ${n}`);
+        }
+        if (!M || M.rows !== n || M.cols !== n) {
+            throw new Error(`矩陣尺寸不匹配: M是${M?.rows}×${M?.cols}，q大小是${n}`);
+        }
         
-        // 初始點 (可行內點)
-        let z = new Array(n).fill(0.1);
-        let s = new Array(n).fill(0.1); // 鬆弛變量
+        // 內點法參數 - 針對開關電路優化
+        let mu = 0.1;           // 較小的初始障礙參數
+        const muReduction = 0.3; // 較保守的 μ 收縮因子  
+        const minMu = 1e-12;    // 更嚴格的最小 μ 值
+        
+        // 改進的初始點選擇
+        let z = new Array(n);
+        let s = new Array(n); // 鬆弛變量
+        
+        // 🔥 智能初始化 - 處理矩陣條件數問題
+        let maxDiag = 0, minDiag = Infinity;
+        for (let i = 0; i < n; i++) {
+            const Mii = Math.abs(M.get(i, i));
+            maxDiag = Math.max(maxDiag, Mii);
+            minDiag = Math.min(minDiag, Mii > 1e-15 ? Mii : Infinity);
+        }
+        
+        const condEst = minDiag !== Infinity ? maxDiag / minDiag : 1e12;
+        const regularization = condEst > 1e10 ? 1e-6 : 1e-9;
+        
+        if (this.debug && condEst > 1e10) {
+            console.log(`  ⚠️ 檢測到高條件數 M 矩陣 (~${condEst.toExponential(2)})`);
+            console.log(`  📊 應用正則化: ${regularization.toExponential(2)}`);
+        }
+        
+        for (let i = 0; i < n; i++) {
+            let Mii = M.get(i, i);
+            const qi = q.get(i);
+            
+            // 添加正則化到對角元素
+            if (Math.abs(Mii) < 1e-12) {
+                Mii += regularization;
+                M.set(i, i, Mii);  // 直接修改矩陣
+            }
+            
+            if (Math.abs(Mii) > 1e-12 && qi < 0) {
+                z[i] = Math.max(0.01, -qi / Mii);
+            } else {
+                z[i] = 0.1;
+            }
+            s[i] = Math.max(0.01, Math.abs(qi) || 0.1);
+        }
         
         for (let iter = 0; iter < this.maxIterations; iter++) {
             // 計算 KKT 條件的殘差
             const gradLag = this.computeGradientLagrangian(M, q, z, s);
             const residualNorm = Math.sqrt(gradLag.reduce((sum, r) => sum + r*r, 0));
             
+            // 🔥 增強的收斂檢查：同時檢查互補性和可行性
+            const complementarityGap = this.computeComplementarityGap(z, s);
+            const feasibilityViolation = this.computeFeasibilityViolation(M, q, z, s);
+            
             if (this.debug && iter % 100 === 0) {
                 console.log(`  QP iter ${iter}: μ=${mu.toExponential(2)}, residual=${residualNorm.toExponential(2)}`);
+                console.log(`    互補性間隙: ${complementarityGap.toExponential(2)}, 可行性違反: ${feasibilityViolation.toExponential(2)}`);
             }
             
-            // 收斂檢查
-            if (residualNorm < this.tolerance && mu < minMu) {
+            // 🔥 增強的收斂檢查 - 多重條件
+            const converged = (residualNorm < this.tolerance) && 
+                            (complementarityGap < this.tolerance) && 
+                            (feasibilityViolation < this.tolerance) && 
+                            (mu < minMu);
+                            
+            if (converged) {
                 if (this.debug) {
                     console.log(`✅ QP 收斂於 ${iter} 步`);
+                    console.log(`  最終指標: residual=${residualNorm.toExponential(2)}, gap=${complementarityGap.toExponential(2)}, violation=${feasibilityViolation.toExponential(2)}`);
                 }
                 
                 // 驗證解
@@ -524,7 +611,9 @@ export class QPSolver {
                     w: w,
                     converged: true,
                     iterations: iter,
-                    method: 'QP-Interior-Point'
+                    method: 'QP-Interior-Point',
+                    finalResidual: residualNorm,
+                    complementarityGap: complementarityGap
                 };
             }
             
@@ -573,7 +662,17 @@ export class QPSolver {
         for (let i = 0; i < n; i++) {
             grad[i] = q.get(i);
             for (let j = 0; j < n; j++) {
-                grad[i] += M.get(i, j) * z[j];
+                const Mij = M.get(i, j);
+                if (isNaN(Mij) || !isFinite(Mij)) {
+                    throw new Error(`Matrix element M[${i},${j}] is ${Mij}`);
+                }
+                if (isNaN(z[j]) || !isFinite(z[j])) {
+                    throw new Error(`Variable z[${j}] is ${z[j]}`);
+                }
+                grad[i] += Mij * z[j];
+            }
+            if (isNaN(grad[i]) || !isFinite(grad[i])) {
+                throw new Error(`Gradient element grad[${i}] is ${grad[i]}`);
             }
         }
         
@@ -592,7 +691,21 @@ export class QPSolver {
             let Mii = M.get(i, i);
             if (Math.abs(Mii) < 1e-12) Mii = 1e-6; // 正則化
             
-            deltaZ[i] = -mu / (z[i] * s[i]) / Mii;
+            // 🔥 防止除零和 NaN
+            const zi = Math.max(z[i], 1e-12);
+            const si = Math.max(s[i], 1e-12);
+            const denominator = zi * si * Mii;
+            
+            if (Math.abs(denominator) < 1e-15) {
+                deltaZ[i] = 0; // 安全回退
+            } else {
+                deltaZ[i] = -mu / denominator;
+            }
+            
+            // 檢查結果
+            if (isNaN(deltaZ[i]) || !isFinite(deltaZ[i])) {
+                deltaZ[i] = 0; // 強制設為零避免 NaN 擴散
+            }
         }
         
         return deltaZ;
@@ -623,6 +736,65 @@ export class QPSolver {
         
         return minAlpha;
     }
+    
+    /**
+     * 🔥 計算互補性間隙
+     */
+    computeComplementarityGap(z, s) {
+        let gap = 0;
+        for (let i = 0; i < z.length; i++) {
+            const product = z[i] * s[i];
+            if (isNaN(product) || !isFinite(product)) {
+                console.warn(`⚠️ NaN 檢測在互補性間隙計算: z[${i}]=${z[i]}, s[${i}]=${s[i]}`);
+                return NaN;
+            }
+            gap += product;
+        }
+        return gap;
+    }
+    
+    /**
+     * 🔥 計算可行性違反
+     */
+    computeFeasibilityViolation(M, q, z, s) {
+        let violation = 0;
+        for (let i = 0; i < z.length; i++) {
+            // 檢查數值有效性
+            if (isNaN(z[i]) || !isFinite(z[i])) {
+                console.warn(`⚠️ NaN 檢測在 z[${i}]=${z[i]}`);
+                return NaN;
+            }
+            if (isNaN(s[i]) || !isFinite(s[i])) {
+                console.warn(`⚠️ NaN 檢測在 s[${i}]=${s[i]}`);
+                return NaN;
+            }
+            
+            // 檢查 z >= 0
+            if (z[i] < 0) violation += Math.abs(z[i]);
+            
+            // 檢查 s >= 0 
+            if (s[i] < 0) violation += Math.abs(s[i]);
+            
+            // 檢查 Mz + q = s
+            let constraint = q.get(i);
+            for (let j = 0; j < z.length; j++) {
+                const Mij = M.get(i, j);
+                if (isNaN(Mij) || !isFinite(Mij) || isNaN(z[j]) || !isFinite(z[j])) {
+                    console.warn(`⚠️ NaN 檢測在約束計算: M[${i},${j}]=${Mij}, z[${j}]=${z[j]}`);
+                    return NaN;
+                }
+                constraint += Mij * z[j];
+            }
+            
+            const constraintViolation = Math.abs(constraint - s[i]);
+            if (isNaN(constraintViolation) || !isFinite(constraintViolation)) {
+                console.warn(`⚠️ NaN 檢測在約束違反: constraint=${constraint}, s[${i}]=${s[i]}`);
+                return NaN;
+            }
+            violation += constraintViolation;
+        }
+        return violation;
+    }
 }
 
 /**
@@ -636,76 +808,133 @@ export class RobustLCPSolver {
     }
     
     /**
-     * 求解 LCP - 自動選擇最佳方法
+     * 求解 LCP - 自動選擇最佳方法，包含漸進正則化
      */
     solve(M, q) {
         if (this.debug) {
             console.log('🛡️ 使用強健 LCP 求解器...');
         }
         
-        // 首先嘗試 Lemke 算法 (快速)
-        try {
-            const lemkeResult = this.lemkeSolver.solve(M, q);
-            
-            if (lemkeResult.converged) {
-                if (this.debug) {
-                    console.log('✅ Lemke 算法成功');
-                }
-                return lemkeResult;
+        // 🔥 克隆矩陣避免污染原始數據
+        let M_work, q_work;
+        
+        if (Array.isArray(M)) {
+            if (Array.isArray(M[0])) {
+                // 2D 陣列
+                M_work = new Matrix(M.length, M[0].length, M);
             } else {
+                // 1D 陣列，假設為正方形矩陣
+                const n = Math.sqrt(M.length);
+                if (n !== Math.floor(n)) {
+                    throw new Error(`無法將長度為 ${M.length} 的 1D 陣列轉換為正方形矩陣`);
+                }
+                const data = [];
+                for (let i = 0; i < n; i++) {
+                    data.push(M.slice(i * n, (i + 1) * n));
+                }
+                M_work = new Matrix(n, n, data);
+            }
+        } else {
+            M_work = M.clone();
+        }
+        
+        if (Array.isArray(q)) {
+            q_work = new Vector(q.length, q);
+        } else {
+            q_work = q.clone();
+        }
+        
+        let attempt = 0;
+        const maxAttempts = 3;
+        
+        while (attempt < maxAttempts) {
+            // 嘗試 Lemke 算法
+            try {
+                const lemkeResult = this.lemkeSolver.solve(M_work, q_work);
+                
+                if (lemkeResult.converged) {
+                    if (this.debug) {
+                        console.log(`✅ Lemke 算法成功 (嘗試 ${attempt + 1})`);
+                    }
+                    return lemkeResult;
+                } else {
+                    if (this.debug) {
+                        console.log(`⚠️ Lemke 嘗試 ${attempt + 1} 失敗: ${lemkeResult.error}`);
+                    }
+                }
+            } catch (error) {
                 if (this.debug) {
-                    console.log('⚠️ Lemke 失敗，切換到 QP 方法');
-                    console.log(`   失敗原因: ${lemkeResult.error}`);
+                    console.log(`❌ Lemke 嘗試 ${attempt + 1} 異常: ${error.message}`);
                 }
             }
-        } catch (error) {
-            if (this.debug) {
-                console.log('❌ Lemke 異常，切換到 QP 方法');
-                console.log(`   異常: ${error.message}`);
+            
+            // 如果 Lemke 失敗，嘗試 QP
+            try {
+                const qpResult = this.qpSolver.solve(M_work, q_work);
+                if (qpResult.converged) {
+                    if (this.debug) {
+                        console.log(`✅ QP 方法救援成功 (嘗試 ${attempt + 1})`);
+                    }
+                    return qpResult;
+                } else {
+                    if (this.debug) {
+                        console.log(`⚠️ QP 嘗試 ${attempt + 1} 失敗`);
+                    }
+                }
+            } catch (qpError) {
+                if (this.debug) {
+                    console.log(`❌ QP 嘗試 ${attempt + 1} 異常: ${qpError.message}`);
+                }
+            }
+            
+            // 🔥 漸進正則化策略
+            attempt++;
+            if (attempt < maxAttempts) {
+                const regularization = 1e-8 * Math.pow(10, attempt - 1);
+                if (this.debug) {
+                    console.log(`🔧 應用漸進正則化: ${regularization.toExponential(2)}`);
+                }
+                for (let i = 0; i < M_work.rows; i++) {
+                    M_work.set(i, i, M_work.get(i, i) + regularization);
+                }
             }
         }
         
-        // 回退到 QP 求解器
-        try {
-            const qpResult = this.qpSolver.solve(M, q);
-            if (this.debug) {
-                if (qpResult.converged) {
-                    console.log('✅ QP 方法成功救援');
-                } else {
-                    console.log('❌ QP 方法也失敗');
-                }
-            }
-            return qpResult;
-        } catch (error) {
-            return {
-                z: null,
-                w: null,
-                converged: false,
-                iterations: 0,
-                error: `所有方法失敗: ${error.message}`,
-                method: 'All-Failed'
-            };
-        }
+        return {
+            z: null,
+            w: null,
+            converged: false,
+            iterations: 0,
+            error: `所有方法和正則化嘗試均失敗 (${maxAttempts} 次)`,
+            method: 'All-Failed'
+        };
     }
 }
 
 /**
- * 創建預配置的 LCP 求解器
+ * 創建預配置的 LCP 求解器 - 針對開關電路優化
  */
 export function createLCPSolver(options = {}) {
     const defaultOptions = {
-        maxIterations: 5000,      // 增加到 5000
-        zeroTolerance: 1e-12,
-        pivotTolerance: 1e-10,    // 放寬到 1e-10
+        maxIterations: 20000,     // 🔥 增加到 20000 處理複雜開關
+        zeroTolerance: 1e-10,     // 🔥 放寬至 1e-10 提高穩定性
+        pivotTolerance: 1e-8,     // 🔥 進一步放寬到 1e-8 提高穩定性
+        tolerance: 1e-8,          // 🔥 為 QP 求解器設定統一容忍度
         debug: false
     };
 
-    // 🚀 使用強健求解器作為默認選擇
-    const useRobustSolver = options.useRobustSolver !== false; // 默認啟用
+    // 🚀 強制使用強健求解器作為默認選擇（除非明確禁用）
+    const useRobustSolver = options.useRobustSolver !== false;
     
     if (useRobustSolver) {
+        if (options.debug) {
+            console.log('🛡️ 創建強健 LCP 求解器 (Lemke + QP fallback)');
+        }
         return new RobustLCPSolver({ ...defaultOptions, ...options });
     } else {
+        if (options.debug) {
+            console.log('⚡ 創建純 Lemke LCP 求解器');
+        }
         return new LCPSolver({ ...defaultOptions, ...options });
     }
 }
