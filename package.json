@@ -1,25 +1,62 @@
 {
-  "name": "akingspice-project",
-  "version": "1.0.0",
-  "description": "AkingSPICE - JavaScript Solver for Power Electronics",
-  "main": "src/index.js",
+  "name": "@akingspice/core",
+  "version": "2.0.0-alpha.1",
+  "description": "AkingSPICE - Modern MNA-based Circuit Simulator (No MCP)",
   "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "node --experimental-modules src/index.js",
-    "build": "echo \"Build not configured yet\"",
-    "lint": "echo \"Linting not configured yet\""
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest --coverage",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint src --ext .ts,.tsx",
+    "lint:fix": "eslint src --ext .ts,.tsx --fix",
+    "format": "prettier --write src/**/*.{ts,tsx}",
+    "docs": "typedoc src/index.ts",
+    "benchmark": "node benchmarks/run.js",
+    "test:all": "node test-runner.js",
+    "test:quick": "node test-runner.js --quick",
+    "test:verbose": "node test-runner.js --verbose",
+    "test:report": "node test-runner.js --report test-report.json",
+    "test:spice": "node test-runner.js --category algorithms,validation --verbose",
+    "test:core": "node test-runner.js --category algorithms --report spice-core-report.json",
+    "test:benchmark": "node test-runner.js --category validation --report spice-benchmark-report.json",
+    "validate": "node test-runner.js --quick --report validation-report.json",
+    "validate:spice": "node test-runner.js --category algorithms,validation --report spice-validation-report.json"
   },
   "keywords": [
     "spice",
     "circuit-simulation",
     "power-electronics",
-    "javascript",
-    "solver"
+    "mna",
+    "event-driven",
+    "typescript",
+    "webassembly"
   ],
-  "author": "",
-  "license": "ISC",
+  "author": "AkingSPICE Team",
+  "license": "MIT",
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "@vitest/coverage-v8": "^1.0.0",
+    "@vitest/ui": "^1.0.0",
+    "eslint": "^8.50.0",
+    "eslint-config-prettier": "^9.0.0",
+    "eslint-plugin-prettier": "^5.0.0",
+    "prettier": "^3.0.0",
+    "typedoc": "^0.25.0",
+    "typescript": "^5.4.5",
+    "vite": "^5.0.0",
+    "vitest": "^1.0.0"
+  },
+  "dependencies": {
+    "ml-matrix": "^6.10.0"
   }
 }
