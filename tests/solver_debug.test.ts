@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { SparseMatrix } from '../src/math/sparse/matrix.js';
-import { Vector } from '../src/math/sparse/vector.js';
+import { SparseMatrix } from '../src/math/sparse/matrix';
+import { Vector } from '../src/math/sparse/vector';
 
 describe('🔧 求解器調試', () => {
   

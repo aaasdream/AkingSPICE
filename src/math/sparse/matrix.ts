@@ -10,8 +10,8 @@
  * - 支持直接求解器接口 (KLU/UMFPACK)
  */
 
-import type { ISparseMatrix, IVector } from '../../types/index.js';
-import { Vector } from './vector.js';
+import type { ISparseMatrix, IVector } from '../../types/index';
+import { Vector } from './vector';
 import * as numeric from 'numeric';
 
 /**
@@ -281,44 +281,64 @@ export class SparseMatrix implements ISparseMatrix {
   }
 
   /**
-   * 使用 KLU WASM 求解 (未來方案)
+   * 使用 KLU WASM 求解稀疏線性系統
    */
   private async _solveWithKLU(b: IVector): Promise<IVector> {
     console.log('🔬 使用 KLU WASM 求解稀疏線性系統...');
     
-    // TODO: 實現 KLU WASM 集成
-    // 這裡是未來的 KLU 實現佔位符
-    
-    if (!this._kluSolver) {
-      // 未來: const { KLUSolver } = await import('klu-wasm');
-      // this._kluSolver = await KLUSolver.create();
-      throw new Error('KLU WASM 尚未實現');
-    }
+    try {
+      // 動態導入智能 KLU 求解器
+      if (!this._kluSolver) {
+        const { default: SmartKluSolver } = await import('../../wasm/klu/index');
+        this._kluSolver = new SmartKluSolver({
+          tolerance: 1e-12,
+          memoryGrowth: 1.2,
+          orderingMethod: 'amd'
+        });
+        
+        await this._kluSolver.initialize();
+        
+        if (this._kluSolver.isUsingMock()) {
+          console.log('✅ KLU 模擬器初始化成功 (WASM 版本需要建置)');
+        } else {
+          console.log('✅ KLU WASM 求解器初始化成功');
+        }
+      }
 
-    if (!this._isKluFactorized) {
-      console.log('🧮 執行 KLU 分解...');
-      
-      // 轉換為 CSC 格式
-      const csc = this.toCSC();
-      
-      // 未來: 進行符號分析和數值分解
-      // this._kluSolver.factorize(
-      //     this.rows,
-      //     csc.colPointers,
-      //     csc.rowIndices,
-      //     csc.values
-      // );
-      
-      this._isKluFactorized = true;
-      console.log(`✅ KLU 分解完成: ${this.rows}x${this.cols}, nnz=${this.nnz}`);
-    }
+      if (!this._isKluFactorized) {
+        console.log('🧮 執行 KLU 符號分析和數值分解...');
+        
+        // 轉換為 CSC 格式 (KLU 要求)
+        const csc = this.toCSC();
+        
+        // 進行符號分析
+        await this._kluSolver.analyze(csc);
+        
+        // 進行數值分解
+        await this._kluSolver.factor();
+        
+        this._isKluFactorized = true;
+        
+        const stats = this._kluSolver.getStatistics();
+        console.log(`✅ KLU 分解完成: ${this.rows}x${this.cols}, nnz=${this.nnz}`);
+        console.log(`📊 分解統計: 數值秩=${stats.numericalRank}, 條件數估計=${stats.condest.toExponential(2)}`);
+      }
 
-    // 求解
-    const bArray = b.toArray();
-    // 未來: const xArray = this._kluSolver.solve(bArray);
-    // return Vector.from(xArray);
-    
-    throw new Error('KLU WASM 尚未實現');
+      // 求解線性方程組
+      const bArray = b.toArray();
+      const solution = await this._kluSolver.solve(bArray);
+      
+      console.log('✅ KLU WASM 求解成功');
+      return Vector.from(solution);
+      
+    } catch (error) {
+      console.error('❌ KLU WASM 求解失敗:', error);
+      
+      // 釋放資源並重置狀態
+      this._cleanupKluSolver();
+      
+      throw new Error(`KLU WASM solver failed: ${error}`);
+    }
   }
 
   /**
@@ -387,11 +407,23 @@ export class SparseMatrix implements ISparseMatrix {
    * 釋放 WASM 佔用的內存
    */
   dispose(): void {
+    this._cleanupKluSolver();
+    this.clear();
+  }
+
+  /**
+   * 清理 KLU 求解器資源
+   */
+  private _cleanupKluSolver(): void {
     if (this._kluSolver) {
-      // 未來: this._kluSolver.dispose();
+      try {
+        this._kluSolver.dispose();
+      } catch (error) {
+        console.warn('⚠️ KLU 求解器清理時發生錯誤:', error);
+      }
       this._kluSolver = null;
     }
-    this.clear();
+    this._isKluFactorized = false;
   }
 
   /**

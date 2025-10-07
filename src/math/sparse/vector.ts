@@ -5,7 +5,7 @@
  * 針對電路分析優化
  */
 
-import type { IVector } from '../../types/index.js';
+import type { IVector } from '../../types/index';
 
 /**
  * 密集向量實現

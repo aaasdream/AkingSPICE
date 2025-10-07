@@ -18,9 +18,9 @@ import {
   IIntelligentDeviceModel,
   MOSFETParameters,
   DiodeParameters
-} from './intelligent_device_model.js';
-import { IntelligentMOSFET } from './intelligent_mosfet.js';
-import { IntelligentDiode } from './intelligent_diode.js';
+} from './intelligent_device_model';
+import { IntelligentMOSFET } from './intelligent_mosfet';
+import { IntelligentDiode } from './intelligent_diode';
 
 /**
  * 🧠 智能设备工厂

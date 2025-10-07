@@ -27,11 +27,9 @@ import type {
   VoltageVector, 
   CurrentVector, 
   IMNASystem,
-  Time,
-  IVector,
-  ISparseMatrix 
-} from '../../types/index.js';
-import { Vector } from '../../math/sparse/vector.js';
+  Time
+} from '../../types/index';
+import { Vector } from '../../math/sparse/vector';
 
 /**
  * 设备载入结果

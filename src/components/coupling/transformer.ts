@@ -1,0 +1,384 @@
+/**
+ * 🔗 理想变压器组件 - AkingSPICE 2.1
+ * 
+ * 理想变压器的时域实现，适用于 MNA
+ * Vp/Vs = n, n*Ip + Is = 0
+ */
+
+import { ComponentInterface, ValidationResult, ComponentInfo } from '../../core/interfaces/component';
+import { SparseMatrix } from '../../math/sparse/matrix';
+import { Vector } from '../../math/sparse/vector';
+import { ComponentValidation, MNAStampingHelpers } from '../../math/numerical/safety';
+
+export class IdealTransformer implements ComponentInterface {
+  readonly type = 'K'; // SPICE中常用 K 表示理想变压器
+
+  // 需要两个额外的支路电流变量：初级和次级
+  private _primaryCurrentIndex?: number;
+  private _secondaryCurrentIndex?: number;
+
+  constructor(
+    public readonly name: string,
+    public readonly nodes: readonly [string, string, string, string], // [p1, p2, s1, s2]
+    private readonly _turnsRatio: number // n = Np / Ns
+  ) {
+    // 使用数值安全工具验证参数
+    ComponentValidation.validateRatio(_turnsRatio, name, 1e-6, 1e6);
+    ComponentValidation.validateNodes(nodes, 4, name, false);
+  }
+
+  /**
+   * 🎯 获取匝数比
+   */
+  get turnsRatio(): number {
+    return this._turnsRatio;
+  }
+  
+  /**
+   * 🔢 设置电流支路索引
+   */
+  setCurrentIndices(primaryIndex: number, secondaryIndex: number): void {
+    if (primaryIndex < 0 || secondaryIndex < 0) {
+      throw new Error(`变压器 ${this.name} 的电流索引必须为非负数: primary=${primaryIndex}, secondary=${secondaryIndex}`);
+    }
+    if (primaryIndex === secondaryIndex) {
+      throw new Error(`变压器 ${this.name} 的初级和次级电流索引不能相同: ${primaryIndex}`);
+    }
+    this._primaryCurrentIndex = primaryIndex;
+    this._secondaryCurrentIndex = secondaryIndex;
+  }
+
+  /**
+   * 🔍 检查电流索引是否已设置
+   */
+  hasCurrentIndicesSet(): boolean {
+    return this._primaryCurrentIndex !== undefined && this._secondaryCurrentIndex !== undefined;
+  }
+
+  /**
+   * 🔥 MNA 矩阵装配
+   *
+   * 需要扩展 MNA 矩阵，增加两个电流变量 i_p 和 i_s
+   * 对应增加两个方程:
+   * 1. 电压关系: Vp - n*Vs = 0  => (Vp1 - Vp2) - n*(Vs1 - Vs2) = 0
+   * 2. 电流关系: n*ip + is = 0
+   */
+  stamp(
+    matrix: SparseMatrix,
+    _rhs: Vector, // 理想变压器不需要右侧向量贡献
+    nodeMap: Map<string, number>
+  ): void {
+    // 理想变压器不需要右侧向量贡献
+    
+    const np1 = nodeMap.get(this.nodes[0]);
+    const np2 = nodeMap.get(this.nodes[1]);
+    const ns1 = nodeMap.get(this.nodes[2]);
+    const ns2 = nodeMap.get(this.nodes[3]);
+    
+    if (this._primaryCurrentIndex === undefined || this._secondaryCurrentIndex === undefined) {
+      throw new Error(`变压器 ${this.name} 的电流支路索引未设置`);
+    }
+
+    const ip = this._primaryCurrentIndex;
+    const is = this._secondaryCurrentIndex;
+    const n = this._turnsRatio;
+
+    // KCL 方程贡献 - 使用安全的矩阵操作
+    MNAStampingHelpers.safeMatrixAdd(matrix, np1, ip, 1, this.name);
+    MNAStampingHelpers.safeMatrixAdd(matrix, np2, ip, -1, this.name);
+    MNAStampingHelpers.safeMatrixAdd(matrix, ns1, is, 1, this.name);
+    MNAStampingHelpers.safeMatrixAdd(matrix, ns2, is, -1, this.name);
+
+    // 支路方程 (Branch Equations)
+    // 方程1: 电压关系 Vp - n*Vs = 0
+    // (Vp1-Vp2) - n*(Vs1-Vs2) = 0
+    MNAStampingHelpers.safeMatrixAdd(matrix, ip, np1, 1, this.name);
+    MNAStampingHelpers.safeMatrixAdd(matrix, ip, np2, -1, this.name);
+    MNAStampingHelpers.safeMatrixAdd(matrix, ip, ns1, -n, this.name);
+    MNAStampingHelpers.safeMatrixAdd(matrix, ip, ns2, n, this.name);
+    
+    // 方程2: 电流关系 n*ip + is = 0
+    MNAStampingHelpers.safeMatrixAdd(matrix, is, ip, n, this.name);
+    MNAStampingHelpers.safeMatrixAdd(matrix, is, is, 1, this.name);
+  }
+
+  getExtraVariableCount(): number {
+    return 2; // 需要两个额外的电流变量
+  }
+
+  validate(): ValidationResult {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    
+    // 注意：基本匝数比验证已在构造函数中完成
+    
+    // 检查匝数比范围（仅警告，因为构造函数已验证基本有效性）
+    if (this._turnsRatio < 1e-6) {
+      warnings.push(`匝数比过小可能导致数值问题: ${this._turnsRatio}`);
+    }
+    
+    if (this._turnsRatio > 1e6) {
+      warnings.push(`匝数比过大可能导致数值问题: ${this._turnsRatio}`);
+    }
+    
+    // 检查节点连接
+    if (this.nodes.length !== 4) {
+      errors.push(`理想变压器必须连接四个节点，实际: ${this.nodes.length}`);
+    }
+    
+    // 检查节点是否重复
+    const uniqueNodes = new Set(this.nodes);
+    if (uniqueNodes.size !== 4) {
+      errors.push(`变压器节点不能重复: [${this.nodes.join(', ')}]`);
+    }
+    
+    // 检查初级和次级绕组是否短路
+    if (this.nodes[0] === this.nodes[1]) {
+      errors.push(`初级绕组不能短路: ${this.nodes[0]}`);
+    }
+    if (this.nodes[2] === this.nodes[3]) {
+      errors.push(`次级绕组不能短路: ${this.nodes[2]}`);
+    }
+    
+    return {
+      isValid: errors.length === 0,
+      errors,
+      warnings
+    };
+  }
+
+  getInfo(): ComponentInfo {
+    return {
+      type: this.type,
+      name: this.name,
+      nodes: [...this.nodes],
+      parameters: {
+        turnsRatio: this._turnsRatio,
+        primaryCurrentIndex: this._primaryCurrentIndex,
+        secondaryCurrentIndex: this._secondaryCurrentIndex,
+      },
+      units: { 
+        turnsRatio: '',
+        primaryCurrentIndex: '#',
+        secondaryCurrentIndex: '#'
+      }
+    };
+  }
+  
+  /**
+   * 🔍 调试信息
+   */
+  toString(): string {
+    return `${this.name}: n=${this._turnsRatio} between (${this.nodes[0]},${this.nodes[1]}) and (${this.nodes[2]},${this.nodes[3]})`;
+  }
+  
+  /**
+   * ⚡ 计算次级电压
+   * 
+   * 根据初级电压和匝数比计算次级电压
+   * Vs = Vp / n
+   */
+  calculateSecondaryVoltage(primaryVoltage: number): number {
+    return primaryVoltage / this._turnsRatio;
+  }
+  
+  /**
+   * ⚡ 计算初级电流
+   * 
+   * 根据次级电流和匝数比计算初级电流
+   * Ip = -Is / n
+   */
+  calculatePrimaryCurrent(secondaryCurrent: number): number {
+    return -secondaryCurrent / this._turnsRatio;
+  }
+  
+  /**
+   * 🔋 功率守恒验证
+   * 
+   * 理想变压器满足功率守恒: Pp = Ps
+   * Pp = Vp * Ip, Ps = Vs * Is
+   */
+  verifyPowerConservation(
+    primaryVoltage: number, 
+    primaryCurrent: number,
+    secondaryVoltage: number, 
+    secondaryCurrent: number,
+    toleranceRatio: number = 1e-12  // 使用更严格的容差以匹配SPICE精度
+  ): { 
+    primaryPower: number;
+    secondaryPower: number;
+    powerDifference: number;
+    isConserved: boolean;
+    tolerance: number;
+  } {
+    const primaryPower = primaryVoltage * primaryCurrent;
+    const secondaryPower = secondaryVoltage * secondaryCurrent;
+    const powerDifference = Math.abs(primaryPower - secondaryPower);
+    
+    // 使用相对和绝对容差的组合
+    const maxPower = Math.max(Math.abs(primaryPower), Math.abs(secondaryPower));
+    const relativeTolerance = toleranceRatio * maxPower;
+    const absoluteTolerance = 1e-15; // 极小功率时的绝对容差
+    const tolerance = Math.max(relativeTolerance, absoluteTolerance);
+    
+    return {
+      primaryPower,
+      secondaryPower,
+      powerDifference,
+      isConserved: powerDifference <= tolerance || maxPower < absoluteTolerance,
+      tolerance
+    };
+  }
+  
+  /**
+   * 🎛️ 获取等效阻抗
+   * 
+   * 从初级看到次级的等效阻抗变换
+   * Z_eq = n² * Z_s
+   */
+  transformImpedance(secondaryImpedance: number): number {
+    return this._turnsRatio * this._turnsRatio * secondaryImpedance;
+  }
+}
+
+/**
+ * 🏭 变压器工厂函数
+ */
+export namespace TransformerFactory {
+  /**
+   * 创建理想变压器
+   */
+  export function create(
+    name: string, 
+    primaryNodes: [string, string], 
+    secondaryNodes: [string, string], 
+    turnsRatio: number
+  ): IdealTransformer {
+    const nodes: [string, string, string, string] = [
+      primaryNodes[0], primaryNodes[1], 
+      secondaryNodes[0], secondaryNodes[1]
+    ];
+    return new IdealTransformer(name, nodes, turnsRatio);
+  }
+  
+  /**
+   * 创建标准电力变压器
+   */
+  export function createPowerTransformer(
+    name: string,
+    primaryNodes: [string, string],
+    secondaryNodes: [string, string],
+    primaryVoltage: number,
+    secondaryVoltage: number
+  ): IdealTransformer {
+    const turnsRatio = primaryVoltage / secondaryVoltage;
+    return create(name, primaryNodes, secondaryNodes, turnsRatio);
+  }
+  
+  /**
+   * 创建升压变压器
+   */
+  export function createStepUpTransformer(
+    name: string,
+    primaryNodes: [string, string],
+    secondaryNodes: [string, string],
+    stepUpRatio: number
+  ): IdealTransformer {
+    return create(name, primaryNodes, secondaryNodes, stepUpRatio);
+  }
+  
+  /**
+   * 创建降压变压器
+   */
+  export function createStepDownTransformer(
+    name: string,
+    primaryNodes: [string, string],
+    secondaryNodes: [string, string],
+    stepDownRatio: number
+  ): IdealTransformer {
+    const turnsRatio = 1 / stepDownRatio;
+    return create(name, primaryNodes, secondaryNodes, turnsRatio);
+  }
+  
+  /**
+   * 创建隔离变压器 (1:1)
+   */
+  export function createIsolationTransformer(
+    name: string,
+    primaryNodes: [string, string],
+    secondaryNodes: [string, string]
+  ): IdealTransformer {
+    return create(name, primaryNodes, secondaryNodes, 1.0);
+  }
+}
+
+/**
+ * 🧪 变压器测试工具
+ */
+export namespace TransformerTest {
+  /**
+   * 验证电压变换关系
+   */
+  export function verifyVoltageTransformation(
+    turnsRatio: number,
+    primaryVoltage: number,
+    expectedSecondaryVoltage: number,
+    tolerance: number = 1e-9
+  ): boolean {
+    const calculatedSecondaryVoltage = primaryVoltage / turnsRatio;
+    return Math.abs(calculatedSecondaryVoltage - expectedSecondaryVoltage) <= tolerance;
+  }
+  
+  /**
+   * 验证电流变换关系
+   */
+  export function verifyCurrentTransformation(
+    turnsRatio: number,
+    secondaryCurrent: number,
+    expectedPrimaryCurrent: number,
+    tolerance: number = 1e-9
+  ): boolean {
+    const calculatedPrimaryCurrent = -secondaryCurrent / turnsRatio;
+    return Math.abs(calculatedPrimaryCurrent - expectedPrimaryCurrent) <= tolerance;
+  }
+  
+  /**
+   * 验证阻抗变换关系
+   */
+  export function verifyImpedanceTransformation(
+    turnsRatio: number,
+    secondaryImpedance: number,
+    expectedPrimaryImpedance: number,
+    tolerance: number = 1e-9
+  ): boolean {
+    const calculatedPrimaryImpedance = turnsRatio * turnsRatio * secondaryImpedance;
+    return Math.abs(calculatedPrimaryImpedance - expectedPrimaryImpedance) <= tolerance;
+  }
+  
+  /**
+   * 创建测试电路
+   */
+  export function createTestCircuit(
+    transformerName: string,
+    turnsRatio: number
+  ): {
+    transformer: IdealTransformer;
+    primaryNodes: [string, string];
+    secondaryNodes: [string, string];
+  } {
+    const primaryNodes: [string, string] = ['n1', 'n2'];
+    const secondaryNodes: [string, string] = ['n3', 'n4'];
+    const transformer = TransformerFactory.create(
+      transformerName,
+      primaryNodes,
+      secondaryNodes,
+      turnsRatio
+    );
+    
+    return {
+      transformer,
+      primaryNodes,
+      secondaryNodes
+    };
+  }
+}

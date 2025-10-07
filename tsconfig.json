@@ -8,7 +8,7 @@
     "noEmit": true,
     "declaration": true,
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": ".",
     
     // 嚴格模式 - 確保代碼質量
     "strict": true,
@@ -33,11 +33,13 @@
       "@/core/*": ["src/core/*"],
       "@/devices/*": ["src/devices/*"],
       "@/math/*": ["src/math/*"],
-      "@/types/*": ["src/types/*"]
+      "@/types/*": ["src/types/*"],
+      "@/wasm/*": ["wasm/*"]
     }
   },
   "include": [
-    "src/**/*"
+    "src/**/*",
+    "wasm/**/*"
   ],
   "exclude": [
     "node_modules",

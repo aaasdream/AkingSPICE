@@ -112,7 +112,7 @@ export interface ISparseMatrix {
   
   // 求解接口 (支持異步 KLU)
   factorize(): void;
-  solve(rhs: IVector): Promise<IVector>;
+  solve(rhs: IVector): IVector;
   clone(): ISparseMatrix;
   
   // 資源管理 (WASM)

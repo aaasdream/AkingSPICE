@@ -66,9 +66,9 @@ export class Resistor implements ComponentInterface {
    */
   stamp(
     matrix: SparseMatrix, 
-    rhs: Vector, 
+    _rhs: Vector, 
     nodeMap: Map<string, number>,
-    currentTime?: number
+    _currentTime?: number
   ): void {
     const n1 = nodeMap.get(this.nodes[0]);
     const n2 = nodeMap.get(this.nodes[1]);
@@ -178,6 +178,14 @@ export class Resistor implements ComponentInterface {
    * @returns 瞬时功耗 (W)
    */
   calculatePower(voltage: number, current: number): number {
+    // 验证电压电流一致性（欧姆定律：V = I * R）
+    const expectedCurrent = voltage / this._resistance;
+    const currentTolerance = 1e-9;
+    
+    if (Math.abs(current - expectedCurrent) > currentTolerance) {
+      console.warn(`电阻 ${this.name} 电压电流不一致: V=${voltage}V, I=${current}A, 期望I=${expectedCurrent}A`);
+    }
+    
     // 使用电压计算（更稳定）
     return (voltage * voltage) / this._resistance;
   }
@@ -259,7 +267,7 @@ export namespace ResistorFactory {
     name: string,
     nodes: [string, string], 
     resistance: number,
-    powerRating: number
+    _powerRating: number
   ): Resistor {
     const resistor = new Resistor(name, nodes, resistance);
     // 可以在这里添加功率额定值属性

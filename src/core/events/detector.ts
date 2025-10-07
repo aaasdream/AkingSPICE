@@ -18,8 +18,8 @@ import type {
   IComponent,
   Time,
   VoltageVector
-} from '../../types/index.js';
-import { EventType } from '../../types/index.js';
+} from '../../types/index';
+import { EventType } from '../../types/index';
 
 /**
  * 事件檢測器主類

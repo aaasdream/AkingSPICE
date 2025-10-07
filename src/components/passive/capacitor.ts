@@ -37,12 +37,19 @@ export class Capacitor implements ComponentInterface {
     if (_capacitance <= 0) {
       throw new Error(`电容值必须为正数: ${_capacitance}`);
     }
+    if (!isFinite(_capacitance) || isNaN(_capacitance)) {
+      throw new Error(`电容值必须为有限数值: ${_capacitance}`);
+    }
     if (nodes.length !== 2) {
       throw new Error(`电容必须连接两个节点，实际: ${nodes.length}`);
     }
     if (nodes[0] === nodes[1]) {
       throw new Error(`电容不能连接到同一节点: ${nodes[0]}`);
     }
+    
+    // 初始化历史状态为零（电容初始条件）
+    this._previousVoltage = 0.0;
+    this._previousCurrent = 0.0;
   }
   
   /**
@@ -73,6 +80,16 @@ export class Capacitor implements ComponentInterface {
    * 📈 更新历史状态
    */
   updateHistory(voltage: number, current: number): void {
+    // 检查数值有效性
+    if (!isFinite(voltage) || isNaN(voltage)) {
+      console.warn(`电容 ${this.name} 的电压值无效: ${voltage}，使用前一值`);
+      voltage = this._previousVoltage;
+    }
+    if (!isFinite(current) || isNaN(current)) {
+      console.warn(`电容 ${this.name} 的电流值无效: ${current}，使用前一值`);
+      current = this._previousCurrent;
+    }
+    
     this._previousVoltage = voltage;
     this._previousCurrent = current;
   }
@@ -92,7 +109,7 @@ export class Capacitor implements ComponentInterface {
     matrix: SparseMatrix, 
     rhs: Vector, 
     nodeMap: Map<string, number>,
-    currentTime?: number
+    _currentTime?: number
   ): void {
     const n1 = nodeMap.get(this.nodes[0]);
     const n2 = nodeMap.get(this.nodes[1]);

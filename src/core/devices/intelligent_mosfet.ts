@@ -27,8 +27,8 @@ import type {
   CurrentVector, 
   IMNASystem,
   Time 
-} from '../../types/index.js';
-import { Vector } from '../../math/sparse/vector.js';
+} from '../../types/index';
+import { Vector } from '../../math/sparse/vector';
 import { 
   IntelligentDeviceModelBase,
   LoadResult,
@@ -41,7 +41,7 @@ import {
   SwitchingEvent,
   NumericalChallenge,
   MOSFETParameters
-} from './intelligent_device_model.js';
+} from './intelligent_device_model';
 
 /**
  * MOSFET 工作区域枚举
@@ -91,6 +91,8 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
   private static readonly MAX_VOLTAGE_STEP = 0.5;  // 最大电压步长 (V)
   private static readonly SWITCH_THRESHOLD = 0.1;  // 开关检测阈值 (V)
   
+  private _gminConductance: number = 0;
+
   constructor(
     deviceId: string,
     nodes: [number, number, number], // [Drain, Gate, Source]
@@ -185,6 +187,15 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
         }
       };
     }
+  }
+
+  /**
+   * ⚡️ Gmin Stepping 支持
+   * 
+   * 在 MNA 矩阵中并联一个临时电导
+   */
+  stampGmin(gmin: number): void {
+    this._gminConductance = gmin;
   }
 
   /**
@@ -403,6 +414,7 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
    */
   private _generateMNAStamp(smallSignal: any, capacitance: any): MatrixStamp {
     const { gm, gds } = smallSignal;
+    const totalGds = gds + this._gminConductance;
     const entries: StampEntry[] = [];
     
     // DC 印花：受控电流源模型
@@ -411,13 +423,13 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
     // 漏极方程：Id = gm*(Vg-Vs) + gds*(Vd-Vs)
     entries.push(
       { row: this._drainNode, col: this._gateNode, value: gm },     // dId/dVg
-      { row: this._drainNode, col: this._drainNode, value: gds },   // dId/dVd  
-      { row: this._drainNode, col: this._sourceNode, value: -(gm + gds) }, // dId/dVs
+      { row: this._drainNode, col: this._drainNode, value: totalGds },   // dId/dVd  
+      { row: this._drainNode, col: this._sourceNode, value: -(gm + totalGds) }, // dId/dVs
       
       // 源极方程：Is = -Id
       { row: this._sourceNode, col: this._gateNode, value: -gm },
-      { row: this._sourceNode, col: this._drainNode, value: -gds },
-      { row: this._sourceNode, col: this._sourceNode, value: gm + gds }
+      { row: this._sourceNode, col: this._drainNode, value: -totalGds },
+      { row: this._sourceNode, col: this._sourceNode, value: gm + totalGds }
     );
     
     // TODO: 添加电容印花 (需要时域信息)
@@ -507,7 +519,7 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
   /**
    * MOSFET 特定步长限制
    */
-  protected _applyDeviceSpecificLimits(deltaV: VoltageVector): void {
+  protected override _applyDeviceSpecificLimits(deltaV: VoltageVector): void {
     // 限制栅源电压变化
     const deltaVgs = deltaV.get(this._gateNode) - deltaV.get(this._sourceNode);
     if (Math.abs(deltaVgs) > IntelligentMOSFET.MAX_VOLTAGE_STEP) {
@@ -518,10 +530,6 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
         deltaV.set(i, deltaV.get(i) * scale);
       }
     }
-  }
-
-  private _applyMOSFETSpecificLimits(deltaV: VoltageVector): void {
-    this._applyDeviceSpecificLimits(deltaV);
   }
 
   /**

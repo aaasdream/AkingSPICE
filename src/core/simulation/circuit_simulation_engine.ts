@@ -30,15 +30,16 @@ import type {
   Time,
   ISparseMatrix,
   IVector 
-} from '../../types/index.js';
-import { Vector } from '../../math/sparse/vector.js';
-import { SparseMatrix } from '../../math/sparse/matrix.js';
-import { GeneralizedAlphaIntegrator } from '../integrator/generalized_alpha.js';
+} from '../../types/index';
+import { Vector } from '../../math/sparse/vector';
+import { SparseMatrix } from '../../math/sparse/matrix';
+import { GeneralizedAlphaIntegrator } from '../integrator/generalized_alpha';
 import type { 
   IIntelligentDeviceModel, 
   LoadResult,
   DeviceState 
-} from '../devices/intelligent_device_model.js';
+} from '../devices/intelligent_device_model';
+import { ScalableSource } from '../interfaces/component';
 
 /**
  * 仿真状态枚举
@@ -453,63 +454,114 @@ export class CircuitSimulationEngine {
    * 实现了源步进 (外部循环) 和带步长阻尼的 Newton-Raphson (内部循环)
    */
   private async _performDCAnalysis(): Promise<void> {
-    const dcStartTime = performance.now();
-    this._logEvent('DC_ANALYSIS_START', undefined, 'Starting robust DC operating point analysis...');
-
-    // 1. 识别所有独立源
-    // 注意：这里我们需要一个混合的设备管理策略
-    // 目前系统使用 IIntelligentDeviceModel，但源步进需要访问传统组件
-    // 这是一个架构改进点 - 未来应该统一接口
-    const sources: any[] = []; // 临时解决方案
+    console.log('📊 開始 DC 工作點分析...');
     
-    // 查找支持缩放的设备（需要设备实现 scaleDcValue 方法）
-    for (const [_deviceId, device] of this._devices) {
-      // 通过鸭子类型检查是否有 scaleDcValue 方法
-      if ('scaleDcValue' in device && typeof (device as any).scaleDcValue === 'function') {
-        sources.push(device);
-      }
+    // 步驟 1: 標準 Newton-Raphson (帶阻尼)
+    let dcResult = await this._solveDCNewtonRaphson();
+    if (dcResult) {
+      this._logEvent('dc_converged', undefined, '標準 Newton 收斂');
+      return;
     }
+    
+    // 步驟 2: 源步進 (當前實現)
+    console.log('🔄 標準 Newton 失敗，嘗試源步進...');
+    dcResult = await this._sourceSteppingHomotopy();
+    if (dcResult) {
+      this._logEvent('dc_converged', undefined, '源步進收斂');
+      return;
+    }
+    
+    // 步驟 3: Gmin Stepping (新添加)
+    console.log('🔄 源步進失敗，嘗試 Gmin Stepping...');
+    dcResult = await this._gminSteppingHomotopy();
+    if (dcResult) {
+      this._logEvent('dc_converged', undefined, 'Gmin Stepping 收斂');
+      return;
+    }
+    
+    // 最終失敗
+    this._logEvent('dc_failed', undefined, '所有 DC 方法失敗');
+    throw new Error('DC 工作點分析失敗');
+  }
 
-    // 2. 源步进循环 (Homotopy/Continuation Method)
-    const stepFactors = [0.0, 0.25, 0.5, 0.75, 1.0]; // 从 0% 到 100% 电源
+  private async _sourceSteppingHomotopy(): Promise<boolean> {
+    const sources = Array.from(this._devices.values()).filter(d => 'scaleSource' in d) as (IIntelligentDeviceModel & ScalableSource)[];
+    const stepFactors = [0.0, 0.25, 0.5, 0.75, 1.0];
     let converged = false;
 
     for (const factor of stepFactors) {
       this._logEvent('DC_SOURCE_STEP', undefined, `Setting source factor to ${(factor * 100).toFixed(0)}%`);
       
-      // 设置所有源的缩放因子
-      sources.forEach(source => {
-        if ('scaleDcValue' in source) {
-          (source as any).scaleDcValue(factor);
-        }
-      });
+      for (const source of sources) {
+        source.scaleSource(factor);
+      }
 
-      // 3. 针对当前源因子，执行 Newton-Raphson 迭代
       converged = await this._solveDCNewtonRaphson();
 
       if (!converged) {
         this._logEvent('DC_STEP_FAILED', undefined, `Newton-Raphson failed to converge at source factor ${factor}`);
-        // 恢复源的原始值
-        sources.forEach(source => {
-          if ('scaleDcValue' in source) {
-            (source as any).scaleDcValue(1.0);
-          }
-        });
-        throw new Error(`DC analysis failed to converge at ${(factor * 100).toFixed(0)}% source strength.`);
+        for (const source of sources) {
+          source.restoreSource();
+        }
+        return false;
       }
     }
 
-    // 确保所有源都恢复到其完整值
-    sources.forEach(source => {
-      if ('scaleDcValue' in source) {
-        (source as any).scaleDcValue(1.0);
-      }
-    });
-
-    // DC分析完成，解保存在 _solutionVector 中
-    const dcTime = performance.now() - dcStartTime;
-    this._logEvent('DC_ANALYSIS_COMPLETE', undefined, `Robust DC analysis completed in ${dcTime.toFixed(2)}ms`);
+    for (const source of sources) {
+      source.restoreSource();
+    }
+    
+    return converged;
   }
+
+  // 新方法: Gmin Stepping
+  private async _gminSteppingHomotopy(): Promise<boolean> {
+    const gminSteps = 10;  // 步進次數
+    const initialGmin = 1e-2;  // 初始大電導 (S)
+    const finalGmin = 1e-12;   // 最終小電導 (近零)
+    
+    let currentSolution = this._solutionVector.clone();  // 從上次嘗試開始
+    
+    for (let step = 0; step <= gminSteps; step++) {
+      const factor = step / gminSteps;
+      const currentGmin = initialGmin * Math.pow(finalGmin / initialGmin, factor);
+      
+      // 臨時添加 Gmin 到所有 PN 接面 (e.g., 二極管、BJT)
+      this._applyGminToNonlinearDevices(currentGmin);
+      
+      // 重新構建 MNA 並求解
+      const newtonResult = await this._solveDCNewtonRaphson();
+      
+      // 移除臨時 Gmin
+      this._removeGminFromNonlinearDevices();
+      
+      if (!newtonResult) {
+        return false;
+      }
+      
+      this._logEvent('gmin_step', undefined, `Gmin=${currentGmin.toExponential(2)}, 步驟 ${step}/${gminSteps}`);
+    }
+    
+    return true;
+  }
+
+  // 輔助: 應用/移除 Gmin (在 NonlinearDevice 如 Diode 中添加 stampGmin 方法)
+  private _applyGminToNonlinearDevices(gmin: number): void {
+    for (const device of this._devices.values()) {
+      if ('stampGmin' in device && typeof (device as any).stampGmin === 'function') {
+        (device as any).stampGmin(gmin);
+      }
+    }
+  }
+
+  private _removeGminFromNonlinearDevices(): void {
+    for (const device of this._devices.values()) {
+      if ('stampGmin' in device && typeof (device as any).stampGmin === 'function') {
+        (device as any).stampGmin(0);
+      }
+    }
+  }
+
 
   /**
    * 🆕 辅助方法：执行 Newton-Raphson 迭代求解 DC 工作点

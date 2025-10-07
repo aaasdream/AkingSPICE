@@ -26,8 +26,13 @@
  *   - 高性能批量处理能力
  */
 
-import type { IIntelligentDeviceModel } from '../devices/intelligent_device_model.js';
-import { SmartDeviceFactory } from '../devices/intelligent_device_factory.js';
+import { Inductor } from '../../components/passive/inductor';
+import { Resistor } from '../../components/passive/resistor';
+import { Capacitor } from '../../components/passive/capacitor';
+import { VoltageSource } from '../../components/sources/voltage_source';
+import { ComponentInterface } from '../interfaces/component';
+import { SmartDeviceFactory } from '../devices/intelligent_device_factory';
+import { IIntelligentDeviceModel } from '../devices/intelligent_device_model';
 
 /**
  * 网表元素类型枚举
@@ -195,8 +200,23 @@ export class SpiceNetlistParser {
   /**
    * 🔧 从解析结果创建智能设备列表
    */
-  createDevicesFromNetlist(parsedNetlist: ParsedNetlist): IIntelligentDeviceModel[] {
-    const devices: IIntelligentDeviceModel[] = [];
+  createDevicesFromNetlist(parsedNetlist: ParsedNetlist): ComponentInterface[] {
+    const devices: ComponentInterface[] = [];
+    
+    try {
+      for (const element of parsedNetlist.elements) {
+        const device = this._createDeviceFromElement(element, parsedNetlist);
+        if (device) {
+          devices.push(device);
+        }
+      }
+      
+      return devices;
+      
+    } catch (error) {
+      throw new Error(`Device creation failed: ${error}`);
+    }
+  }
     
     try {
       for (const element of parsedNetlist.elements) {
@@ -725,7 +745,7 @@ export class SpiceNetlistParser {
     }
   }
 
-  private _createDeviceFromElement(element: NetlistElement, netlist: ParsedNetlist): IIntelligentDeviceModel | null {
+  private _createDeviceFromElement(element: NetlistElement, netlist: ParsedNetlist): ComponentInterface | null {
     try {
       const nodeIds = element.nodes.map(node => {
         const mappedNode = this._nodeAliases.get(node);
@@ -734,27 +754,16 @@ export class SpiceNetlistParser {
       
       switch (element.type) {
         case NetlistElementType.RESISTOR:
-          // TODO: 实现电阻器智能模型
-          return null;
+          return new Resistor(element.name, [element.nodes[0], element.nodes[1]], element.value as number);
           
         case NetlistElementType.INDUCTOR:
-          if (typeof element.value === 'number') {
-            return SmartDeviceFactory.createInductor(
-              element.name,
-              [nodeIds[0], nodeIds[1]],
-              {
-                L0: element.value,
-                Isat: element.parameters.get('ISAT') as number || 10,
-                alpha: element.parameters.get('ALPHA') as number || 2.0,
-                R: element.parameters.get('RSER') as number || element.value / 1000
-              }
-            );
-          }
-          break;
+          return new Inductor(element.name, [element.nodes[0], element.nodes[1]], element.value as number);
           
         case NetlistElementType.CAPACITOR:
-          // TODO: 实现电容器智能模型
-          return null;
+          return new Capacitor(element.name, [element.nodes[0], element.nodes[1]], element.value as number);
+          
+        case NetlistElementType.VOLTAGE_SOURCE:
+          return new VoltageSource(element.name, [element.nodes[0], element.nodes[1]], element.value as number);
           
         case NetlistElementType.DIODE:
           const diodeModel = element.modelName ? netlist.models.get(element.modelName) : null;

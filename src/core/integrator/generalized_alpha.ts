@@ -31,9 +31,9 @@ import type {
   Time,
   VoltageVector,
   IVector
-} from '../../types/index.js';
-import { Vector } from '../../math/sparse/vector.js';
-// import { UltraKLUSolver } from '../../../wasm/klu_solver.js'; // 動態導入
+} from '../../types/index';
+import { Vector } from '../../math/sparse/vector';
+// import { UltraKLUSolver } from '../../../wasm/klu_solver'; // 動態導入
 
 /**
  * Generalized-α 積分器參數

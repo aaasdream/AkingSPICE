@@ -28,9 +28,9 @@ import type {
   ISparseMatrix,
   IVector,
   VoltageVector
-} from '../../types/index.js';
-import { SparseMatrix } from '../../math/sparse/matrix.js';
-import { Vector } from '../../math/sparse/vector.js';
+} from '../../types/index';
+import { SparseMatrix } from '../../math/sparse/matrix';
+import { Vector } from '../../math/sparse/vector';
 
 /**
  * MNA 系統構建器和求解器

@@ -1,0 +1,86 @@
+name: Build KLU WebAssembly
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'wasm/**' ]
+  pull_request:
+    branches: [ main ]
+    paths: [ 'wasm/**' ]
+  workflow_dispatch:
+    inputs:
+      suitesparse_version:
+        description: 'SuiteSparse Version'
+        required: false
+        default: '7.8.3'
+
+jobs:
+  build-klu-wasm:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Cache Docker layers
+      uses: actions/cache@v3
+      with:
+        path: /tmp/.buildx-cache
+        key: ${{ runner.os }}-buildx-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-buildx-
+          
+    - name: Build KLU WebAssembly with Docker
+      run: |
+        cd wasm
+        chmod +x build_docker.sh
+        ./build_docker.sh
+        
+    - name: Verify build output
+      run: |
+        ls -la wasm/klu/
+        file wasm/klu/klu.wasm
+        
+    - name: Upload KLU WebAssembly artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: klu-webassembly
+        path: |
+          wasm/klu/klu.js
+          wasm/klu/klu.wasm
+        retention-days: 30
+        
+    - name: Test KLU module (if test exists)
+      run: |
+        if [ -f "check_klu_status.js" ]; then
+          node check_klu_status.js
+        fi
+      continue-on-error: true
+      
+    - name: Create release (on main branch)
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: klu-wasm-${{ github.run_number }}
+        name: KLU WebAssembly Build ${{ github.run_number }}
+        body: |
+          Automated KLU WebAssembly build from commit ${{ github.sha }}
+          
+          ## Files
+          - `klu.js` - JavaScript wrapper
+          - `klu.wasm` - WebAssembly binary
+          
+          ## Build Info
+          - SuiteSparse Version: ${{ inputs.suitesparse_version || '7.8.3' }}
+          - Build Date: ${{ github.event.head_commit.timestamp }}
+          - Commit: ${{ github.sha }}
+        files: |
+          wasm/klu/klu.js
+          wasm/klu/klu.wasm
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

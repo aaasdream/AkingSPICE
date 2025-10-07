@@ -25,10 +25,9 @@
 
 import type { 
   VoltageVector, 
-  CurrentVector, 
-  IMNASystem 
-} from '../../types/index.js';
-import { Vector } from '../../math/sparse/vector.js';
+  CurrentVector
+} from '../../types/index';
+import { Vector } from '../../math/sparse/vector';
 import { 
   IntelligentDeviceModelBase,
   LoadResult,
@@ -41,7 +40,7 @@ import {
   SwitchingEvent,
   NumericalChallenge,
   DiodeParameters
-} from './intelligent_device_model.js';
+} from './intelligent_device_model';
 
 /**
  * 二极管工作状态枚举
@@ -74,6 +73,8 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
   private static readonly FORWARD_VOLTAGE_LIMIT = 2.0; // 正向电压限制 (V)
   private static readonly CONVERGENCE_VOLTAGE_TOL = 1e-9; // 电压收敛容差 (nV)
   
+  private _gminConductance: number = 0;
+
   constructor(
     deviceId: string,
     nodes: [number, number], // [Anode, Cathode]  
@@ -98,7 +99,7 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
    * 4. 生成 MNA 印花
    * 5. 更新内部状态
    */
-  override load(voltage: VoltageVector, system: IMNASystem): LoadResult {
+  override load(voltage: VoltageVector): LoadResult {
     const startTime = performance.now();
     this._totalLoadCalls++;
     
@@ -161,6 +162,15 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
         }
       };
     }
+  }
+
+  /**
+   * ⚡️ Gmin Stepping 支持
+   * 
+   * 在 MNA 矩阵中并联一个临时电导
+   */
+  stampGmin(gmin: number): void {
+    this._gminConductance = gmin;
   }
 
   /**
@@ -353,14 +363,15 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
    * 生成 MNA 印花
    */
   private _generateMNAStamp(conductance: number): MatrixStamp {
+    const totalConductance = conductance + this._gminConductance;
     const entries: StampEntry[] = [
       // 阳极方程：Ia = G*(Va - Vc)
-      { row: this._anodeNode, col: this._anodeNode, value: conductance },
-      { row: this._anodeNode, col: this._cathodeNode, value: -conductance },
+      { row: this._anodeNode, col: this._anodeNode, value: totalConductance },
+      { row: this._anodeNode, col: this._cathodeNode, value: -totalConductance },
       
       // 阴极方程：Ic = -Ia
-      { row: this._cathodeNode, col: this._anodeNode, value: -conductance },
-      { row: this._cathodeNode, col: this._cathodeNode, value: conductance }
+      { row: this._cathodeNode, col: this._anodeNode, value: -totalConductance },
+      { row: this._cathodeNode, col: this._cathodeNode, value: totalConductance }
     ];
     
     return {
@@ -461,10 +472,6 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
       deltaV.set(this._anodeNode, deltaV.get(this._anodeNode) * scale);
       deltaV.set(this._cathodeNode, deltaV.get(this._cathodeNode) * scale);
     }
-  }
-
-  private _applyDiodeSpecificLimits(deltaV: VoltageVector): void {
-    this._applyDeviceSpecificLimits(deltaV);
   }
 
   /**

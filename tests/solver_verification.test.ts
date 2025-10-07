@@ -6,8 +6,8 @@
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { SparseMatrix } from '../src/math/sparse/matrix.js';
-import { Vector } from '../src/math/sparse/vector.js';
+import { SparseMatrix } from '../src/math/sparse/matrix';
+import { Vector } from '../src/math/sparse/vector';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 

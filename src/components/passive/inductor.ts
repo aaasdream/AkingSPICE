@@ -40,12 +40,19 @@ export class Inductor implements ComponentInterface {
     if (_inductance <= 0) {
       throw new Error(`电感值必须为正数: ${_inductance}`);
     }
+    if (!isFinite(_inductance) || isNaN(_inductance)) {
+      throw new Error(`电感值必须为有限数值: ${_inductance}`);
+    }
     if (nodes.length !== 2) {
       throw new Error(`电感必须连接两个节点，实际: ${nodes.length}`);
     }
     if (nodes[0] === nodes[1]) {
       throw new Error(`电感不能连接到同一节点: ${nodes[0]}`);
     }
+    
+    // 初始化历史状态为零（电感初始条件）
+    this._previousCurrent = 0.0;
+    this._previousVoltage = 0.0;
   }
   
   /**
@@ -66,7 +73,17 @@ export class Inductor implements ComponentInterface {
    * 🔢 设置电流支路索引
    */
   setCurrentIndex(index: number): void {
+    if (index < 0) {
+      throw new Error(`电感 ${this.name} 的电流索引必须为非负数: ${index}`);
+    }
     this._currentIndex = index;
+  }
+  
+  /**
+   * 🔍 检查电流索引是否已设置
+   */
+  hasCurrentIndexSet(): boolean {
+    return this._currentIndex !== undefined;
   }
   
   /**
@@ -76,6 +93,12 @@ export class Inductor implements ComponentInterface {
     if (dt <= 0) {
       throw new Error(`时间步长必须为正数: ${dt}`);
     }
+    if (!isFinite(dt) || isNaN(dt)) {
+      throw new Error(`时间步长必须为有限数值: ${dt}`);
+    }
+    if (dt > 1e-3) {
+      console.warn(`电感 ${this.name} 的时间步长过大，可能导致数值不稳定: ${dt}s，建议小于1ms`);
+    }
     this._timeStep = dt;
   }
   
@@ -83,6 +106,16 @@ export class Inductor implements ComponentInterface {
    * 📈 更新历史状态
    */
   updateHistory(current: number, voltage: number): void {
+    // 检查数值有效性
+    if (!isFinite(current) || isNaN(current)) {
+      console.warn(`电感 ${this.name} 的电流值无效: ${current}，使用前一值`);
+      current = this._previousCurrent;
+    }
+    if (!isFinite(voltage) || isNaN(voltage)) {
+      console.warn(`电感 ${this.name} 的电压值无效: ${voltage}，使用前一值`);
+      voltage = this._previousVoltage;
+    }
+    
     this._previousCurrent = current;
     this._previousVoltage = voltage;
   }
@@ -106,7 +139,7 @@ export class Inductor implements ComponentInterface {
     matrix: SparseMatrix, 
     rhs: Vector, 
     nodeMap: Map<string, number>,
-    currentTime?: number
+    _currentTime?: number
   ): void {
     const n1 = nodeMap.get(this.nodes[0]);
     const n2 = nodeMap.get(this.nodes[1]);
@@ -314,7 +347,7 @@ export namespace InductorFactory {
     name: string,
     nodes: [string, string], 
     inductance: number,
-    saturationCurrent: number
+    _saturationCurrent: number
   ): Inductor {
     const inductor = new Inductor(name, nodes, inductance);
     // 可以扩展饱和电流特性

@@ -5,7 +5,7 @@
  * 支持直流、正弦波、脉冲等多种波形
  */
 
-import { ComponentInterface, SourceInterface, ValidationResult, ComponentInfo, WaveformDescriptor } from '../../core/interfaces/component';
+import { ComponentInterface, SourceInterface, ValidationResult, ComponentInfo, WaveformDescriptor, ScalableSource } from '../../core/interfaces/component';
 import { SparseMatrix } from '../../math/sparse/matrix';
 import { Vector } from '../../math/sparse/vector';
 
@@ -20,12 +20,14 @@ import { Vector } from '../../math/sparse/vector';
  * 
  * 其中 I_v 是电压源的电流变量
  */
-export class VoltageSource implements ComponentInterface, SourceInterface {
+export class VoltageSource implements ComponentInterface, SourceInterface, ScalableSource {
   readonly type = 'V';
   
   private _currentIndex?: number;
   private _waveform: WaveformDescriptor;
   private _dcScaleFactor = 1.0; // 新增：直流缩放因子（用于源步进）
+  
+  private _originalValue: number;
   
   constructor(
     public readonly name: string,
@@ -40,10 +42,19 @@ export class VoltageSource implements ComponentInterface, SourceInterface {
       throw new Error(`电压源不能连接到同一节点: ${nodes[0]}`);
     }
     
+    this._originalValue = _dcValue;
     this._waveform = waveform || {
       type: 'DC',
       parameters: { value: _dcValue }
     };
+  }
+  
+  scaleSource(factor: number): void {
+    this._dcValue = this._originalValue * factor;
+  }
+
+  restoreSource(): void {
+    this._dcValue = this._originalValue;
   }
   
   /**
@@ -139,13 +150,21 @@ export class VoltageSource implements ComponentInterface, SourceInterface {
           const td2 = params['delay2'] || 1e-6;
           const tau2 = params['tau2'] || 1e-6;
           
+          // 确保时间常数为正值
+          const safeTau1 = Math.max(tau1, 1e-15);
+          const safeTau2 = Math.max(tau2, 1e-15);
+          
           if (time < td1) {
             return v1;
           } else if (time < td2) {
-            return v1 + (v2 - v1) * (1 - Math.exp(-(time - td1) / tau1));
+            // 上升阶段：从 v1 指数上升到 v2
+            return v1 + (v2 - v1) * (1 - Math.exp(-(time - td1) / safeTau1));
           } else {
-            const v_peak = v1 + (v2 - v1) * (1 - Math.exp(-(td2 - td1) / tau1));
-            return v_peak - (v2 - v1) * (1 - Math.exp(-(time - td2) / tau2));
+            // 下降阶段：从 v2 指数下降
+            // 先计算在 td2 时刻的峰值
+            const v_peak = v1 + (v2 - v1) * (1 - Math.exp(-(td2 - td1) / safeTau1));
+            // 然后从峰值开始按照 tau2 指数衰减到 v1
+            return v1 + (v_peak - v1) * Math.exp(-(time - td2) / safeTau2);
           }
         }
         

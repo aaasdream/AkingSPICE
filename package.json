@@ -25,7 +25,11 @@
     "test:core": "node test-runner.js --category algorithms --report spice-core-report.json",
     "test:benchmark": "node test-runner.js --category validation --report spice-benchmark-report.json",
     "validate": "node test-runner.js --quick --report validation-report.json",
-    "validate:spice": "node test-runner.js --category algorithms,validation --report spice-validation-report.json"
+    "validate:spice": "node test-runner.js --category algorithms,validation --report spice-validation-report.json",
+    "build:klu": "cd wasm && ./build_klu_wasm.sh",
+    "build:klu:win": "cd wasm && build_klu_wasm.bat",
+    "test:klu": "node examples/klu_wasm_test.js",
+    "clean:klu": "cd wasm && ./build_klu_wasm.sh --clean"
   },
   "keywords": [
     "spice",

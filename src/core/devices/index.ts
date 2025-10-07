@@ -1,7 +1,12 @@
 /**
  * 🧠 智能设备模块 - AkingSPICE 2.1 重构版
- * 
- * 专注于非线性智能设备的统一导出接口
+ *   PhysicalConsistency
+} from './intelligent_device_model';
+
+// === 枚举类型 ===
+export {
+  StampType
+} from './intelligent_device_model';于非线性智能设备的统一导出接口
  * 移除与基础组件重复的部分，保持架构清晰
  * 
  * 📋 重构说明：
@@ -12,7 +17,7 @@
  * 🎯 使用示例：
  * 
  * ```typescript
- * import { SmartDeviceFactory, BuckConverterSmartKit } from './devices/index.js';
+ * import { SmartDeviceFactory, BuckConverterSmartKit } from './devices/index';
  * 
  * // 创建智能 MOSFET
  * const mosfet = SmartDeviceFactory.createMOSFET('M1', [1, 2, 0], { Vth: 2.0 });
@@ -42,21 +47,21 @@ export type {
   SwitchingEvent,
   NumericalChallenge,
   PhysicalConsistency
-} from './intelligent_device_model.js';
+} from './intelligent_device_model';
 
 // === 枚举类型 ===
 export {
   StampType
-} from './intelligent_device_model.js';
+} from './intelligent_device_model';
 
 // === 智能设备实现类 ===
 import {
   IntelligentMOSFET
-} from './intelligent_mosfet.js';
+} from './intelligent_mosfet';
 
 import {
   IntelligentDiode
-} from './intelligent_diode.js';
+} from './intelligent_diode';
 
 export {
   IntelligentMOSFET,
@@ -67,20 +72,11 @@ export {
 import {
   SmartDeviceFactory,
   BuckConverterSmartKit
-} from './intelligent_device_factory.js';
+} from './intelligent_device_factory';
 
 export {
   SmartDeviceFactory,
   BuckConverterSmartKit
-};
-
-// === 测试工具 ===
-import {
-  IntelligentDeviceModelTests
-} from './intelligent_device_test.js';
-
-export {
-  IntelligentDeviceModelTests
 };
 
 // === 便捷导出函数 ===
@@ -109,9 +105,6 @@ export default {
   // 设备类
   IntelligentMOSFET,
   IntelligentDiode,
-  
-  // 测试工具
-  IntelligentDeviceModelTests,
   
   // 便捷函数
   createMOSFET,

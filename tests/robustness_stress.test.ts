@@ -6,9 +6,9 @@
  */
 
 import { describe, test, expect, beforeEach } from 'vitest';
-import { CircuitSimulationEngine, SimulationConfig } from '../src/core/simulation/circuit_simulation_engine.js';
-import { SparseMatrix } from '../src/math/sparse/matrix.js';
-import { Vector } from '../src/math/sparse/vector.js';
+import { CircuitSimulationEngine, SimulationConfig } from '../src/core/simulation/circuit_simulation_engine';
+import { SparseMatrix } from '../src/math/sparse/matrix';
+import { Vector } from '../src/math/sparse/vector';
 
 describe('🚀 AkingSPICE 真正的魯棒性壓力測試', () => {
   let engine: CircuitSimulationEngine;

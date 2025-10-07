@@ -122,6 +122,25 @@ export interface SourceInterface extends ComponentInterface {
 }
 
 /**
+ * ⚡️ 可缩放激励源接口
+ * 
+ * 用于源步进 (Source Stepping) 等 Homotopy 方法
+ * 允许仿真引擎动态调整激励源强度
+ */
+export interface ScalableSource {
+  /**
+   * ⚖️ 缩放源值
+   * @param factor - 缩放因子 (0 到 1)
+   */
+  scaleSource(factor: number): void;
+
+  /**
+   * ⏪ 恢复原始源值
+   */
+  restoreSource(): void;
+}
+
+/**
  * 📏 验证结果
  */
 export interface ValidationResult {
