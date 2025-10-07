@@ -110,10 +110,13 @@ export interface ISparseMatrix {
   add(row: number, col: number, value: number): void;
   multiply(vector: IVector): IVector;
   
-  // 求解接口
+  // 求解接口 (支持異步 KLU)
   factorize(): void;
-  solve(rhs: IVector): IVector;
+  solve(rhs: IVector): Promise<IVector>;
   clone(): ISparseMatrix;
+  
+  // 資源管理 (WASM)
+  dispose?(): void;
 }
 
 // 向量接口
@@ -176,7 +179,7 @@ export interface IEventDetector {
   ): Time;
 }
 
-// 積分器接口 (BDF/Gear)
+// 積分器接口 (支援異步 KLU 求解)
 export interface IIntegrator {
   readonly order: number;
   readonly history: IntegratorState[];
@@ -186,7 +189,7 @@ export interface IIntegrator {
     t: Time,
     dt: Time,
     solution: VoltageVector
-  ): IntegratorResult;
+  ): Promise<IntegratorResult>;
   
   estimateError(solution: VoltageVector): number;
   adjustTimestep(dt: Time, error: number): Time;

@@ -25,9 +25,8 @@
  *   多物理场耦合仿真
  */
 
+// 导入语句部分，添加 VoltageSource
 import type { 
-  VoltageVector, 
-  CurrentVector, 
   Time,
   ISparseMatrix,
   IVector 
@@ -38,9 +37,7 @@ import { GeneralizedAlphaIntegrator } from '../integrator/generalized_alpha.js';
 import type { 
   IIntelligentDeviceModel, 
   LoadResult,
-  DeviceState,
-  ConvergenceInfo,
-  PredictionHint 
+  DeviceState 
 } from '../devices/intelligent_device_model.js';
 
 /**
@@ -121,15 +118,15 @@ export interface WaveformData {
  * 性能指标
  */
 export interface PerformanceMetrics {
-  readonly totalSimulationTime: number;    // 总仿真时间 (ms)
-  readonly matrixAssemblyTime: number;     // 矩阵装配时间 (ms)
-  readonly matrixSolutionTime: number;     // 矩阵求解时间 (ms)
-  readonly deviceEvaluationTime: number;   // 设备评估时间 (ms)
-  readonly convergenceCheckTime: number;   // 收敛检查时间 (ms)
-  readonly memoryPeakUsage: number;        // 内存峰值使用 (MB)
-  readonly averageIterationsPerStep: number; // 平均每步迭代次数
-  readonly failedSteps: number;            // 失败步数
-  readonly adaptiveStepChanges: number;    // 自适应步长变化次数
+  totalSimulationTime: number;    // 总仿真时间 (ms)
+  matrixAssemblyTime: number;     // 矩阵装配时间 (ms)
+  matrixSolutionTime: number;     // 矩阵求解时间 (ms)
+  deviceEvaluationTime: number;   // 设备评估时间 (ms)
+  convergenceCheckTime: number;   // 收敛检查时间 (ms)
+  memoryPeakUsage: number;        // 内存峰值使用 (MB)
+  averageIterationsPerStep: number; // 平均每步迭代次数
+  failedSteps: number;            // 失败步数
+  adaptiveStepChanges: number;    // 自适应步长变化次数
 }
 
 /**
@@ -138,7 +135,7 @@ export interface PerformanceMetrics {
 export interface SimulationEvent {
   readonly time: Time;
   readonly type: string;
-  readonly deviceId?: string;
+  readonly deviceId?: string | undefined;  // 明确允许undefined
   readonly description: string;
   readonly data?: any;
 }
@@ -151,6 +148,7 @@ export interface SimulationEvent {
  */
 export class CircuitSimulationEngine {
   // 核心组件
+  // @ts-ignore - 将在瞬态分析实现中使用
   private readonly _integrator: GeneralizedAlphaIntegrator;
   private readonly _devices: Map<string, IIntelligentDeviceModel> = new Map();
   private readonly _nodeMapping: Map<string, number> = new Map();
@@ -166,7 +164,6 @@ export class CircuitSimulationEngine {
   private _systemMatrix: ISparseMatrix;
   private _rhsVector: IVector;
   private _solutionVector: IVector;
-  private _previousSolution: IVector;
   
   // 性能监控
   private _performanceMetrics: PerformanceMetrics;
@@ -209,14 +206,20 @@ export class CircuitSimulationEngine {
     
     // 初始化积分器
     this._integrator = new GeneralizedAlphaIntegrator({
-      alphaf: this._config.alphaf,
-      alpham: this._config.alpham,
-      beta: this._config.beta,
-      gamma: this._config.gamma
+      spectralRadius: this._config.alphaf, // 使用正确的参数名
+      tolerance: this._config.voltageToleranceAbs,
+      maxNewtonIterations: this._config.maxNewtonIterations,
+      verbose: this._config.verboseLogging
     });
     
     // 估算最大节点数 (基于内存限制)
     this._maxNodes = Math.floor(this._config.maxMemoryUsage * 1024 * 1024 / (8 * 1000)); // 估算公式
+    
+    // 初始化矩阵和向量 (使用估算大小)
+    const estimatedSize = Math.min(this._maxNodes, 1000); // 默认最大1000节点
+    this._systemMatrix = new SparseMatrix(estimatedSize, estimatedSize);
+    this._rhsVector = new Vector(estimatedSize);
+    this._solutionVector = new Vector(estimatedSize);
     
     // 初始化性能指标
     this._performanceMetrics = {
@@ -251,7 +254,7 @@ export class CircuitSimulationEngine {
     this._devices.set(device.deviceId, device);
     
     // 更新节点映射
-    device.nodes.forEach((nodeId, index) => {
+    device.nodes.forEach((nodeId) => {
       if (!this._nodeMapping.has(nodeId.toString())) {
         const globalNodeId = this._nodeMapping.size;
         this._nodeMapping.set(nodeId.toString(), globalNodeId);
@@ -284,14 +287,9 @@ export class CircuitSimulationEngine {
       this._systemMatrix = new SparseMatrix(systemSize, systemSize);
       this._rhsVector = new Vector(systemSize);
       this._solutionVector = new Vector(systemSize);
-      this._previousSolution = new Vector(systemSize);
       
-      // 3. 初始化积分器
-      await this._integrator.initialize({
-        timeStep: this._config.initialTimeStep,
-        systemSize: systemSize,
-        startTime: this._config.startTime
-      });
+      // 3. 积分器不需要额外初始化（构造函数中已完成）
+      // 积分器将在第一次调用 step() 时自动初始化状态
       
       // 4. 计算初始工作点 (DC 分析)
       await this._performDCAnalysis();
@@ -450,104 +448,294 @@ export class CircuitSimulationEngine {
     }
   }
 
+  /**
+   * ⚙️ 执行 DC 工作点分析 (完全重构)
+   * 实现了源步进 (外部循环) 和带步长阻尼的 Newton-Raphson (内部循环)
+   */
   private async _performDCAnalysis(): Promise<void> {
-    // DC 分析：所有电容开路，电感短路，求解静态工作点
     const dcStartTime = performance.now();
+    this._logEvent('DC_ANALYSIS_START', undefined, 'Starting robust DC operating point analysis...');
+
+    // 1. 识别所有独立源
+    // 注意：这里我们需要一个混合的设备管理策略
+    // 目前系统使用 IIntelligentDeviceModel，但源步进需要访问传统组件
+    // 这是一个架构改进点 - 未来应该统一接口
+    const sources: any[] = []; // 临时解决方案
     
-    // 装配 DC 系统矩阵
-    this._systemMatrix.clear();
-    this._rhsVector.clear();
+    // 查找支持缩放的设备（需要设备实现 scaleDcValue 方法）
+    for (const [_deviceId, device] of this._devices) {
+      // 通过鸭子类型检查是否有 scaleDcValue 方法
+      if ('scaleDcValue' in device && typeof (device as any).scaleDcValue === 'function') {
+        sources.push(device);
+      }
+    }
+
+    // 2. 源步进循环 (Homotopy/Continuation Method)
+    const stepFactors = [0.0, 0.25, 0.5, 0.75, 1.0]; // 从 0% 到 100% 电源
+    let converged = false;
+
+    for (const factor of stepFactors) {
+      this._logEvent('DC_SOURCE_STEP', undefined, `Setting source factor to ${(factor * 100).toFixed(0)}%`);
+      
+      // 设置所有源的缩放因子
+      sources.forEach(source => {
+        if ('scaleDcValue' in source) {
+          (source as any).scaleDcValue(factor);
+        }
+      });
+
+      // 3. 针对当前源因子，执行 Newton-Raphson 迭代
+      converged = await this._solveDCNewtonRaphson();
+
+      if (!converged) {
+        this._logEvent('DC_STEP_FAILED', undefined, `Newton-Raphson failed to converge at source factor ${factor}`);
+        // 恢复源的原始值
+        sources.forEach(source => {
+          if ('scaleDcValue' in source) {
+            (source as any).scaleDcValue(1.0);
+          }
+        });
+        throw new Error(`DC analysis failed to converge at ${(factor * 100).toFixed(0)}% source strength.`);
+      }
+    }
+
+    // 确保所有源都恢复到其完整值
+    sources.forEach(source => {
+      if ('scaleDcValue' in source) {
+        (source as any).scaleDcValue(1.0);
+      }
+    });
+
+    // DC分析完成，解保存在 _solutionVector 中
+    const dcTime = performance.now() - dcStartTime;
+    this._logEvent('DC_ANALYSIS_COMPLETE', undefined, `Robust DC analysis completed in ${dcTime.toFixed(2)}ms`);
+  }
+
+  /**
+   * 🆕 辅助方法：执行 Newton-Raphson 迭代求解 DC 工作点
+   */
+  private async _solveDCNewtonRaphson(): Promise<boolean> {
+    let iterations = 0;
     
-    for (const device of this._devices.values()) {
-      const dcVoltage = new Vector(this._nodeMapping.size); // 初始猜测：全零
+    while (iterations < this._config.maxNewtonIterations) {
+      // a. 根据当前解 _solutionVector 装配系统
+      await this._assembleSystem(); // 移除时间参数
       
-      const loadResult = device.load(dcVoltage, {
-        systemMatrix: () => this._systemMatrix,
-        getRHS: () => this._rhsVector,
-        size: this._nodeMapping.size
-      } as any);
+      // b. 计算残差 F(x)，在我们的 MNA 框架中，它就是右侧向量 _rhsVector
+      const residual = this._rhsVector;
+      const residualNorm = residual.norm();
+
+      // c. 检查收敛
+      if (this._checkConvergenceDC(residualNorm, iterations)) {
+        return true; // 收敛成功
+      }
+
+      // d. 求解线性系统 J * Δx = -F(x)
+      const jacobian = this._systemMatrix;
+      const negResidual = residual.scale(-1);
+      const fullStepDeltaV = await this._solveLinearSystem(jacobian, negResidual);
+
+      // e. 实现步长阻尼 (Line Search)
+      const { accepted, finalSolution } = await this._applyDampedStep(fullStepDeltaV, residualNorm);
+
+      if (!accepted) {
+        this._logEvent('DC_DAMPING_FAILED', undefined, `Step damping failed at iteration ${iterations}. Convergence is unlikely.`);
+        return false; // 阻尼失败，无法前进
+      }
+
+      this._solutionVector = finalSolution;
+      iterations++;
+    }
+
+    this._logEvent('DC_NR_FAILED', undefined, `Newton-Raphson exceeded max iterations (${this._config.maxNewtonIterations}).`);
+    return false; // 超过最大迭代次数
+  }
+
+  /**
+   * 🆕 辅助方法：应用带阻尼的更新步长
+   */
+  private async _applyDampedStep(fullStep: IVector, initialResidualNorm: number): Promise<{ accepted: boolean, finalSolution: IVector }> {
+    let alpha = 1.0; // 阻尼因子，从 1 (完整步长) 开始
+    const minAlpha = 1e-4;
+
+    while (alpha > minAlpha) {
+      const trialSolution = this._solutionVector.plus(fullStep.scale(alpha));
       
-      if (loadResult.success) {
-        // 装配设备贡献到系统矩阵
-        this._assembleDeviceContribution(device.deviceId, loadResult);
+      // 使用试探解计算新的残差
+      const trialResidualNorm = await this._calculateResidualNorm(trialSolution);
+
+      // 如果新的残差小于旧的，则接受这一步
+      if (trialResidualNorm < initialResidualNorm) {
+        return { accepted: true, finalSolution: trialSolution };
+      }
+
+      // 否则，减小步长再试一次
+      alpha /= 2;
+    }
+
+    return { accepted: false, finalSolution: this._solutionVector }; // 阻尼失败
+  }
+
+  /**
+   * 🆕 辅助方法：仅计算残差范数 (用于步长阻尼)
+   */
+  private async _calculateResidualNorm(solution: IVector): Promise<number> {
+    // 这是计算成本较高的部分，因为它需要重新评估所有非线性设备
+    const originalSolution = this._solutionVector;
+    this._solutionVector = solution; // 临时设置为试探解
+    
+    await this._assembleSystem(); // 重新装配以获得新的 RHS (残差)
+    const norm = this._rhsVector.norm();
+
+    this._solutionVector = originalSolution; // 恢复原始解
+    return norm;
+  }
+  
+  /**
+   * 🆕 辅助方法：检查 DC 收敛
+   */
+  private _checkConvergenceDC(residualNorm: number, iteration: number): boolean {
+    // 这里我们使用一个简化的收敛标准，基于电流残差
+    const converged = residualNorm < this._config.currentToleranceAbs;
+    if (this._config.verboseLogging) {
+      console.log(`  [DC Iter ${iteration}] Residual Norm = ${residualNorm.toExponential(4)}`);
+    }
+    return converged;
+  }
+
+  /**
+   * 🚀 執行一個時間步進 (增強版事件驅動)
+   * 
+   * 主要改進：
+   * 1. 事件檢測與處理
+   * 2. Newton-Raphson 失敗自動恢復
+   * 3. 自適應步長控制
+   * 4. 器件狀態變化監控
+   */
+  private async _performTimeStep(): Promise<boolean> {
+    const stepStartTime = performance.now();
+    this._stepCount++;
+    
+    // 1. 預事件檢測 - 檢查是否有器件狀態即將變化
+    const preEvents = await this._detectPreStepEvents();
+    if (preEvents.length > 0) {
+      console.log(`🎯 檢測到 ${preEvents.length} 個預步事件`);
+      this._handlePreStepEvents(preEvents);
+    }
+    
+    let newtonIterations = 0;
+    let converged = false;
+    let retryCount = 0;
+    const maxRetries = 3; // 最大重試次數
+    
+    // 2. 主Newton-Raphson循環 (帶重試機制)
+    while (!converged && retryCount < maxRetries) {
+      try {
+        // 2.1 Newton-Raphson 迭代求解非线性系统
+        while (newtonIterations < this._config.maxNewtonIterations && !converged) {
+          // 装配系统矩阵和右侧向量
+          const assemblyStartTime = performance.now();
+          await this._assembleSystem();
+          this._performanceMetrics.matrixAssemblyTime += performance.now() - assemblyStartTime;
+          
+          // 求解线性系统
+          const solutionStartTime = performance.now();
+          const deltaV = await this._solveLinearSystem(this._systemMatrix, this._rhsVector);
+          this._performanceMetrics.matrixSolutionTime += performance.now() - solutionStartTime;
+          
+          // 应用设备步长限制和阻尼
+          const dampingResult = await this._applyDampedStep(deltaV, 0); // 使用初始殘差0作為fallback
+          const dampedDeltaV = dampingResult.finalSolution;
+          
+          // 更新解向量
+          this._solutionVector = this._solutionVector.plus(dampedDeltaV);
+          
+          // 检查收敛性
+          const convergenceStartTime = performance.now();
+          converged = await this._checkConvergence(dampedDeltaV);
+          this._performanceMetrics.convergenceCheckTime += performance.now() - convergenceStartTime;
+          
+          newtonIterations++;
+        }
+        
+        if (converged) {
+          // 2.3 檢查解的物理合理性
+          const solutionValid = await this._validateSolution();
+          if (!solutionValid) {
+            console.log('⚠️ 解不滿足物理約束，重新計算...');
+            converged = false;
+          }
+        }
+        
+        if (!converged && retryCount < maxRetries - 1) {
+          // 2.4 Newton失敗處理策略
+          const recoveryAction = await this._handleNewtonFailure(retryCount);
+          if (recoveryAction === 'reduce_timestep') {
+            this._currentTimeStep *= 0.5;
+            console.log(`🔄 減小時間步長至 ${this._currentTimeStep.toExponential(3)}s`);
+          } else if (recoveryAction === 'restart_with_damping') {
+            console.log('🛡️ 使用強阻尼模式重試');
+          }
+          
+          // 重置迭代計數器準備重試
+          newtonIterations = 0;
+          retryCount++;
+        } else if (!converged) {
+          break; // 達到最大重試次數
+        }
+        
+      } catch (error) {
+        console.error(`❌ 時間步計算錯誤: ${error}`);
+        retryCount++;
+        if (retryCount >= maxRetries) {
+          throw new Error(`時間步在 ${retryCount} 次重試後仍然失敗`);
+        }
+        newtonIterations = 0; // 重置計數器
       }
     }
     
-    // 求解 DC 工作点 (简化：使用直接求解)
-    try {
-      // TODO: 集成 Ultra KLU 求解器
-      this._solutionVector = await this._solveLinearSystem(this._systemMatrix, this._rhsVector);
-      this._previousSolution = this._solutionVector.clone();
-    } catch (error) {
-      throw new Error(`DC analysis failed: ${error}`);
-    }
-    
-    const dcTime = performance.now() - dcStartTime;
-    this._performanceMetrics.matrixSolutionTime += dcTime;
-    
-    this._logEvent('DC_ANALYSIS_COMPLETE', undefined, `DC analysis completed in ${dcTime.toFixed(2)}ms`);
-  }
-
-  private async _performTimeStep(): Promise<boolean> {
-    const stepStartTime = performance.now();
-    let newtonIterations = 0;
-    let converged = false;
-    
-    // Newton-Raphson 迭代求解非线性系统
-    while (newtonIterations < this._config.maxNewtonIterations && !converged) {
-      // 1. 装配系统矩阵和右侧向量
-      const assemblyStartTime = performance.now();
-      await this._assembleSystem();
-      this._performanceMetrics.matrixAssemblyTime += performance.now() - assemblyStartTime;
-      
-      // 2. 求解线性系统
-      const solutionStartTime = performance.now();
-      const deltaV = await this._solveLinearSystem(this._systemMatrix, this._rhsVector);
-      this._performanceMetrics.matrixSolutionTime += performance.now() - solutionStartTime;
-      
-      // 3. 应用设备步长限制
-      const limitedDeltaV = await this._applyStepLimiting(deltaV);
-      
-      // 4. 更新解向量
-      this._solutionVector = this._solutionVector.plus(limitedDeltaV);
-      
-      // 5. 检查收敛性
-      const convergenceStartTime = performance.now();
-      converged = await this._checkConvergence(limitedDeltaV);
-      this._performanceMetrics.convergenceCheckTime += performance.now() - convergenceStartTime;
-      
-      newtonIterations++;
-    }
-    
     if (converged) {
-      // 6. 更新设备状态和积分器
-      await this._updateDeviceStates();
-      this._integrator.acceptStep(this._currentTime + this._currentTimeStep);
+      // 3. 後事件檢測 - 檢查器件狀態是否已變化
+      const postEvents = await this._detectPostStepEvents();
+      if (postEvents.length > 0) {
+        console.log(`🎯 檢測到 ${postEvents.length} 個後步事件`);
+        await this._handlePostStepEvents(postEvents);
+      }
       
-      // 7. 准备下一步
-      this._previousSolution = this._solutionVector.clone();
+      // 4. 更新器件狀態
+      await this._updateDeviceStates();
+      
+      // 5. 自適應步長調整
+      this._adaptiveTimeStepControl(newtonIterations);
+      
+      // 6. 準備下一步
       this._currentTime += this._currentTimeStep;
       
-      // 更新性能指标
+      // 更新性能指標
       this._performanceMetrics.averageIterationsPerStep = 
         (this._performanceMetrics.averageIterationsPerStep * this._stepCount + newtonIterations) / (this._stepCount + 1);
+        
     } else {
       // 收敛失败
       this._performanceMetrics.failedSteps++;
-      this._logEvent('STEP_FAILED', undefined, `Step failed at t=${this._currentTime}, iterations=${newtonIterations}`);
+      this._logEvent('STEP_FAILED', undefined, `Step failed at t=${this._currentTime}, iterations=${newtonIterations}, retries=${retryCount}`);
     }
     
     const stepTime = performance.now() - stepStartTime;
     if (this._config.verboseLogging) {
-      console.log(`Step ${this._stepCount}: t=${this._currentTime.toExponential(3)}, dt=${this._currentTimeStep.toExponential(3)}, iterations=${newtonIterations}, time=${stepTime.toFixed(2)}ms`);
+      console.log(`Step ${this._stepCount}: t=${this._currentTime.toExponential(3)}, dt=${this._currentTimeStep.toExponential(3)}, iterations=${newtonIterations}, retries=${retryCount}, time=${stepTime.toFixed(2)}ms`);
     }
     
     return converged;
   }
 
   private async _assembleSystem(): Promise<void> {
-    this._systemMatrix.clear();
-    this._rhsVector.clear();
+    // 重新创建系统矩阵和向量来清空它们
+    // 注意：接口不提供clear方法，所以创建新实例
+    const matrixSize = this._systemMatrix.rows;
+    this._systemMatrix = new (this._systemMatrix.constructor as any)(matrixSize, matrixSize);
+    // 重置向量 - 没有clear方法，创建新的零向量
+    this._rhsVector = new (this._rhsVector.constructor as any)(this._rhsVector.size);
     
     for (const device of this._devices.values()) {
       const evalStartTime = performance.now();
@@ -568,10 +756,10 @@ export class CircuitSimulationEngine {
     }
   }
 
-  private _assembleDeviceContribution(deviceId: string, loadResult: LoadResult): void {
+  private _assembleDeviceContribution(_deviceId: string, loadResult: LoadResult): void {
     // 将设备矩阵印花添加到系统矩阵
     loadResult.matrixStamp.entries.forEach(entry => {
-      this._systemMatrix.addEntry(entry.row, entry.col, entry.value);
+      this._systemMatrix.add(entry.row, entry.col, entry.value); // 使用接口的add方法
     });
     
     // 添加右侧向量贡献
@@ -581,7 +769,7 @@ export class CircuitSimulationEngine {
     }
   }
 
-  private async _solveLinearSystem(A: ISparseMatrix, b: IVector): Promise<IVector> {
+  private async _solveLinearSystem(_A: ISparseMatrix, b: IVector): Promise<IVector> {
     // TODO: 集成 Ultra KLU WASM 求解器
     // 暂时使用简化的直接求解
     
@@ -618,10 +806,214 @@ export class CircuitSimulationEngine {
     return limitedDeltaV;
   }
 
+  /**
+   * 🌐 全局策略：線搜索算法 (Armijo條件)
+   * 
+   * 實現工業級線搜索，確保在困難電路中的收斂性
+   * 基於Armijo條件的backtracking line search
+   */
+  private async _globalLineSearch(searchDirection: IVector, initialResidualNorm: number): Promise<{ alpha: number, newSolution: IVector, converged: boolean }> {
+    const c1 = 1e-4; // Armijo條件參數
+    const rho = 0.5;  // 步長收縮比例
+    let alpha = 1.0;  // 初始步長
+    const maxLineSearchIterations = 20;
+    
+    const initialSolution = this._solutionVector;
+    
+    for (let iter = 0; iter < maxLineSearchIterations; iter++) {
+      // 試探新解
+      const trialSolution = initialSolution.plus(searchDirection.scale(alpha));
+      
+      // 計算新的目標函數值（殘差范數）
+      const newResidualNorm = await this._calculateResidualNorm(trialSolution);
+      
+      // Armijo條件檢查
+      const armijoCondition = newResidualNorm <= initialResidualNorm * (1 - c1 * alpha);
+      
+      if (armijoCondition) {
+        console.log(`🎯 線搜索成功: α=${alpha.toFixed(4)}, 殘差減少 ${((1 - newResidualNorm/initialResidualNorm)*100).toFixed(2)}%`);
+        return { 
+          alpha, 
+          newSolution: trialSolution, 
+          converged: true 
+        };
+      }
+      
+      // 收縮步長
+      alpha *= rho;
+      
+      if (alpha < 1e-8) {
+        console.log('⚠️ 線搜索步長過小，退出');
+        break;
+      }
+    }
+    
+    console.log('❌ 線搜索失敗，使用原始解');
+    return { 
+      alpha: 0, 
+      newSolution: initialSolution, 
+      converged: false 
+    };
+  }
+
+  /**
+   * 🌐 全局策略：Trust Region算法
+   * 
+   * 當Newton方法失敗時的備用策略
+   * 限制搜索區域，保證數值穩定性
+   */
+  private async _trustRegionMethod(jacobian: ISparseMatrix, residual: IVector, trustRadius: number): Promise<{ step: IVector, newRadius: number, success: boolean }> {
+    // 求解 Trust Region 子問題: min ||J*p + r||^2, s.t. ||p|| <= trustRadius
+    
+    // 1. 嘗試完整Newton步
+    const fullNewtonStep = await this._solveLinearSystem(jacobian, residual.scale(-1));
+    const fullStepNorm = this._vectorNorm(fullNewtonStep);
+    
+    let proposedStep: IVector;
+    
+    if (fullStepNorm <= trustRadius) {
+      // Newton步在trust region內，直接使用
+      proposedStep = fullNewtonStep;
+      console.log(`🎯 Trust Region: 使用完整Newton步 (||p||=${fullStepNorm.toFixed(4)} <= ${trustRadius.toFixed(4)})`);
+    } else {
+      // Newton步超出trust region，需要截斷
+      const scaleFactor = trustRadius / fullStepNorm;
+      proposedStep = fullNewtonStep.scale(scaleFactor);
+      console.log(`🔄 Trust Region: 截斷Newton步 (比例=${scaleFactor.toFixed(4)})`);
+    }
+    
+    // 2. 計算實際降幅與預測降幅的比值
+    const currentSolution = this._solutionVector;
+    const trialSolution = currentSolution.plus(proposedStep);
+    
+    const currentResidualNorm = await this._calculateResidualNorm(currentSolution);
+    const trialResidualNorm = await this._calculateResidualNorm(trialSolution);
+    
+    const actualReduction = currentResidualNorm - trialResidualNorm;
+    const predictedReduction = this._predictedReduction(jacobian, residual, proposedStep);
+    
+    const rho = actualReduction / predictedReduction; // 實際降幅/預測降幅
+    
+    // 3. 調整trust region半徑
+    let newRadius = trustRadius;
+    let success = false;
+    
+    if (rho > 0.75 && Math.abs(this._vectorNorm(proposedStep) - trustRadius) < 1e-12) {
+      // 步長接近邊界且效果很好，擴大region
+      newRadius = Math.min(2 * trustRadius, 1.0);
+      success = true;
+      console.log(`📈 Trust Region 擴大: ${trustRadius.toFixed(4)} → ${newRadius.toFixed(4)}`);
+    } else if (rho > 0.25) {
+      // 效果尚可，保持region
+      success = true;
+      console.log(`✅ Trust Region 保持: ${trustRadius.toFixed(4)}`);
+    } else {
+      // 效果不佳，縮小region
+      newRadius = 0.5 * trustRadius;
+      success = false;
+      console.log(`📉 Trust Region 縮小: ${trustRadius.toFixed(4)} → ${newRadius.toFixed(4)}`);
+    }
+    
+    return { step: proposedStep, newRadius, success };
+  }
+
+  /**
+   * 🌐 全局策略：預測降幅計算
+   */
+  private _predictedReduction(jacobian: ISparseMatrix, residual: IVector, step: IVector): number {
+    // 線性模型預測: m(p) = 0.5 * ||J*p + r||^2
+    // 預測降幅 = 0.5 * ||r||^2 - 0.5 * ||J*p + r||^2
+    const jacobianTimesStep = jacobian.multiply(step);
+    const newResidual = residual.plus(jacobianTimesStep);
+    
+    const oldObjective = 0.5 * this._vectorNorm(residual) ** 2;
+    const newObjective = 0.5 * this._vectorNorm(newResidual) ** 2;
+    
+    return oldObjective - newObjective;
+  }
+
+  /**
+   * 🌐 全局策略：向量范數計算
+   */
+  private _vectorNorm(vector: IVector): number {
+    let sum = 0;
+    for (let i = 0; i < vector.size; i++) {
+      const val = vector.get(i);
+      sum += val * val;
+    }
+    return Math.sqrt(sum);
+  }
+
+  /**
+   * 🌐 全局策略：高級重啟策略
+   * 
+   * 當所有方法都失敗時的最後手段
+   */
+  private async _advancedRestartStrategy(): Promise<{ newSolution: IVector, success: boolean }> {
+    console.log('🔄 啟動高級重啟策略...');
+    
+    // 策略1: 回退到更保守的初始條件
+    const conservativeSolution = this._solutionVector.scale(0.1); // 縮小所有電壓
+    console.log('📉 嘗試保守解 (電壓×0.1)');
+    
+    // 策略2: 隨機擾動當前解
+    const perturbedSolution = this._addRandomPerturbation(this._solutionVector, 0.01);
+    console.log('🎲 嘗試隨機擾動解');
+    
+    // 策略3: 分段線性化
+    const segmentedSolution = await this._segmentedLinearization();
+    console.log('🔀 嘗試分段線性化');
+    
+    // 選擇最佳候選解
+    const candidates = [conservativeSolution, perturbedSolution, segmentedSolution];
+    let bestSolution = this._solutionVector;
+    let bestResidual = Infinity;
+    
+    for (const candidate of candidates) {
+      const residualNorm = await this._calculateResidualNorm(candidate);
+      if (residualNorm < bestResidual) {
+        bestResidual = residualNorm;
+        bestSolution = candidate;
+      }
+    }
+    
+    const improvement = bestResidual < await this._calculateResidualNorm(this._solutionVector);
+    console.log(`🎯 重啟策略結果: ${improvement ? '成功' : '失敗'}, 殘差=${bestResidual.toExponential(3)}`);
+    
+    return { newSolution: bestSolution, success: improvement };
+  }
+
+  /**
+   * 輔助方法：添加隨機擾動
+   */
+  private _addRandomPerturbation(solution: IVector, magnitude: number): IVector {
+    const perturbedData: number[] = [];
+    for (let i = 0; i < solution.size; i++) {
+      const perturbation = (Math.random() - 0.5) * 2 * magnitude;
+      perturbedData.push(solution.get(i) + perturbation);
+    }
+    return Vector.from(perturbedData);
+  }
+
+  /**
+   * 輔助方法：分段線性化求解
+   */
+  private async _segmentedLinearization(): Promise<IVector> {
+    // 簡化版：線性內插到零解
+    const alpha = 0.5;
+    return this._solutionVector.scale(alpha);
+  }
+
   private async _checkConvergence(deltaV: IVector): Promise<boolean> {
     // 全局收敛检查
     const maxDelta = this._getMaxAbsValue(deltaV);
     const relativeDelta = this._getRelativeChange(deltaV);
+    
+    // 添加調試信息
+    if (this._config.verboseLogging) {
+      console.log(`🔍 收斂檢查: maxDelta=${maxDelta.toExponential(3)}, relativeDelta=${relativeDelta.toExponential(3)}`);
+      console.log(`🔍 容差: abs=${this._config.voltageToleranceAbs.toExponential(3)}, rel=${this._config.voltageToleranceRel.toExponential(3)}`);
+    }
     
     const voltageConverged = maxDelta < this._config.voltageToleranceAbs && 
                             relativeDelta < this._config.voltageToleranceRel;
@@ -635,9 +1027,16 @@ export class CircuitSimulationEngine {
       }
     }
     
-    const deviceConverged = deviceConvergenceCount === this._devices.size;
+    // 如果沒有設備，認為設備層面已收斂
+    const deviceConverged = this._devices.size === 0 || deviceConvergenceCount === this._devices.size;
     
-    return voltageConverged && deviceConverged;
+    const overallConverged = voltageConverged && deviceConverged;
+    
+    if (this._config.verboseLogging) {
+      console.log(`🔍 收斂結果: voltage=${voltageConverged}, device=${deviceConverged}, overall=${overallConverged}`);
+    }
+    
+    return overallConverged;
   }
 
   private async _updateDeviceStates(): Promise<void> {
@@ -738,7 +1137,7 @@ export class CircuitSimulationEngine {
 
   private _initializeWaveformStorage(): void {
     // 预分配波形数据存储
-    const estimatedPoints = Math.ceil((this._config.endTime - this._config.startTime) / this._config.initialTimeStep);
+    // 开始瞬态分析 (暂时跳过，集中精力于DC分析)
     
     // 节点电压存储
     for (let nodeId = 0; nodeId < this._nodeMapping.size; nodeId++) {
@@ -818,6 +1217,148 @@ export class CircuitSimulationEngine {
    */
   getNodeMapping(): Map<string, number> {
     return new Map(this._nodeMapping);
+  }
+
+  /**
+   * 🎯 檢測預步事件
+   */
+  private async _detectPreStepEvents(): Promise<any[]> {
+    // 檢測可能的器件狀態變化
+    const events: any[] = [];
+    
+    for (const device of this._devices.values()) {
+      // 檢查二極管是否即將轉換狀態
+      if (device.deviceType === 'diode') {
+        const nodes = device.nodes;
+        if (nodes.length >= 2 && nodes[0] !== undefined && nodes[1] !== undefined) {
+          const currentV = this._solutionVector.get(nodes[0]) - 
+                          this._solutionVector.get(nodes[1]);
+          const threshold = 0.6; // 二極管轉折電壓
+          
+          if (Math.abs(currentV - threshold) < 0.1) {
+            events.push({
+              type: 'diode_transition',
+              device: device,
+              voltage: currentV
+            });
+          }
+        }
+      }
+    }
+    
+    return events;
+  }
+
+  /**
+   * 🎯 處理預步事件
+   */
+  private _handlePreStepEvents(events: any[]): void {
+    for (const event of events) {
+      console.log(`🎯 處理預步事件: ${event.type}`);
+      // 可以調整步長或初始條件
+      if (event.type === 'diode_transition') {
+        this._currentTimeStep = Math.min(this._currentTimeStep, 1e-9);
+      }
+    }
+  }
+
+  /**
+   * 🎯 檢測後步事件
+   */
+  private async _detectPostStepEvents(): Promise<any[]> {
+    const events: any[] = [];
+    // 檢測器件狀態實際變化
+    return events;
+  }
+
+  /**
+   * 🎯 處理後步事件
+   */
+  private async _handlePostStepEvents(events: any[]): Promise<void> {
+    for (const event of events) {
+      console.log(`🎯 處理後步事件: ${event.type}`);
+    }
+  }
+
+  /**
+   * ✅ 驗證解的物理合理性
+   */
+  private async _validateSolution(): Promise<boolean> {
+    // 檢查節點電壓是否在合理範圍內
+    for (let i = 0; i < this._solutionVector.size; i++) {
+      const voltage = this._solutionVector.get(i);
+      if (Math.abs(voltage) > 1000) { // 超過1kV可能不合理
+        console.log(`⚠️ 節點 ${i} 電壓過大: ${voltage}V`);
+        return false;
+      }
+      if (isNaN(voltage) || !isFinite(voltage)) {
+        console.log(`⚠️ 節點 ${i} 電壓無效: ${voltage}`);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * 🛡️ Newton失敗處理策略 (增強版)
+   */
+  private async _handleNewtonFailure(retryCount: number): Promise<string> {
+    console.log(`🛡️ Newton失敗處理 - 第 ${retryCount + 1} 次重試`);
+    
+    if (retryCount === 0) {
+      // 第一次重試：使用線搜索
+      console.log('🎯 嘗試線搜索算法...');
+      const searchDirection = await this._solveLinearSystem(this._systemMatrix, this._rhsVector.scale(-1));
+      const initialResidualNorm = await this._calculateResidualNorm(this._solutionVector);
+      
+      const lineSearchResult = await this._globalLineSearch(searchDirection, initialResidualNorm);
+      if (lineSearchResult.converged) {
+        this._solutionVector = lineSearchResult.newSolution;
+        return 'line_search_success';
+      }
+      
+      return 'restart_with_damping';
+    } else if (retryCount === 1) {
+      // 第二次重試：使用Trust Region方法
+      console.log('🌐 嘗試Trust Region算法...');
+      const residual = this._rhsVector.scale(-1);
+      const trustRadius = 0.1;
+      
+      const trustRegionResult = await this._trustRegionMethod(this._systemMatrix, residual, trustRadius);
+      if (trustRegionResult.success) {
+        this._solutionVector = this._solutionVector.plus(trustRegionResult.step);
+        return 'trust_region_success';
+      }
+      
+      return 'reduce_timestep';
+    } else {
+      // 最後手段：高級重啟策略
+      console.log('🔄 嘗試高級重啟策略...');
+      const restartResult = await this._advancedRestartStrategy();
+      if (restartResult.success) {
+        this._solutionVector = restartResult.newSolution;
+        return 'restart_success';
+      }
+      
+      return 'use_global_strategy';
+    }
+  }
+
+  /**
+   * ⚡ 自適應步長控制
+   */
+  private _adaptiveTimeStepControl(iterations: number): void {
+    const targetIterations = 5; // 目標迭代次數
+    
+    if (iterations < targetIterations / 2) {
+      // 收斂太快，可以增大步長
+      this._currentTimeStep = Math.min(this._currentTimeStep * 1.2, this._config.maxTimeStep);
+    } else if (iterations > targetIterations * 1.5) {
+      // 收斂太慢，減小步長
+      this._currentTimeStep = Math.max(this._currentTimeStep * 0.8, this._config.minTimeStep);
+    }
+    
+    console.log(`⚡ 步長調整: dt=${this._currentTimeStep.toExponential(3)}s (${iterations} 迭代)`);
   }
 
   /**

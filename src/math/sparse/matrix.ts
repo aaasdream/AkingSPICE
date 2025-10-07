@@ -12,6 +12,7 @@
 
 import type { ISparseMatrix, IVector } from '../../types/index.js';
 import { Vector } from './vector.js';
+import * as numeric from 'numeric';
 
 /**
  * CSR 格式稀疏矩陣
@@ -27,10 +28,12 @@ export class SparseMatrix implements ISparseMatrix {
   private _rowPointers: number[];
   private _factorized = false;
   
-  // LU 分解數據 (用於求解)
-  private _L: SparseMatrix | undefined;
-  private _U: SparseMatrix | undefined;
-  private _P: number[] | undefined;  // 行置換
+  // 求解器模式: 'iterative' | 'numeric' | 'klu'
+  private _solverMode: 'iterative' | 'numeric' | 'klu' = 'numeric';
+  
+  // KLU 求解器實例 (未來使用)
+  private _kluSolver: any | null = null;
+  private _isKluFactorized = false;
 
   constructor(
     public readonly rows: number,
@@ -63,37 +66,60 @@ export class SparseMatrix implements ISparseMatrix {
 
   /**
    * 設置元素值 (會觸發重新分解)
+   * 使用更簡單的實現，先收集所有元素再重新構建CSR
    */
   set(row: number, col: number, value: number): void {
     this._validateIndices(row, col);
     
+    // 如果值太小，視為刪除
     if (Math.abs(value) < 1e-15) {
       this._removeElement(row, col);
       return;
     }
     
-    const start = this._rowPointers[row]!;
-    const end = this._rowPointers[row + 1]!;
+    // 使用臨時結構重新構建矩陣 - 更可靠的方法
+    const entries: Array<{row: number, col: number, value: number}> = [];
     
-    // 查找現有元素
-    for (let i = start; i < end; i++) {
-      if (this._colIndices[i] === col) {
-        this._values[i] = value;
-        this._factorized = false;
-        return;
-      }
+    // 收集現有的所有非零元素
+    for (let i = 0; i < this.rows; i++) {
+      const start = this._rowPointers[i]!;
+      const end = this._rowPointers[i + 1]!;
       
-      // 保持列索引有序
-      if (this._colIndices[i]! > col) {
-        this._insertElement(i, col, value);
-        this._factorized = false;
-        return;
+      for (let k = start; k < end; k++) {
+        const j = this._colIndices[k]!;
+        const val = this._values[k]!;
+        if (i !== row || j !== col) { // 跳過要更新的元素
+          entries.push({row: i, col: j, value: val});
+        }
       }
     }
     
-    // 在行末尾添加
-    this._insertElement(end, col, value);
+    // 添加新/更新的元素
+    entries.push({row, col, value});
+    
+    // 按行列排序
+    entries.sort((a, b) => {
+      if (a.row !== b.row) return a.row - b.row;
+      return a.col - b.col;
+    });
+    
+    // 重新構建CSR格式
+    this._values = entries.map(e => e.value);
+    this._colIndices = entries.map(e => e.col);
+    this._rowPointers = new Array(this.rows + 1).fill(0);
+    
+    // 計算行指針
+    for (const entry of entries) {
+      this._rowPointers[entry.row + 1]!++;
+    }
+    
+    // 累積行指針
+    for (let i = 1; i <= this.rows; i++) {
+      this._rowPointers[i]! += this._rowPointers[i - 1]!;
+    }
+    
     this._factorized = false;
+    this._isKluFactorized = false;
   }
 
   /**
@@ -134,36 +160,238 @@ export class SparseMatrix implements ISparseMatrix {
   }
 
   /**
-   * LU 分解預處理
-   */
-  factorize(): void {
-    if (this._factorized) return;
-    
-    // 簡化的 Doolittle LU 分解
-    // 實際項目中應該使用 KLU 或 UMFPACK
-    this._performLUFactorization();
-    this._factorized = true;
-  }
-
-  /**
-   * 求解線性方程組 Ax = b
+   * 🚀 求解線性方程組 Ax = b (同步版本，符合接口)
+   * 
+   * @param b - 右側向量 (RHS)
+   * @returns 解向量 x
    */
   solve(b: IVector): IVector {
     if (b.size !== this.rows) {
       throw new Error(`右側向量維度不匹配: ${b.size} vs ${this.rows}`);
     }
-    
-    if (!this._factorized) {
-      this.factorize();
+    if (this.rows !== this.cols) {
+      throw new Error('求解器僅支持方陣');
+    }
+
+    try {
+      console.log(`🧮 使用 ${this._solverMode} 求解器 求解 ${this.rows}x${this.cols} 線性系統...`);
+      
+      switch (this._solverMode) {
+        case 'numeric':
+          return this._solveWithNumeric(b);
+          
+        case 'klu':
+          throw new Error('KLU 求解器需要異步調用 solveAsync()');
+          
+        case 'iterative':
+        default:
+          return this._solveIterative(b);
+      }
+      
+    } catch (error) {
+      console.error('❌ 主求解器失敗，嘗試回退策略...', error);
+      
+      // 回退到迭代求解器
+      if (this._solverMode !== 'iterative') {
+        console.log('🔄 回退到迭代求解器...');
+        return this._solveIterative(b);
+      }
+      
+      throw new Error(`所有求解器都失敗: ${error}`);
+    }
+  }
+
+  /**
+   * 🚀 求解線性方程組 Ax = b (異步版本，支持 KLU)
+   * 
+   * @param b - 右側向量 (RHS)
+   * @returns 解向量 x
+   */
+  async solveAsync(b: IVector): Promise<IVector> {
+    if (b.size !== this.rows) {
+      throw new Error(`右側向量維度不匹配: ${b.size} vs ${this.rows}`);
+    }
+    if (this.rows !== this.cols) {
+      throw new Error('求解器僅支持方陣');
+    }
+
+    try {
+      console.log(`🧮 使用 ${this._solverMode} 求解器 求解 ${this.rows}x${this.cols} 線性系統...`);
+      
+      switch (this._solverMode) {
+        case 'numeric':
+          return this._solveWithNumeric(b);
+          
+        case 'klu':
+          return await this._solveWithKLU(b);
+          
+        case 'iterative':
+        default:
+          return this._solveIterative(b);
+      }
+      
+    } catch (error) {
+      console.error('❌ 主求解器失敗，嘗試回退策略...', error);
+      
+      // 回退到迭代求解器
+      if (this._solverMode !== 'iterative') {
+        console.log('🔄 回退到迭代求解器...');
+        return this._solveIterative(b);
+      }
+      
+      throw new Error(`所有求解器都失敗: ${error}`);
+    }
+  }
+
+  /**
+   * LU 分解預處理 (兼容接口)
+   */
+  factorize(): void {
+    // 對於 numeric 求解器，不需要預分解
+    if (this._solverMode === 'numeric' || this._solverMode === 'iterative') {
+      this._factorized = true;
+      return;
     }
     
-    // 前向替換: Ly = Pb
-    const y = this._forwardSolve(b);
+    // 對於 KLU，在第一次 solve 時進行分解
+    this._factorized = true;
+  }
+
+  /**
+   * 使用 numeric.js 庫求解 (短期方案)
+   */
+  private _solveWithNumeric(b: IVector): IVector {
+    console.log('📊 使用 numeric.js 求解稠密線性系統...');
     
-    // 後向替換: Ux = y
-    const x = this._backwardSolve(y);
+    // 轉換為稠密矩陣
+    const denseA = this.toDense();
+    const denseB = b.toArray();
+    
+    try {
+      // 使用 numeric.solve 求解
+      const solution = numeric.solve(denseA, denseB);
+      
+      console.log('✅ numeric.js 求解成功');
+      return Vector.from(solution);
+      
+    } catch (error) {
+      console.error('❌ numeric.js 求解失敗:', error);
+      throw new Error(`numeric.solve failed: ${error}`);
+    }
+  }
+
+  /**
+   * 使用 KLU WASM 求解 (未來方案)
+   */
+  private async _solveWithKLU(b: IVector): Promise<IVector> {
+    console.log('🔬 使用 KLU WASM 求解稀疏線性系統...');
+    
+    // TODO: 實現 KLU WASM 集成
+    // 這裡是未來的 KLU 實現佔位符
+    
+    if (!this._kluSolver) {
+      // 未來: const { KLUSolver } = await import('klu-wasm');
+      // this._kluSolver = await KLUSolver.create();
+      throw new Error('KLU WASM 尚未實現');
+    }
+
+    if (!this._isKluFactorized) {
+      console.log('🧮 執行 KLU 分解...');
+      
+      // 轉換為 CSC 格式
+      const csc = this.toCSC();
+      
+      // 未來: 進行符號分析和數值分解
+      // this._kluSolver.factorize(
+      //     this.rows,
+      //     csc.colPointers,
+      //     csc.rowIndices,
+      //     csc.values
+      // );
+      
+      this._isKluFactorized = true;
+      console.log(`✅ KLU 分解完成: ${this.rows}x${this.cols}, nnz=${this.nnz}`);
+    }
+
+    // 求解
+    const bArray = b.toArray();
+    // 未來: const xArray = this._kluSolver.solve(bArray);
+    // return Vector.from(xArray);
+    
+    throw new Error('KLU WASM 尚未實現');
+  }
+
+  /**
+   * 迭代求解器 (Gauss-Seidel)
+   */
+  private _solveIterative(b: IVector): IVector {
+    console.log('🔄 使用 Gauss-Seidel 迭代求解...');
+    
+    const x = new Vector(this.rows);
+    const maxIterations = 100;
+    const tolerance = 1e-12;
+    
+    for (let iter = 0; iter < maxIterations; iter++) {
+      let maxChange = 0;
+      
+      for (let i = 0; i < this.rows; i++) {
+        let sum = 0;
+        let diagonal = 1e-15; // 避免零除
+        
+        // 遍歷第i行的非零元素
+        const start = this._rowPointers[i]!;
+        const end = this._rowPointers[i + 1]!;
+        
+        for (let idx = start; idx < end; idx++) {
+          const j = this._colIndices[idx]!;
+          const value = this._values[idx]!;
+          
+          if (i === j) {
+            diagonal = value;
+          } else {
+            sum += value * x.get(j);
+          }
+        }
+        
+        // 更新解
+        const oldValue = x.get(i);
+        const newValue = (b.get(i) - sum) / diagonal;
+        const change = Math.abs(newValue - oldValue);
+        
+        maxChange = Math.max(maxChange, change);
+        x.set(i, newValue);
+      }
+      
+      // 檢查收敛
+      if (maxChange < tolerance) {
+        if (iter > 0) {
+          console.log(`✅ 迭代求解收敛: ${iter + 1} 次, 誤差: ${maxChange.toExponential(2)}`);
+        }
+        break;
+      }
+    }
     
     return x;
+  }
+
+  /**
+   * 設置求解器模式
+   */
+  setSolverMode(mode: 'iterative' | 'numeric' | 'klu'): void {
+    this._solverMode = mode;
+    this._factorized = false;
+    this._isKluFactorized = false;
+  }
+
+  /**
+   * 釋放 WASM 佔用的內存
+   */
+  dispose(): void {
+    if (this._kluSolver) {
+      // 未來: this._kluSolver.dispose();
+      this._kluSolver = null;
+    }
+    this.clear();
   }
 
   /**
@@ -174,9 +402,8 @@ export class SparseMatrix implements ISparseMatrix {
     this._colIndices = [];
     this._rowPointers.fill(0);
     this._factorized = false;
-    this._L = undefined;
-    this._U = undefined;
-    this._P = undefined;
+    this._isKluFactorized = false;
+    this._kluSolver = null;
   }
 
   /**
@@ -228,19 +455,6 @@ export class SparseMatrix implements ISparseMatrix {
     }
   }
 
-  private _insertElement(position: number, col: number, value: number): void {
-    this._values.splice(position, 0, value);
-    this._colIndices.splice(position, 0, col);
-    
-    // 更新所有後續行的指針
-    for (let i = position; i < this._rowPointers.length - 1; i++) {
-      const rowIndex = this._findRowForPosition(position);
-      if (i > rowIndex) {
-        this._rowPointers[i]!++;
-      }
-    }
-  }
-
   private _removeElement(row: number, col: number): void {
     const start = this._rowPointers[row]!;
     const end = this._rowPointers[row + 1]!;
@@ -259,89 +473,6 @@ export class SparseMatrix implements ISparseMatrix {
         return;
       }
     }
-  }
-
-  private _findRowForPosition(position: number): number {
-    for (let i = 0; i < this.rows; i++) {
-      if (this._rowPointers[i + 1]! > position) {
-        return i;
-      }
-    }
-    return this.rows - 1;
-  }
-
-  private _performLUFactorization(): void {
-    // 🔧 实现简化但功能完整的 LU 分解
-    console.log('🧮 执行稀疏矩阵 LU 分解...');
-    
-    const n = this.rows;
-    if (n === 0) return;
-    
-    // 暂时使用简化的直接求解方法
-    // 为了让系统能工作，先实现基本功能
-    console.warn('⚠️ 使用简化LU分解 - 仅适用于小规模矩阵');
-    
-    // 创建单位置换
-    this._P = Array.from({ length: n }, (_, i) => i);
-    
-    // 标记为已分解
-    this._factorized = true;
-    
-    console.log(`✅ 简化LU分解完成: ${n}×${n} 矩阵`);
-  }
-
-  private _forwardSolve(b: IVector): IVector {
-    // 🔧 使用Gauss-Seidel迭代求解 Ax = b
-    const x = new Vector(this.rows);
-    const maxIterations = 50;
-    const tolerance = 1e-10;
-    
-    for (let iter = 0; iter < maxIterations; iter++) {
-      let maxChange = 0;
-      
-      for (let i = 0; i < this.rows; i++) {
-        let sum = 0;
-        let diagonal = 1e-15; // 避免零除
-        
-        // 遍历第i行的非零元素
-        const start = this._rowPointers[i];
-        const end = this._rowPointers[i + 1];
-        
-        for (let idx = start!; idx < end!; idx++) {
-          const j = this._colIndices[idx]!;
-          const value = this._values[idx]!
-          
-          if (i === j) {
-            diagonal = value;
-          } else {
-            sum += value * x.get(j);
-          }
-        }
-        
-        // 更新解
-        const oldValue = x.get(i);
-        const newValue = (b.get(i) - sum) / diagonal;
-        const change = Math.abs(newValue - oldValue);
-        
-        maxChange = Math.max(maxChange, change);
-        x.set(i, newValue);
-      }
-      
-      // 检查收敛
-      if (maxChange < tolerance) {
-        if (iter > 0) {
-          console.log(`✅ 迭代求解收敛: ${iter + 1} 次, 误差: ${maxChange.toExponential(2)}`);
-        }
-        break;
-      }
-    }
-    
-    return x;
-  }
-
-  private _backwardSolve(y: IVector): IVector {
-    // Gauss-Seidel已经求解完成，直接返回
-    return y;
   }
 
   private _isSymmetric(): boolean {

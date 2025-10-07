@@ -42,7 +42,9 @@
     "node": ">=18.0.0"
   },
   "devDependencies": {
+    "@types/jest": "^30.0.0",
     "@types/node": "^20.0.0",
+    "@types/numeric": "^1.2.6",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
     "@vitest/coverage-v8": "^1.0.0",
@@ -50,13 +52,17 @@
     "eslint": "^8.50.0",
     "eslint-config-prettier": "^9.0.0",
     "eslint-plugin-prettier": "^5.0.0",
+    "jest": "^30.2.0",
     "prettier": "^3.0.0",
+    "ts-jest": "^29.4.4",
     "typedoc": "^0.25.0",
     "typescript": "^5.4.5",
     "vite": "^5.0.0",
     "vitest": "^1.0.0"
   },
   "dependencies": {
-    "ml-matrix": "^6.10.0"
+    "@bluemath/linalg": "^0.2.2",
+    "ml-matrix": "^6.10.0",
+    "numeric": "^1.2.6"
   }
 }

@@ -25,6 +25,7 @@ export class VoltageSource implements ComponentInterface, SourceInterface {
   
   private _currentIndex?: number;
   private _waveform: WaveformDescriptor;
+  private _dcScaleFactor = 1.0; // 新增：直流缩放因子（用于源步进）
   
   constructor(
     public readonly name: string,
@@ -53,6 +54,16 @@ export class VoltageSource implements ComponentInterface, SourceInterface {
   }
   
   /**
+   * 🆕 设置直流缩放因子 (用于源步进)
+   */
+  scaleDcValue(factor: number): void {
+    if (factor < 0 || factor > 1) {
+      console.warn(`电压源 ${this.name} 的缩放因子超出 [0, 1] 范围: ${factor}`);
+    }
+    this._dcScaleFactor = factor;
+  }
+  
+  /**
    * 🔢 设置电流支路索引
    */
   setCurrentIndex(index: number): void {
@@ -65,17 +76,19 @@ export class VoltageSource implements ComponentInterface, SourceInterface {
   getValue(time: number): number {
     switch (this._waveform.type) {
       case 'DC':
-        return this._waveform.parameters.value || this._dcValue;
+        // 将缩放因子应用于直流值
+        return (this._waveform.parameters['value'] || this._dcValue) * this._dcScaleFactor;
         
       case 'SIN':
         {
           const params = this._waveform.parameters;
-          const dc = params.dc || 0;
-          const amplitude = params.amplitude || 1;
-          const frequency = params.frequency || 1000;
-          const phase = params.phase || 0;
-          const delay = params.delay || 0;
-          const damping = params.damping || 0;
+          // 源步进期间，我们也缩放正弦波的直流偏置和幅度
+          const dc = (params['dc'] || 0) * this._dcScaleFactor;
+          const amplitude = (params['amplitude'] || 1) * this._dcScaleFactor;
+          const frequency = params['frequency'] || 1000;
+          const phase = params['phase'] || 0;
+          const delay = params['delay'] || 0;
+          const damping = params['damping'] || 0;
           
           if (time < delay) return dc;
           
@@ -87,13 +100,14 @@ export class VoltageSource implements ComponentInterface, SourceInterface {
       case 'PULSE':
         {
           const params = this._waveform.parameters;
-          const v1 = params.v1 || 0;
-          const v2 = params.v2 || 1;
-          const td = params.delay || 0;
-          const tr = params.rise_time || 1e-9;
-          const tf = params.fall_time || 1e-9;
-          const pw = params.pulse_width || 1e-6;
-          const period = params.period || 2e-6;
+          // 对脉冲波形也应用缩放
+          const v1 = (params['v1'] || 0) * this._dcScaleFactor;
+          const v2 = (params['v2'] || 1) * this._dcScaleFactor;
+          const td = params['delay'] || 0;
+          const tr = params['rise_time'] || 1e-9;
+          const tf = params['fall_time'] || 1e-9;
+          const pw = params['pulse_width'] || 1e-6;
+          const period = params['period'] || 2e-6;
           
           if (time < td) return v1;
           
@@ -117,12 +131,13 @@ export class VoltageSource implements ComponentInterface, SourceInterface {
       case 'EXP':
         {
           const params = this._waveform.parameters;
-          const v1 = params.v1 || 0;
-          const v2 = params.v2 || 1;
-          const td1 = params.delay1 || 0;
-          const tau1 = params.tau1 || 1e-6;
-          const td2 = params.delay2 || 1e-6;
-          const tau2 = params.tau2 || 1e-6;
+          // 对指数波形也应用缩放
+          const v1 = (params['v1'] || 0) * this._dcScaleFactor;
+          const v2 = (params['v2'] || 1) * this._dcScaleFactor;
+          const td1 = params['delay1'] || 0;
+          const tau1 = params['tau1'] || 1e-6;
+          const td2 = params['delay2'] || 1e-6;
+          const tau2 = params['tau2'] || 1e-6;
           
           if (time < td1) {
             return v1;
@@ -137,15 +152,16 @@ export class VoltageSource implements ComponentInterface, SourceInterface {
       case 'AC':
         {
           const params = this._waveform.parameters;
-          const amplitude = params.amplitude || 1;
-          const frequency = params.frequency || 1000;
-          const phase = params.phase || 0;
+          // 对交流波形也应用缩放
+          const amplitude = (params['amplitude'] || 1) * this._dcScaleFactor;
+          const frequency = params['frequency'] || 1000;
+          const phase = params['phase'] || 0;
           
           return amplitude * Math.cos(2 * Math.PI * frequency * time + phase);
         }
         
       default:
-        return this._dcValue;
+        return this._dcValue * this._dcScaleFactor;
     }
   }
   
@@ -221,17 +237,17 @@ export class VoltageSource implements ComponentInterface, SourceInterface {
     } else {
       switch (this._waveform.type) {
         case 'SIN':
-          if (!this._waveform.parameters.frequency || this._waveform.parameters.frequency <= 0) {
+          if (!this._waveform.parameters['frequency'] || this._waveform.parameters['frequency'] <= 0) {
             errors.push('正弦波频率必须为正数');
           }
           break;
         case 'PULSE':
-          if (!this._waveform.parameters.period || this._waveform.parameters.period <= 0) {
+          if (!this._waveform.parameters['period'] || this._waveform.parameters['period'] <= 0) {
             errors.push('脉冲周期必须为正数');
           }
           break;
         case 'EXP':
-          if (!this._waveform.parameters.tau1 || this._waveform.parameters.tau1 <= 0) {
+          if (!this._waveform.parameters['tau1'] || this._waveform.parameters['tau1'] <= 0) {
             errors.push('指数时间常数必须为正数');
           }
           break;

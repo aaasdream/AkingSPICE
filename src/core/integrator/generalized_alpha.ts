@@ -617,36 +617,38 @@ export class GeneralizedAlphaIntegrator implements IIntegrator {
   }
 
   /**
-   * 🔧 求解 Newton 步 - 现在使用真正的求解器！
+   * 🔧 求解 Newton 步 - 使用改進的稀疏求解器！
    */
   private _solveNewtonStep(jacobian: any, residual: IVector): VoltageVector {
-    console.log('🧮 执行 Newton 步求解...');
+    console.log('🧮 執行 Newton 步求解...');
     
     const n = residual.size;
-    const delta = new Vector(n);
     
     try {
-      // 如果jacobian是SparseMatrix，使用其求解方法
+      // 如果jacobian是SparseMatrix，使用其改進的求解方法
       if (jacobian && typeof jacobian.solve === 'function') {
         const negResidual = new Vector(n);
         for (let i = 0; i < n; i++) {
           negResidual.set(i, -residual.get(i));
         }
         
+        // 使用我們改進的求解器 (支持 numeric.js 和迭代求解器)
+        console.log('🚀 使用改進的稀疏矩陣求解器...');
         const solution = jacobian.solve(negResidual);
-        console.log(`✅ Newton步求解完成`);
+        console.log(`✅ Newton步求解完成 (求解器: ${jacobian._solverMode || 'default'})`);
         return solution;
       }
       
-      // 回退到改进的对角求解
-      console.warn('⚠️ 使用对角求解作为回退方案');
+      // 回退到改進的對角求解
+      console.warn('⚠️ 使用對角求解作為回退方案');
+      const delta = new Vector(n);
       
       for (let i = 0; i < n; i++) {
         const aii = jacobian.get ? jacobian.get(i, i) : 1.0;
         if (Math.abs(aii) > 1e-15) {
           delta.set(i, -residual.get(i) / aii);
         } else {
-          // 处理零对角线元素
+          // 處理零對角線元素
           delta.set(i, -residual.get(i) * 1e-6);
         }
       }
@@ -654,9 +656,10 @@ export class GeneralizedAlphaIntegrator implements IIntegrator {
       return delta;
       
     } catch (error) {
-      console.error('❌ Newton步求解失败:', error);
+      console.error('❌ Newton步求解失敗:', error);
       
-      // 紧急回退：使用最小步长
+      // 緊急回退：使用最小步長
+      const delta = new Vector(n);
       for (let i = 0; i < n; i++) {
         delta.set(i, -residual.get(i) * 1e-9);
       }
