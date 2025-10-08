@@ -104,7 +104,7 @@ describe('IdealTransformer', () => {
       ['n4', 3]
     ]);
     
-    transformer.stamp(matrix, rhs, nodeMap);
+    transformer.assemble({ matrix, rhs, nodeMap, currentTime: 0 });
     
     // 验证关键矩阵元素
     expect(matrix.get(0, 4)).toBe(1);   // KCL: n1 -> ip

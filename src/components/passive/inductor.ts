@@ -5,9 +5,7 @@
  * 支持电流型和电压型伴随模型
  */
 
-import { ComponentInterface, ValidationResult, ComponentInfo } from '../../core/interfaces/component';
-import { SparseMatrix } from '../../math/sparse/matrix';
-import { Vector } from '../../math/sparse/vector';
+import { ComponentInterface, ValidationResult, ComponentInfo, AssemblyContext } from '../../core/interfaces/component';
 
 /**
  * ⚡ 线性电感组件
@@ -70,6 +68,53 @@ export class Inductor implements ComponentInterface {
   }
   
   /**
+   * ✅ 统一组装方法 (NEW!)
+   */
+  assemble(context: AssemblyContext): void {
+    const n1 = context.nodeMap.get(this.nodes[0]);
+    const n2 = context.nodeMap.get(this.nodes[1]);
+    
+    if (this._currentIndex === undefined) {
+      throw new Error(`电感 ${this.name} 的电流支路索引未设置`);
+    }
+    
+    const iL = this._currentIndex;
+    const Req = this._inductance / this._timeStep;
+    const Veq = Req * this._previousCurrent;
+    
+    // B 矩阵: 节点到支路的关联矩阵
+    if (n1 !== undefined && n1 >= 0) {
+      context.matrix.add(n1, iL, 1);
+    }
+    if (n2 !== undefined && n2 >= 0) {
+      context.matrix.add(n2, iL, -1);
+    }
+    
+    // C 矩阵: 支路到节点的关联矩阵 (B^T)
+    if (n1 !== undefined && n1 >= 0) {
+      context.matrix.add(iL, n1, 1);
+    }
+    if (n2 !== undefined && n2 >= 0) {
+      context.matrix.add(iL, n2, -1);
+    }
+    
+    // D 矩阵: 支路阻抗
+    context.matrix.add(iL, iL, -Req);
+    
+    // 等效电压源
+    context.rhs.add(iL, Veq);
+  }
+
+  /**
+   * ⚡️ 检查此组件是否可能产生事件
+   * 
+   * 对于线性电感，它本身不产生事件。
+   */
+  hasEvents(): boolean {
+    return false;
+  }
+
+  /**
    * 🔢 设置电流支路索引
    */
   setCurrentIndex(index: number): void {
@@ -120,61 +165,7 @@ export class Inductor implements ComponentInterface {
     this._previousVoltage = voltage;
   }
   
-  /**
-   * 🔥 MNA 矩阵装配 (电流型伴随模型)
-   * 
-   * 电感需要扩展 MNA 矩阵来处理电流变量
-   * 
-   * 扩展后的系统:
-   * [G   B ] [V]   [I_s]
-   * [C   D ] [I_L] [V_s]
-   * 
-   * 对于电感:
-   * B: 节点到支路的关联矩阵
-   * C: 支路到节点的关联矩阵 (B^T)
-   * D: 支路阻抗矩阵 (R_eq = L/Δt)
-   * V_s: 等效电压源 (V_eq = L*I_prev/Δt)
-   */
-  stamp(
-    matrix: SparseMatrix, 
-    rhs: Vector, 
-    nodeMap: Map<string, number>,
-    _currentTime?: number
-  ): void {
-    const n1 = nodeMap.get(this.nodes[0]);
-    const n2 = nodeMap.get(this.nodes[1]);
-    
-    if (this._currentIndex === undefined) {
-      throw new Error(`电感 ${this.name} 的电流支路索引未设置`);
-    }
-    
-    const iL = this._currentIndex;
-    const Req = this._inductance / this._timeStep;
-    const Veq = Req * this._previousCurrent;
-    
-    // B 矩阵: 节点电压对支路电流的影响
-    if (n1 !== undefined && n1 >= 0) {
-      matrix.add(n1, iL, 1);  // KCL: +I_L 流出节点1
-    }
-    if (n2 !== undefined && n2 >= 0) {
-      matrix.add(n2, iL, -1); // KCL: -I_L 流入节点2
-    }
-    
-    // C 矩阵: 支路电流对节点电压的影响 (C = B^T)
-    if (n1 !== undefined && n1 >= 0) {
-      matrix.add(iL, n1, 1);  // KVL: +V1
-    }
-    if (n2 !== undefined && n2 >= 0) {
-      matrix.add(iL, n2, -1); // KVL: -V2
-    }
-    
-    // D 矩阵: 支路阻抗
-    matrix.add(iL, iL, -Req); // V_L = -R_eq * I_L + V_eq
-    
-    // 等效电压源
-    rhs.add(iL, Veq);
-  }
-  
+
   /**
    * 🔍 组件验证
    */
@@ -263,39 +254,7 @@ export class Inductor implements ComponentInterface {
     return 0.5 * this._inductance * current * current;
   }
   
-  /**
-   * 🔄 梯形积分方法装配
-   */
-  stampTrapezoidal(
-    matrix: SparseMatrix, 
-    rhs: Vector, 
-    nodeMap: Map<string, number>
-  ): void {
-    const n1 = nodeMap.get(this.nodes[0]);
-    const n2 = nodeMap.get(this.nodes[1]);
-    
-    if (this._currentIndex === undefined) {
-      throw new Error(`电感 ${this.name} 的电流支路索引未设置`);
-    }
-    
-    const iL = this._currentIndex;
-    const Req = 2 * this._inductance / this._timeStep;
-    const Veq = Req * this._previousCurrent + this._previousVoltage;
-    
-    // 装配扩展 MNA 矩阵 (梯形方法)
-    if (n1 !== undefined && n1 >= 0) {
-      matrix.add(n1, iL, 1);
-      matrix.add(iL, n1, 1);
-    }
-    if (n2 !== undefined && n2 >= 0) {
-      matrix.add(n2, iL, -1);
-      matrix.add(iL, n2, -1);
-    }
-    
-    matrix.add(iL, iL, -Req);
-    rhs.add(iL, Veq);
-  }
-  
+
   /**
    * 🏃‍♂️ 获取需要的额外变量数量
    */

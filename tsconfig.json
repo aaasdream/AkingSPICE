@@ -2,10 +2,10 @@
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022", "DOM"],
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "noEmit": true,
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "allowImportingTsExtensions": false,
+    "noEmit": false,
     "declaration": true,
     "outDir": "dist",
     "rootDir": ".",
@@ -39,11 +39,13 @@
   },
   "include": [
     "src/**/*",
+    "buck_converter_demo.ts",
     "wasm/**/*"
   ],
   "exclude": [
     "node_modules",
     "dist",
+    "**/*.js",
     "Old_src"
   ]
 }

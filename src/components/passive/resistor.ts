@@ -5,9 +5,7 @@
  * 遵循标准 SPICE 模型和 MNA 矩阵装配规则
  */
 
-import { ComponentInterface, ValidationResult, ComponentInfo } from '../../core/interfaces/component';
-import { SparseMatrix } from '../../math/sparse/matrix';
-import { Vector } from '../../math/sparse/vector';
+import { ComponentInterface, ValidationResult, ComponentInfo, AssemblyContext } from '../../core/interfaces/component';
 
 /**
  * 🔧 线性电阻组件
@@ -55,49 +53,42 @@ export class Resistor implements ComponentInterface {
   }
   
   /**
-   * 🔥 MNA 矩阵装配
+   * ✅ 统一组装方法 (NEW!)
    * 
-   * 根据电阻的导纳矩阵形式装配系统矩阵：
+   * 使用新的统一接口装配电阻的 MNA 贡献
+   * 替代传统的 stamp() 方法
    * 
-   * [G  -G] [V1]   [0]
-   * [-G  G] [V2] = [0]
-   * 
-   * 其中 G = 1/R 为电导
+   * @param context - 组装上下文
    */
-  stamp(
-    matrix: SparseMatrix, 
-    _rhs: Vector, 
-    nodeMap: Map<string, number>,
-    _currentTime?: number
-  ): void {
-    const n1 = nodeMap.get(this.nodes[0]);
-    const n2 = nodeMap.get(this.nodes[1]);
+  assemble(context: AssemblyContext): void {
+    const n1 = context.nodeMap.get(this.nodes[0]);
+    const n2 = context.nodeMap.get(this.nodes[1]);
     const g = this.conductance;
-    
-    // 处理节点1 (如果不是接地节点)
+
     if (n1 !== undefined && n1 >= 0) {
-      matrix.add(n1, n1, g);
-      
-      // 处理节点1到节点2的耦合
+      context.matrix.add(n1, n1, g);
       if (n2 !== undefined && n2 >= 0) {
-        matrix.add(n1, n2, -g);
+        context.matrix.add(n1, n2, -g);
       }
     }
-    
-    // 处理节点2 (如果不是接地节点)
     if (n2 !== undefined && n2 >= 0) {
-      matrix.add(n2, n2, g);
-      
-      // 处理节点2到节点1的耦合
+      context.matrix.add(n2, n2, g);
       if (n1 !== undefined && n1 >= 0) {
-        matrix.add(n2, n1, -g);
+        context.matrix.add(n2, n1, -g);
       }
     }
-    
-    // 电阻是无源元件，不向右侧向量贡献激励
-    // rhs 保持不变
   }
-  
+
+  /**
+   * ⚡️ 检查此组件是否可能产生事件
+   * 
+   * 对于线性电阻，它本身不产生事件。
+   */
+  hasEvents(): boolean {
+    return false;
+  }
+
+
   /**
    * 🔍 组件验证
    */

@@ -13,18 +13,24 @@
  */
 
 import type {
-  IEventDetector,
   IEvent,
-  IComponent,
   Time,
-  VoltageVector
+  VoltageVector,
+  IVector
 } from '../../types/index';
 import { EventType } from '../../types/index';
+import { ComponentInterface } from '../interfaces/component';
+
+/**
+ * 🆕 新增類型：電壓插值函數
+ * 引擎提供此函數，讓檢測器能在任意時間點獲取電壓
+ */
+export type Interpolator = (time: Time) => IVector;
 
 /**
  * 事件檢測器主類
  */
-export class EventDetector implements IEventDetector {
+export class EventDetector {
   private readonly _tolerance: number;
   private readonly _maxBisections: number;
   private readonly _minTimestep: number;
@@ -46,23 +52,35 @@ export class EventDetector implements IEventDetector {
    * @returns 按時間排序的事件列表
    */
   detectEvents(
-    components: IComponent[],
+    components: ComponentInterface[],
     t0: Time,
     t1: Time,
     v0: VoltageVector,
-    v1: VoltageVector
+    v1: VoltageVector,
   ): IEvent[] {
     const events: IEvent[] = [];
 
-    // 並行檢測所有組件
     for (const component of components) {
-      if (!component.hasEvents()) continue;
+      const eventFunctions = component.getEventFunctions?.();
+      if (!eventFunctions) continue;
 
-      try {
-        const componentEvents = component.detectEvents?.(t0, t1, v0, v1) ?? [];
-        events.push(...componentEvents);
-      } catch (error) {
-        console.warn(`組件 ${component.id} 事件檢測失敗:`, error);
+      for (const { type, condition } of eventFunctions) {
+        const val0 = condition(v0);
+        const val1 = condition(v1);
+
+        if (Math.sign(val0) !== Math.sign(val1)) {
+          // Zero-crossing detected, create an event
+          events.push({
+            type,
+            component,
+            time: (t0 + t1) / 2, // Approximate time, to be refined by locateEventTime
+            tLow: t0,
+            tHigh: t1,
+            condition, // Pass the condition function itself
+            priority: 1,
+            description: `Zero-crossing for event type ${type}`,
+          });
+        }
       }
     }
 
@@ -75,49 +93,44 @@ export class EventDetector implements IEventDetector {
    * 
    * 使用二分法在區間 [t0, t1] 內精確定位事件發生時刻
    */
-  locateEvent(
-    component: IComponent,
+  async locateEventTime(
     event: IEvent,
-    t0: Time,
-    t1: Time,
-    tolerance: number = this._tolerance
-  ): Time {
-    if (!component.detectEvents) {
-      throw new Error(`組件 ${component.id} 不支持事件檢測`);
-    }
-
-    let tLow = t0;
-    let tHigh = t1;
+    interpolator: Interpolator
+  ): Promise<Time> {
+    let tLow = event.tLow!;
+    let tHigh = event.tHigh!;
     let iterations = 0;
 
-    while (tHigh - tLow > tolerance && iterations < this._maxBisections) {
+    const condition = event.condition;
+    if (!condition) {
+      throw new Error(`Event is missing a condition function for location.`);
+    }
+
+    // 初始檢查邊界
+    const conditionLow = condition(interpolator(tLow));
+    const conditionHigh = condition(interpolator(tHigh));
+
+    // 如果兩端符號相同，表示事件可能不在這個區間內或發生了多次
+    if (Math.sign(conditionLow) === Math.sign(conditionHigh)) {
+      // 返回區間中點作為近似值
+      console.warn(`Event ${event.type} on ${event.component.name} conditions are the same at boundaries.`);
+      return (tLow + tHigh) / 2;
+    }
+
+    while (tHigh - tLow > this._tolerance && iterations < this._maxBisections) {
       const tMid = 0.5 * (tLow + tHigh);
-      
-      // 在中點處檢查事件條件
-      // 這需要在中點重新計算電壓向量
-      const vMid = this._interpolateVoltages(event, tLow, tHigh, tMid);
-      
-      const hasEventInFirstHalf = this._hasEventInInterval(
-        component, 
-        tLow, 
-        tMid, 
-        event
-      );
+      const vMid = interpolator(tMid);
+      const conditionMid = condition(vMid);
 
-      if (hasEventInFirstHalf) {
-        tHigh = tMid;
-      } else {
+      if (Math.sign(conditionMid) === Math.sign(conditionLow)) {
         tLow = tMid;
+      } else {
+        tHigh = tMid;
       }
-
       iterations++;
     }
 
-    if (iterations >= this._maxBisections) {
-      console.warn(`事件定位達到最大迭代次數: ${component.id}`);
-    }
-
-    return 0.5 * (tLow + tHigh);
+    return (tLow + tHigh) / 2;
   }
 
   /**
@@ -167,33 +180,6 @@ export class EventDetector implements IEventDetector {
       default:
         return 50;
     }
-  }
-
-  private _interpolateVoltages(
-    event: IEvent,
-    t0: Time,
-    t1: Time,
-    tTarget: Time
-  ): VoltageVector {
-    // 簡化的線性插值
-    // 實際實現需要從積分器獲取準確的插值
-    const alpha = (tTarget - t0) / (t1 - t0);
-    
-    // 這是佔位實現，實際需要積分器支援
-    throw new Error(`電壓插值需要積分器支援 (event: ${event.type}, t: ${tTarget})`);
-  }
-
-  private _hasEventInInterval(
-    component: IComponent,
-    t0: Time,
-    t1: Time,
-    referenceEvent: IEvent
-  ): boolean {
-    // 檢查組件在區間 [t0, t1] 是否有與 referenceEvent 同類型的事件
-    // 這需要組件提供事件條件函數
-    
-    // 佔位實現
-    return Math.random() > 0.5;
   }
 }
 
@@ -333,8 +319,9 @@ export class EventLogger {
     const eventsByType = new Map<EventType, number>();
     
     for (const event of this._events) {
-      const count = eventsByType.get(event.type) ?? 0;
-      eventsByType.set(event.type, count + 1);
+      const eventType = event.type as EventType;
+      const count = eventsByType.get(eventType) ?? 0;
+      eventsByType.set(eventType, count + 1);
     }
 
     return {

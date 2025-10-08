@@ -23,13 +23,18 @@
  *   - 电容/电感寄生效应
  */
 
-import type { 
+import { 
   VoltageVector, 
   CurrentVector, 
   IMNASystem,
-  Time
+  Time,
+  IEvent,
+  Interpolator,
+  EventType,
 } from '../../types/index';
 import { Vector } from '../../math/sparse/vector';
+// ADDED: Import the base interface
+import type { ComponentInterface, AssemblyContext } from '../interfaces/component';
 
 /**
  * 设备载入结果
@@ -42,7 +47,7 @@ export interface LoadResult {
   readonly matrixStamp: MatrixStamp;
   
   /** 右侧向量贡献 */
-  readonly rhsContribution: CurrentVector;
+  readonly rhsContribution: readonly { index: number, value: number }[];
   
   /** 设备当前状态 */
   readonly deviceState: DeviceState;
@@ -112,7 +117,7 @@ export interface DeviceState {
   readonly parameters: Record<string, number>;
   
   /** 内部状态变量 */
-  readonly internalStates: Record<string, number>;
+  readonly internalStates: Record<string, any>;
   
   /** 温度效应 */
   readonly temperature: number;
@@ -210,15 +215,17 @@ export interface NumericalChallenge {
  * 
  * 所有电力电子器件的统一建模标准
  * 提供物理意义驱动的数值稳定性保障
+ * 
+ * CHANGED: 直接继承 ComponentInterface，实现真正的统一接口
  */
-export interface IIntelligentDeviceModel {
-  /** 设备唯一标识符 */
+export interface IIntelligentDeviceModel extends ComponentInterface {
+  /** 设备唯一标识符 (对应 ComponentInterface.name) */
   readonly deviceId: string;
   
-  /** 设备类型 */
+  /** 设备类型 (对应 ComponentInterface.type) */
   readonly deviceType: string;
   
-  /** 设备节点连接 */
+  /** 设备节点连接 (重载为数值索引，智能设备在数值计算层面工作) */
   readonly nodes: readonly number[];
   
   /** 设备参数 */
@@ -234,10 +241,16 @@ export interface IIntelligentDeviceModel {
    * 4. 更新设备内部状态
    * 
    * @param voltage 当前节点电压向量
-   * @param system MNA 系统对象
    * @returns 载入结果，包含矩阵印花和状态信息
    */
-  load(voltage: VoltageVector, system: IMNASystem): LoadResult;
+  load(voltage: VoltageVector): LoadResult;
+
+  /**
+   * ADDED: 获取设备在给定电压下的工作模式
+   * @param voltage 节点电压向量
+   * @returns 代表工作模式的字符串
+   */
+  getOperatingMode(voltage: VoltageVector): string;
   
   /**
    * 🎯 收敛性检查：物理意义驱动的 Newton 收敛判断
@@ -356,7 +369,7 @@ export abstract class IntelligentDeviceModelFactory {
 }
 
 // 器件参数接口定义
-export interface MOSFETParameters {
+export interface MOSFETParameters extends Record<string, number> {
   readonly Vth: number;      // 阈值电压
   readonly Kp: number;       // 跨导参数
   readonly lambda: number;   // 沟道长度调制
@@ -368,7 +381,7 @@ export interface MOSFETParameters {
   readonly Imax: number;     // 最大工作电流
 }
 
-export interface DiodeParameters {
+export interface DiodeParameters extends Record<string, number> {
   readonly Is: number;       // 反向饱和电流
   readonly n: number;        // 理想因子
   readonly Rs: number;       // 串联电阻
@@ -428,9 +441,146 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
     };
   }
 
-  // 抽象方法：子类必须实现
-  abstract load(voltage: VoltageVector, system: IMNASystem): LoadResult;
+  // --- ADDED: 实现 ComponentInterface 所需的属性和方法 ---
   
+  /** 对应 ComponentInterface.name */
+  get name(): string {
+    return this.deviceId;
+  }
+
+  /** 对应 ComponentInterface.type */
+  get type(): string {
+    return this.deviceType;
+  }
+  
+  /**
+   * 🚀 统一组装方法 (NEW!)
+   * 
+   * 智能设备的统一组装接口
+   */
+  assemble(context: AssemblyContext): void {
+    if (!context.solutionVector) {
+      throw new Error(`Intelligent device '${this.name}' requires a solution vector in the assembly context.`);
+    }
+
+    // 調用設備特定的 load() 方法
+    const loadResult = this.load(context.solutionVector);
+    
+    if (!loadResult.success) {
+      throw new Error(`Intelligent device ${this.name} load failed: ${loadResult.errorMessage}`);
+    }
+
+    // 將 load() 結果裝配到系統矩陣
+    for (const entry of loadResult.matrixStamp.entries) {
+      context.matrix.add(entry.row, entry.col, entry.value);
+    }
+    for (const contribution of loadResult.rhsContribution) {
+        context.rhs.add(contribution.index, contribution.value);
+    }
+  }
+
+  /**
+   * 👁️ 检查此组件是否会产生事件
+   * 智能设备是事件的主要来源
+   */
+  hasEvents(): boolean {
+    return true;
+  }
+
+  /**
+   * 🆕 返回一个或多个条件函数，其零点对应一个事件。
+   * @returns { type: EventType, condition: (v: IVector) => number }[]
+   */
+  getEventFunctions?(): { type: string, condition: (v: IVector) => number }[];
+
+  /**
+   * ⚡ 处理一个已确认的事件
+   * 对于智能设备，主要动作是更新其内部状态
+   */
+  handleEvent(event: IEvent, context: AssemblyContext): void {
+    if (event.type === EventType.StateChange && context.solutionVector) {
+        const currentMode = this.getOperatingMode(context.solutionVector);
+        
+        // 更新当前状态的工作模式
+        this._currentState = {
+            ...this._currentState,
+            operatingMode: currentMode,
+            time: event.time, // 同步事件时间
+        };
+        
+        console.log(`Handled event for ${this.name} at time ${event.time}: new state is ${currentMode}`);
+    }
+  }
+
+  /**
+   * MODIFIED: 讓 stamp 的錯誤訊息更有幫助
+   * @deprecated 請使用 assemble() 方法替代
+   */
+
+  
+  /**
+   * ADDED: 实现基本的参数验证
+   */
+  validate(): { isValid: boolean; errors: string[]; warnings: string[]; } {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    
+    // 基本验证
+    if (!this.deviceId || this.deviceId.trim() === '') {
+      errors.push('Device ID cannot be empty');
+    }
+    
+    if (!this.deviceType || this.deviceType.trim() === '') {
+      errors.push('Device type cannot be empty');
+    }
+    
+    if (this.nodes.length === 0) {
+      errors.push('Device must have at least one node');
+    }
+    
+    // 检查节点索引的有效性
+    for (const nodeIndex of this.nodes) {
+      if (!Number.isInteger(nodeIndex) || nodeIndex < 0) {
+        errors.push(`Invalid node index: ${nodeIndex}. Must be non-negative integer.`);
+      }
+    }
+    
+    return {
+      isValid: errors.length === 0,
+      errors,
+      warnings
+    };
+  }
+  
+  /**
+   * ADDED: 提供设备信息用于调试
+   */
+  getInfo(): { type: string; name: string; nodes: string[]; parameters: Record<string, any>; units?: Record<string, string>; } {
+    const units = this._getParameterUnits();
+    return {
+      type: this.deviceType,
+      name: this.deviceId,
+      nodes: this.nodes.map(n => n.toString()), // 转换为字符串以符合接口
+      parameters: { ...this.parameters },
+      ...(units && { units }) // 只在有单位信息时包含
+    };
+  }
+  
+  /**
+   * 子类可重写以提供参数单位信息
+   */
+  protected _getParameterUnits(): Record<string, string> | undefined {
+    return undefined;
+  }
+
+  abstract load(voltage: VoltageVector): LoadResult;
+  
+  /**
+   * ADDED: 新增的抽象方法，子类必须实现
+   * 获取设备在给定电压下的工作模式
+   */
+  abstract getOperatingMode(voltage: VoltageVector): string;
+
   /**
    * 🎯 通用收敛性检查实现
    */
@@ -660,19 +810,19 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
     return true;
   }
 
-  private _isCurrentReasonable(voltage: VoltageVector): boolean {
+  private _isCurrentReasonable(_voltage: VoltageVector): boolean {
     // 基于电压估算电流是否合理
     // 简化实现：假设设备不会产生超过 1kA 的电流
     return true; // TODO: 实现具体的电流检查逻辑
   }
 
-  private _checkPowerConsistency(voltage: VoltageVector): boolean {
+  private _checkPowerConsistency(_voltage: VoltageVector): boolean {
     // 检查功率是否守恒
     // 简化实现：总是返回 true
     return true; // TODO: 实现功率一致性检查
   }
 
-  private _isOperatingRegionValid(voltage: VoltageVector): boolean {
+  private _isOperatingRegionValid(_voltage: VoltageVector): boolean {
     // 检查器件是否在有效工作区域
     return true; // 子类应重写此方法
   }
@@ -733,7 +883,7 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
     }
   }
 
-  protected _applyDeviceSpecificLimits(deltaV: VoltageVector): void {
+  protected _applyDeviceSpecificLimits(_deltaV: VoltageVector): void {
     // 子类重写实现设备特定的限制
   }
 
@@ -756,18 +906,18 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
     return currentDt; // TODO: 实现智能步长建议
   }
 
-  private _detectSwitchingEvents(dt: number): readonly SwitchingEvent[] {
+  private _detectSwitchingEvents(_dt: number): readonly SwitchingEvent[] {
     // 基于状态变化趋势检测开关事件
     return []; // TODO: 实现开关事件检测
   }
 
-  private _identifyNumericalChallenges(dt: number): readonly NumericalChallenge[] {
+  private _identifyNumericalChallenges(_dt: number): readonly NumericalChallenge[] {
     // 识别潜在的数值挑战
     return []; // TODO: 实现数值挑战识别
   }
 
   // 性能统计更新
-  private _updateConvergenceStats(checkTime: number): void {
+  private _updateConvergenceStats(_checkTime: number): void {
     // 更新收敛检查性能统计
   }
 
@@ -780,4 +930,14 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
       convergenceRate: this._analyzeConvergenceTrend()
     };
   }
+}
+
+/**
+ * ADDED: 關鍵的類型守衛函數
+ * 這個函數將被引擎用來區分智能設備和基礎組件
+ * 
+ * 檢查邏輯：智能設備必須具有 'load' 方法
+ */
+export function isIntelligentDeviceModel(component: ComponentInterface): component is IIntelligentDeviceModel {
+  return 'load' in component && typeof (component as any).load === 'function';
 }

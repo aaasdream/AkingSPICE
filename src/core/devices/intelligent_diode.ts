@@ -209,7 +209,7 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
     const limited = super.limitUpdate(deltaV);
     
     // 二极管特定限制
-    this._applyDiodeSpecificLimits(limited);
+    this._applyDeviceSpecificLimits(limited);
     
     return limited;
   }
@@ -236,6 +236,17 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
   }
 
   // === 二极管特定的私有方法 ===
+
+  /**
+   * ADDED: 获取二极管在给定电压下的工作模式
+   * 实现了基类的抽象方法
+   */
+  override getOperatingMode(voltage: VoltageVector): string {
+    const Va = voltage.get(this._anodeNode);
+    const Vc = voltage.get(this._cathodeNode);
+    const Vd = Va - Vc;
+    return this._determineOperatingState(Vd);
+  }
 
   private _initializeDiodeState(): void {
     this._currentState = {
@@ -463,7 +474,7 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
   /**
    * 二极管特定步长限制  
    */
-  override protected _applyDeviceSpecificLimits(deltaV: VoltageVector): void {
+  protected override _applyDeviceSpecificLimits(deltaV: VoltageVector): void {
     const deltaVd = deltaV.get(this._anodeNode) - deltaV.get(this._cathodeNode);
     
     // 限制正向电压步长

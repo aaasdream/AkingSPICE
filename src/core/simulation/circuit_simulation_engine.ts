@@ -29,17 +29,21 @@
 import type { 
   Time,
   ISparseMatrix,
-  IVector 
+  IVector,
+  IEvent 
 } from '../../types/index';
 import { Vector } from '../../math/sparse/vector';
 import { SparseMatrix } from '../../math/sparse/matrix';
 import { GeneralizedAlphaIntegrator } from '../integrator/generalized_alpha';
+import { ExtraVariableIndexManager, ExtraVariableType } from '../mna/extra_variable_manager';
+// CHANGED: 导入统一的接口和新的类型守卫
+import { ComponentInterface, AssemblyContext } from '../interfaces/component';
 import type { 
   IIntelligentDeviceModel, 
-  LoadResult,
   DeviceState 
 } from '../devices/intelligent_device_model';
-import { ScalableSource } from '../interfaces/component';
+import { isIntelligentDeviceModel } from '../devices/intelligent_device_model';
+import { EventDetector } from '../events/detector';
 
 /**
  * 仿真状态枚举
@@ -151,8 +155,13 @@ export class CircuitSimulationEngine {
   // 核心组件
   // @ts-ignore - 将在瞬态分析实现中使用
   private readonly _integrator: GeneralizedAlphaIntegrator;
-  private readonly _devices: Map<string, IIntelligentDeviceModel> = new Map();
+  private readonly _eventDetector: EventDetector;
+  // CHANGED: 设备容器现在接受任何 ComponentInterface
+  private readonly _devices: Map<string, ComponentInterface> = new Map();
   private readonly _nodeMapping: Map<string, number> = new Map();
+  
+  // 🆕 额外变数管理器
+  private _extraVariableManager: ExtraVariableIndexManager | null = null;
   
   // 仿真状态
   private _state: SimulationState = SimulationState.IDLE;
@@ -205,6 +214,10 @@ export class CircuitSimulationEngine {
       ...config
     };
     
+    this._eventDetector = new EventDetector({
+      minTimestep: this._config.minTimeStep,
+    });
+
     // 初始化积分器
     this._integrator = new GeneralizedAlphaIntegrator({
       spectralRadius: this._config.alphaf, // 使用正确的参数名
@@ -245,60 +258,96 @@ export class CircuitSimulationEngine {
   }
 
   /**
-   * 🔧 添加智能设备到电路
+   * 🔧 添加组件到电路 (统一接口)
+   * 
+   * CHANGED: 现在接受任何 ComponentInterface，实现真正的统一架构
    */
-  addDevice(device: IIntelligentDeviceModel): void {
+  addDevice(device: ComponentInterface): void {
     if (this._state !== SimulationState.IDLE) {
       throw new Error('Cannot add devices while simulation is running');
     }
     
-    this._devices.set(device.deviceId, device);
+    // 使用统一的 name 属性作为键
+    this._devices.set(device.name, device);
     
-    // 更新节点映射
+    // 统一处理节点映射 - 支持字符串和数字节点
     device.nodes.forEach((nodeId) => {
-      if (!this._nodeMapping.has(nodeId.toString())) {
+      const nodeName = nodeId.toString();
+      if (!this._nodeMapping.has(nodeName)) {
         const globalNodeId = this._nodeMapping.size;
-        this._nodeMapping.set(nodeId.toString(), globalNodeId);
+        this._nodeMapping.set(nodeName, globalNodeId);
       }
     });
     
-    this._logEvent('DEVICE_ADDED', device.deviceId, `Added ${device.deviceType} device`);
+    this._logEvent('DEVICE_ADDED', device.name, `Added ${device.type} device`);
   }
 
   /**
    * 🔧 批量添加设备 (便于复杂电路创建)
+   * 
+   * CHANGED: 现在接受任何 ComponentInterface 数组
    */
-  addDevices(devices: IIntelligentDeviceModel[]): void {
+  addDevices(devices: ComponentInterface[]): void {
     devices.forEach(device => this.addDevice(device));
   }
 
   /**
-   * ⚙️ 初始化仿真系统
+   * ⚙️ 初始化仿真系统 (重构版本)
+   * 
+   * 整合了额外变数管理器，现在支持电感、电压源和变压器
    */
   private async _initializeSimulation(): Promise<void> {
     this._state = SimulationState.INITIALIZING;
     const initStartTime = performance.now();
     
     try {
-      // 1. 验证电路完整性
+      // 1. 驗證電路
       this._validateCircuit();
       
-      // 2. 分配系统矩阵和向量
-      const systemSize = this._nodeMapping.size;
-      this._systemMatrix = new SparseMatrix(systemSize, systemSize);
-      this._rhsVector = new Vector(systemSize);
-      this._solutionVector = new Vector(systemSize);
+      // 2. 預分析並初始化額外變數管理器
+      const baseNodeCount = this._nodeMapping.size;
+      this._extraVariableManager = new ExtraVariableIndexManager(baseNodeCount);
       
-      // 3. 积分器不需要额外初始化（构造函数中已完成）
-      // 积分器将在第一次调用 step() 时自动初始化状态
+      // 3. 分配額外變數索引給需要的元件
+      for (const device of this._devices.values()) {
+          if ('getExtraVariableCount' in device && typeof (device as any).getExtraVariableCount === 'function') {
+              const count = (device as any).getExtraVariableCount();
+              if (count > 0) {
+                  // 根據類型分配
+                  if (device.type === 'V' || device.type === 'L') {
+                      const index = this._extraVariableManager.allocateIndex(
+                          device.type === 'V' ? ExtraVariableType.VOLTAGE_SOURCE_CURRENT : ExtraVariableType.INDUCTOR_CURRENT,
+                          device.name
+                      );
+                      if ('setCurrentIndex' in device && typeof (device as any).setCurrentIndex === 'function') {
+                          (device as any).setCurrentIndex(index);
+                      }
+                  } else if (device.type === 'K') {
+                      const primaryIndex = this._extraVariableManager.allocateIndex(ExtraVariableType.TRANSFORMER_PRIMARY_CURRENT, device.name);
+                      const secondaryIndex = this._extraVariableManager.allocateIndex(ExtraVariableType.TRANSFORMER_SECONDARY_CURRENT, device.name);
+                      if ('setCurrentIndices' in device && typeof (device as any).setCurrentIndices === 'function') {
+                          (device as any).setCurrentIndices(primaryIndex, secondaryIndex);
+                      }
+                  }
+              }
+          }
+      }
       
-      // 4. 计算初始工作点 (DC 分析)
+      // 4. 根據最終系統大小創建矩陣和向量
+      const totalSystemSize = this._extraVariableManager.getTotalMatrixSize();
+      this._systemMatrix = new SparseMatrix(totalSystemSize, totalSystemSize);
+      this._rhsVector = new Vector(totalSystemSize);
+      this._solutionVector = new Vector(totalSystemSize);
+      
+      this._logEvent('INIT', undefined, `System initialized with ${baseNodeCount} nodes and ${this._extraVariableManager.getExtraVariableCount()} extra variables. Total size: ${totalSystemSize}.`);
+  
+      // 5. 計算 DC 工作點
       await this._performDCAnalysis();
-      
-      // 5. 初始化波形数据存储
+  
+      // 6. 初始化波形数据存储
       this._initializeWaveformStorage();
       
-      // 6. 设置初始时间和步长
+      // 7. 设置初始时间和步长
       this._currentTime = this._config.startTime;
       this._currentTimeStep = this._config.initialTimeStep;
       this._stepCount = 0;
@@ -309,6 +358,76 @@ export class CircuitSimulationEngine {
     } catch (error) {
       this._state = SimulationState.FAILED;
       throw new Error(`Simulation initialization failed: ${error}`);
+    }
+  }
+
+  /**
+   * 🆕 为设备分配额外变数索引
+   * 
+   * 根据设备类型分配相应的额外变数（电流变数）
+   */
+  private async _allocateExtraVariablesForDevice(device: ComponentInterface): Promise<void> {
+    if (!this._extraVariableManager) {
+      throw new Error('Extra variable manager not initialized');
+    }
+
+    // 检查设备是否需要额外变数
+    if (!('getExtraVariableCount' in device) || typeof device.getExtraVariableCount !== 'function') {
+      return; // 该设备不需要额外变数
+    }
+
+    const extraVariableCount = device.getExtraVariableCount();
+    if (extraVariableCount === 0) {
+      return;
+    }
+
+    // 根据设备类型分配相应的变数
+    try {
+      if (device.type === 'V') {
+        // 电压源需要一个电流变数
+        const index = this._extraVariableManager.allocateIndex(
+          ExtraVariableType.VOLTAGE_SOURCE_CURRENT,
+          device.name,
+          `${device.name} 的电流变数`
+        );
+        
+        if ('setCurrentIndex' in device && typeof device.setCurrentIndex === 'function') {
+          device.setCurrentIndex(index);
+        }
+        
+      } else if (device.type === 'L') {
+        // 电感需要一个电流变数
+        const index = this._extraVariableManager.allocateIndex(
+          ExtraVariableType.INDUCTOR_CURRENT,
+          device.name,
+          `${device.name} 的电流变数`
+        );
+        
+        if ('setCurrentIndex' in device && typeof device.setCurrentIndex === 'function') {
+          device.setCurrentIndex(index);
+        }
+        
+      } else if (device.type === 'K') {
+        // 理想变压器需要两个电流变数（初级和次级）
+        const primaryIndex = this._extraVariableManager.allocateIndex(
+          ExtraVariableType.TRANSFORMER_PRIMARY_CURRENT,
+          device.name,
+          `${device.name} 的初级电流变数`
+        );
+        
+        const secondaryIndex = this._extraVariableManager.allocateIndex(
+          ExtraVariableType.TRANSFORMER_SECONDARY_CURRENT,
+          device.name,
+          `${device.name} 的次级电流变数`
+        );
+        
+        if ('setCurrentIndices' in device && typeof device.setCurrentIndices === 'function') {
+          device.setCurrentIndices(primaryIndex, secondaryIndex);
+        }
+      }
+      
+    } catch (error) {
+      throw new Error(`Failed to allocate extra variables for device ${device.name}: ${error}`);
     }
   }
 
@@ -485,7 +604,7 @@ export class CircuitSimulationEngine {
   }
 
   private async _sourceSteppingHomotopy(): Promise<boolean> {
-    const sources = Array.from(this._devices.values()).filter(d => 'scaleSource' in d) as (IIntelligentDeviceModel & ScalableSource)[];
+    const sources = Array.from(this._devices.values()).filter(d => 'scaleSource' in d) as (ComponentInterface & ScalableSource)[];
     const stepFactors = [0.0, 0.25, 0.5, 0.75, 1.0];
     let converged = false;
 
@@ -547,7 +666,8 @@ export class CircuitSimulationEngine {
 
   // 輔助: 應用/移除 Gmin (在 NonlinearDevice 如 Diode 中添加 stampGmin 方法)
   private _applyGminToNonlinearDevices(gmin: number): void {
-    for (const device of this._devices.values()) {
+    const devices = Array.from(this._devices.values());
+    for (const device of devices) {
       if ('stampGmin' in device && typeof (device as any).stampGmin === 'function') {
         (device as any).stampGmin(gmin);
       }
@@ -555,7 +675,8 @@ export class CircuitSimulationEngine {
   }
 
   private _removeGminFromNonlinearDevices(): void {
-    for (const device of this._devices.values()) {
+    const devices = Array.from(this._devices.values());
+    for (const device of devices) {
       if ('stampGmin' in device && typeof (device as any).stampGmin === 'function') {
         (device as any).stampGmin(0);
       }
@@ -571,7 +692,7 @@ export class CircuitSimulationEngine {
     
     while (iterations < this._config.maxNewtonIterations) {
       // a. 根据当前解 _solutionVector 装配系统
-      await this._assembleSystem(); // 移除时间参数
+      await this._assembleSystem(0); // 明确传递 DC 时间点 t=0
       
       // b. 计算残差 F(x)，在我们的 MNA 框架中，它就是右侧向量 _rhsVector
       const residual = this._rhsVector;
@@ -636,7 +757,7 @@ export class CircuitSimulationEngine {
     const originalSolution = this._solutionVector;
     this._solutionVector = solution; // 临时设置为试探解
     
-    await this._assembleSystem(); // 重新装配以获得新的 RHS (残差)
+    await this._assembleSystem(0); // 在 DC 分析中重新装配，使用 t=0
     const norm = this._rhsVector.norm();
 
     this._solutionVector = originalSolution; // 恢复原始解
@@ -656,169 +777,144 @@ export class CircuitSimulationEngine {
   }
 
   /**
-   * 🚀 執行一個時間步進 (增強版事件驅動)
+   * 🚀 執行一個時間步進 (事件驅動重構版)
    * 
-   * 主要改進：
-   * 1. 事件檢測與處理
-   * 2. Newton-Raphson 失敗自動恢復
-   * 3. 自適應步長控制
-   * 4. 器件狀態變化監控
+   * 核心流程：
+   * 1. 執行一個完整的積分器步進。
+   * 2. 檢查在 [t_n, t_{n+1}] 區間內是否發生了事件。
+   * 3. 如果沒有事件，接受該步進。
+   * 4. 如果有事件，使用二分法精確定位第一個事件的時間 t_event。
+   * 5. 將仿真時間推進到 t_event，更新解，並處理事件。
+   * 6. 從 t_event 繼續執行剩餘的時間步。
    */
   private async _performTimeStep(): Promise<boolean> {
-    const stepStartTime = performance.now();
-    this._stepCount++;
-    
-    // 1. 預事件檢測 - 檢查是否有器件狀態即將變化
-    const preEvents = await this._detectPreStepEvents();
-    if (preEvents.length > 0) {
-      console.log(`🎯 檢測到 ${preEvents.length} 個預步事件`);
-      this._handlePreStepEvents(preEvents);
-    }
-    
-    let newtonIterations = 0;
-    let converged = false;
-    let retryCount = 0;
-    const maxRetries = 3; // 最大重試次數
-    
-    // 2. 主Newton-Raphson循環 (帶重試機制)
-    while (!converged && retryCount < maxRetries) {
-      try {
-        // 2.1 Newton-Raphson 迭代求解非线性系统
-        while (newtonIterations < this._config.maxNewtonIterations && !converged) {
-          // 装配系统矩阵和右侧向量
-          const assemblyStartTime = performance.now();
-          await this._assembleSystem();
-          this._performanceMetrics.matrixAssemblyTime += performance.now() - assemblyStartTime;
-          
-          // 求解线性系统
-          const solutionStartTime = performance.now();
-          const deltaV = await this._solveLinearSystem(this._systemMatrix, this._rhsVector);
-          this._performanceMetrics.matrixSolutionTime += performance.now() - solutionStartTime;
-          
-          // 应用设备步长限制和阻尼
-          const dampingResult = await this._applyDampedStep(deltaV, 0); // 使用初始殘差0作為fallback
-          const dampedDeltaV = dampingResult.finalSolution;
-          
-          // 更新解向量
-          this._solutionVector = this._solutionVector.plus(dampedDeltaV);
-          
-          // 检查收敛性
-          const convergenceStartTime = performance.now();
-          converged = await this._checkConvergence(dampedDeltaV);
-          this._performanceMetrics.convergenceCheckTime += performance.now() - convergenceStartTime;
-          
-          newtonIterations++;
+    const t_start = this._currentTime;
+    let dt = this._currentTimeStep;
+    const original_t_end = t_start + dt;
+
+    while (true) { // 使用循環來處理單步內可能發生的多個事件
+        const t_end = this._currentTime + dt;
+
+        // 1. 執行試探性積分步
+        // @ts-ignore
+        const integratorResult = await this._integrator.step(this, this._currentTime, dt, this._solutionVector);
+        if (!integratorResult.converged) {
+            this._logEvent('INTEGRATOR_FAILURE', undefined, `Integrator failed to converge at t=${this._currentTime}`);
+            return false; // 積分失敗，需要外部循環減小步長重試
         }
-        
-        if (converged) {
-          // 2.3 檢查解的物理合理性
-          const solutionValid = await this._validateSolution();
-          if (!solutionValid) {
-            console.log('⚠️ 解不滿足物理約束，重新計算...');
-            converged = false;
-          }
+        const tentativeSolution = integratorResult.solution;
+
+        // 2. 檢測事件
+        const eventfulComponents = Array.from(this._devices.values()).filter(d => d.getEventFunctions);
+        const events = this._eventDetector.detectEvents(
+            eventfulComponents,
+            this._currentTime, t_end, this._solutionVector, tentativeSolution
+        );
+
+        if (events.length === 0) {
+            // 3.A. 沒有事件：接受此步
+            this._currentTime = t_end;
+            this._solutionVector = tentativeSolution;
+            this._currentTimeStep = integratorResult.nextDt; // 使用積分器建議的下一步長
+            return true; // 步進成功
+        } else {
+            // 3.B. 有事件：處理第一個事件
+            const firstEvent = events[0]; 
+            if (!firstEvent) return true; // Should not happen, but satisfies compiler
+
+            this._logEvent('EVENT_DETECTED', firstEvent.component.name, `Event ${firstEvent.type} detected at ~${firstEvent.time.toExponential(3)}s`);
+
+            // 4. 精確定位事件時間
+            const eventTime = await this._eventDetector.locateEventTime(firstEvent, (time: Time) => this._integrator.interpolate(time));
+            
+            // 檢查事件是否太近
+            if (this._eventDetector.isTimestepTooSmall(eventTime - this._currentTime)) {
+                this._logEvent('EVENT_TOO_CLOSE', firstEvent.component.name, `Event time is too close. Forcing step to event time.`);
+                // 事件太近，先強行推進到事件點，然後在下一個大步中解決
+                this._currentTime = eventTime;
+                this._solutionVector = this._integrator.interpolate(eventTime);
+                this._handleEvent(firstEvent); // 處理事件
+                // @ts-ignore
+                this._integrator.restart({ time: this._currentTime, solution: this._solutionVector });
+                return true;
+            }
+
+            // 5. 拒絕試探步，精確積分到事件點
+            const eventDt = eventTime - this._currentTime;
+            // @ts-ignore
+            const finalResult = await this._integrator.step(this, this._currentTime, eventDt, this._solutionVector);
+            
+            // 6. 更新狀態到事件點並處理事件
+            this._currentTime = eventTime;
+            this._solutionVector = finalResult.solution;
+            this._handleEvent(firstEvent);
+
+            // 7. 積分器需要重新啟動以處理不連續性
+            // @ts-ignore
+            this._integrator.restart({ time: this._currentTime, solution: this._solutionVector });
+
+            // 更新剩餘的時間步，在同一個 _performTimeStep 內繼續
+            dt = original_t_end - this._currentTime;
+            if (this._eventDetector.isTimestepTooSmall(dt)) {
+                return true; // 剩餘時間太短，結束此步
+            }
+            // 否則，循環將使用剩餘的 dt 繼續嘗試走完原計劃的步長
         }
-        
-        if (!converged && retryCount < maxRetries - 1) {
-          // 2.4 Newton失敗處理策略
-          const recoveryAction = await this._handleNewtonFailure(retryCount);
-          if (recoveryAction === 'reduce_timestep') {
-            this._currentTimeStep *= 0.5;
-            console.log(`🔄 減小時間步長至 ${this._currentTimeStep.toExponential(3)}s`);
-          } else if (recoveryAction === 'restart_with_damping') {
-            console.log('🛡️ 使用強阻尼模式重試');
-          }
-          
-          // 重置迭代計數器準備重試
-          newtonIterations = 0;
-          retryCount++;
-        } else if (!converged) {
-          break; // 達到最大重試次數
-        }
-        
-      } catch (error) {
-        console.error(`❌ 時間步計算錯誤: ${error}`);
-        retryCount++;
-        if (retryCount >= maxRetries) {
-          throw new Error(`時間步在 ${retryCount} 次重試後仍然失敗`);
-        }
-        newtonIterations = 0; // 重置計數器
-      }
     }
-    
-    if (converged) {
-      // 3. 後事件檢測 - 檢查器件狀態是否已變化
-      const postEvents = await this._detectPostStepEvents();
-      if (postEvents.length > 0) {
-        console.log(`🎯 檢測到 ${postEvents.length} 個後步事件`);
-        await this._handlePostStepEvents(postEvents);
-      }
-      
-      // 4. 更新器件狀態
-      await this._updateDeviceStates();
-      
-      // 5. 自適應步長調整
-      this._adaptiveTimeStepControl(newtonIterations);
-      
-      // 6. 準備下一步
-      this._currentTime += this._currentTimeStep;
-      
-      // 更新性能指標
-      this._performanceMetrics.averageIterationsPerStep = 
-        (this._performanceMetrics.averageIterationsPerStep * this._stepCount + newtonIterations) / (this._stepCount + 1);
-        
-    } else {
-      // 收敛失败
-      this._performanceMetrics.failedSteps++;
-      this._logEvent('STEP_FAILED', undefined, `Step failed at t=${this._currentTime}, iterations=${newtonIterations}, retries=${retryCount}`);
-    }
-    
-    const stepTime = performance.now() - stepStartTime;
-    if (this._config.verboseLogging) {
-      console.log(`Step ${this._stepCount}: t=${this._currentTime.toExponential(3)}, dt=${this._currentTimeStep.toExponential(3)}, iterations=${newtonIterations}, retries=${retryCount}, time=${stepTime.toFixed(2)}ms`);
-    }
-    
-    return converged;
   }
 
-  private async _assembleSystem(): Promise<void> {
-    // 重新创建系统矩阵和向量来清空它们
-    // 注意：接口不提供clear方法，所以创建新实例
-    const matrixSize = this._systemMatrix.rows;
-    this._systemMatrix = new (this._systemMatrix.constructor as any)(matrixSize, matrixSize);
-    // 重置向量 - 没有clear方法，创建新的零向量
-    this._rhsVector = new (this._rhsVector.constructor as any)(this._rhsVector.size);
+  /**
+   * 處理單個仿真事件
+   * @param event 要處理的事件
+   */
+  private _handleEvent(event: IEvent): void {
+    const device = event.component;
+    if (device && 'handleEvent' in device && typeof device.handleEvent === 'function') {
+      // @ts-ignore
+      device.handleEvent(event.type, event);
+      this._logEvent('EVENT_HANDLED', device.name, `Device handled event ${event.type}`);
+    }
+    // 可以在此處添加更通用的事件處理邏輯
+  }
+
+  /**
+   * 🚀 系统矩阵装配 (重构版本)
+   * 
+   * 使用统一的组装接口，消除 stamp() vs load() 的分裂
+   * 所有组件都通过 assemble() 方法提供其 MNA 贡献
+   * 
+   * @param time - 装配时的仿真时间 (默认使用当前时间)
+   * @param gmin - Gmin Stepping 的电导值
+   */
+  private async _assembleSystem(time: number = this._currentTime, gmin: number = 0): Promise<void> {
+    const assemblyStartTime = performance.now();
     
+    // 清空矩阵和向量
+    this._systemMatrix.clear();
+    this._rhsVector.fill(0);
+    
+    // 創建統一的組裝上下文
+    const assemblyContext: AssemblyContext = {
+      matrix: this._systemMatrix as SparseMatrix,
+      rhs: this._rhsVector as Vector,
+      nodeMap: this._nodeMapping,
+      currentTime: time,
+      solutionVector: this._solutionVector as Vector,
+      gmin: gmin,
+      getExtraVariableIndex: (componentName: string, variableType: string) => 
+        this._extraVariableManager?.getIndex(componentName, variableType as ExtraVariableType)
+    };
+    
+    // ✅ 這就是先進架構的威力：一個簡單、統一的迴圈！
     for (const device of this._devices.values()) {
-      const evalStartTime = performance.now();
-      
-      const loadResult = device.load(this._solutionVector, {
-        systemMatrix: () => this._systemMatrix,
-        getRHS: () => this._rhsVector,
-        size: this._nodeMapping.size
-      } as any);
-      
-      this._performanceMetrics.deviceEvaluationTime += performance.now() - evalStartTime;
-      
-      if (loadResult.success) {
-        this._assembleDeviceContribution(device.deviceId, loadResult);
-      } else {
-        throw new Error(`Device ${device.deviceId} evaluation failed: ${loadResult.errorMessage}`);
+      try {
+        device.assemble(assemblyContext);
+      } catch (error) {
+        throw new Error(`Assembly failed for component ${device.name}: ${error}`);
       }
     }
-  }
-
-  private _assembleDeviceContribution(_deviceId: string, loadResult: LoadResult): void {
-    // 将设备矩阵印花添加到系统矩阵
-    loadResult.matrixStamp.entries.forEach(entry => {
-      this._systemMatrix.add(entry.row, entry.col, entry.value); // 使用接口的add方法
-    });
     
-    // 添加右侧向量贡献
-    for (let i = 0; i < loadResult.rhsContribution.size; i++) {
-      const currentValue = this._rhsVector.get(i);
-      this._rhsVector.set(i, currentValue + loadResult.rhsContribution.get(i));
-    }
+    this._performanceMetrics.matrixAssemblyTime += performance.now() - assemblyStartTime;
   }
 
   private async _solveLinearSystem(_A: ISparseMatrix, b: IVector): Promise<IVector> {
@@ -850,9 +946,12 @@ export class CircuitSimulationEngine {
   private async _applyStepLimiting(deltaV: IVector): Promise<IVector> {
     let limitedDeltaV = deltaV;
     
-    // 应用每个设备的步长限制
-    for (const device of this._devices.values()) {
-      limitedDeltaV = device.limitUpdate(limitedDeltaV);
+    // 只对智能设备应用步长限制
+    const devices = Array.from(this._devices.values());
+    for (const device of devices) {
+      if (isIntelligentDeviceModel(device)) {
+        limitedDeltaV = device.limitUpdate(limitedDeltaV);
+      }
     }
     
     return limitedDeltaV;
@@ -919,7 +1018,7 @@ export class CircuitSimulationEngine {
     
     // 1. 嘗試完整Newton步
     const fullNewtonStep = await this._solveLinearSystem(jacobian, residual.scale(-1));
-    const fullStepNorm = this._vectorNorm(fullNewtonStep);
+    const fullStepNorm = await this._vectorNorm(fullNewtonStep);
     
     let proposedStep: IVector;
     
@@ -987,7 +1086,7 @@ export class CircuitSimulationEngine {
   /**
    * 🌐 全局策略：向量范數計算
    */
-  private _vectorNorm(vector: IVector): number {
+  private async _vectorNorm(vector: IVector): Promise<number> {
     let sum = 0;
     for (let i = 0; i < vector.size; i++) {
       const val = vector.get(i);
@@ -1056,6 +1155,9 @@ export class CircuitSimulationEngine {
     return this._solutionVector.scale(alpha);
   }
 
+  /**
+   * CHANGED: 收敛检查 - 只对智能设备进行设备级收敛检查
+   */
   private async _checkConvergence(deltaV: IVector): Promise<boolean> {
     // 全局收敛检查
     const maxDelta = this._getMaxAbsValue(deltaV);
@@ -1070,17 +1172,23 @@ export class CircuitSimulationEngine {
     const voltageConverged = maxDelta < this._config.voltageToleranceAbs && 
                             relativeDelta < this._config.voltageToleranceRel;
     
-    // 设备级收敛检查
+    // 设备级收敛检查 - 只对智能设备进行
     let deviceConvergenceCount = 0;
-    for (const device of this._devices.values()) {
-      const convergenceInfo = device.checkConvergence(deltaV);
-      if (convergenceInfo.converged) {
-        deviceConvergenceCount++;
+    let totalIntelligentDevices = 0;
+    
+    const devices = Array.from(this._devices.values());
+    for (const device of devices) {
+      if (isIntelligentDeviceModel(device)) {
+        totalIntelligentDevices++;
+        const convergenceInfo = device.checkConvergence(deltaV);
+        if (convergenceInfo.converged) {
+          deviceConvergenceCount++;
+        }
       }
     }
     
-    // 如果沒有設備，認為設備層面已收斂
-    const deviceConverged = this._devices.size === 0 || deviceConvergenceCount === this._devices.size;
+    // 如果沒有智能設備，認為設備層面已收斂
+    const deviceConverged = totalIntelligentDevices === 0 || deviceConvergenceCount === totalIntelligentDevices;
     
     const overallConverged = voltageConverged && deviceConverged;
     
@@ -1091,35 +1199,49 @@ export class CircuitSimulationEngine {
     return overallConverged;
   }
 
+  /**
+   * CHANGED: 状态更新 - 只为智能设备更新状态
+   */
   private async _updateDeviceStates(): Promise<void> {
-    for (const device of this._devices.values()) {
-      // 创建新的设备状态 (简化)
-      const newState: DeviceState = {
-        deviceId: device.deviceId,
-        time: this._currentTime,
-        voltage: this._solutionVector,
-        current: new Vector(device.nodes.length), // TODO: 计算实际电流
-        operatingMode: 'normal',
-        parameters: device.parameters,
-        internalStates: {},
-        temperature: 300
-      };
-      
-      device.updateState(newState);
+    const devices = Array.from(this._devices.values());
+    for (const device of devices) {
+      if (isIntelligentDeviceModel(device)) {
+        // 创建新的设备状态 (只对智能设备)
+        const newState: DeviceState = {
+          deviceId: device.deviceId,
+          time: this._currentTime,
+          voltage: this._solutionVector,
+          current: new Vector(device.nodes.length), // TODO: 计算实际电流
+          operatingMode: 'normal',
+          parameters: device.parameters,
+          internalStates: {},
+          temperature: 300
+        };
+        
+        device.updateState(newState);
+      }
+      // 基础组件不需要状态更新，因为它们是无状态的
     }
   }
 
+  /**
+   * CHANGED: 自适应步长 - 基于智能设备的预测
+   */
   private async _adaptTimeStep(): Promise<void> {
     if (!this._config.enablePredictiveAnalysis) return;
     
-    // 基于设备预测的自适应步长调整
+    // 基于智能设备预测的自适应步长调整
     let suggestedTimeStep = this._currentTimeStep;
     
-    for (const device of this._devices.values()) {
-      const prediction = device.predictNextState(this._currentTimeStep);
-      if (prediction.suggestedTimestep > 0 && prediction.suggestedTimestep < suggestedTimeStep) {
-        suggestedTimeStep = prediction.suggestedTimestep;
+    const devices = Array.from(this._devices.values());
+    for (const device of devices) {
+      if (isIntelligentDeviceModel(device)) {
+        const prediction = device.predictNextState(this._currentTimeStep);
+        if (prediction.suggestedTimestep > 0 && prediction.suggestedTimestep < suggestedTimeStep) {
+          suggestedTimeStep = prediction.suggestedTimestep;
+        }
       }
+      // 基础组件不参与自适应步长预测
     }
     
     // 限制步长变化幅度
@@ -1154,18 +1276,33 @@ export class CircuitSimulationEngine {
       (this._waveformData.nodeVoltages.get(i) as number[]).push(this._solutionVector.get(i));
     }
     
-    // 保存设备电流和状态 (简化实现)
-    for (const device of this._devices.values()) {
-      const deviceId = device.deviceId;
-      
-      if (!this._waveformData.deviceCurrents.has(deviceId)) {
-        (this._waveformData.deviceCurrents as Map<string, number[]>).set(deviceId, []);
-        (this._waveformData.deviceStates as Map<string, string[]>).set(deviceId, []);
+    // 保存设备电流和状态 (简化实现) - 只对智能设备
+    const devices = Array.from(this._devices.values());
+    for (const device of devices) {
+      if (isIntelligentDeviceModel(device)) {
+        const deviceId = device.deviceId;
+        
+        if (!this._waveformData.deviceCurrents.has(deviceId)) {
+          (this._waveformData.deviceCurrents as Map<string, number[]>).set(deviceId, []);
+          (this._waveformData.deviceStates as Map<string, string[]>).set(deviceId, []);
+        }
+        
+        // TODO: 获取实际设备电流
+        (this._waveformData.deviceCurrents.get(deviceId) as number[]).push(0);
+        (this._waveformData.deviceStates.get(deviceId) as string[]).push('normal');
+      } else {
+        // 对基础组件，使用统一的 name 属性
+        const deviceId = device.name;
+        
+        if (!this._waveformData.deviceCurrents.has(deviceId)) {
+          (this._waveformData.deviceCurrents as Map<string, number[]>).set(deviceId, []);
+          (this._waveformData.deviceStates as Map<string, string[]>).set(deviceId, []);
+        }
+        
+        // TODO: 获取实际设备电流
+        (this._waveformData.deviceCurrents.get(deviceId) as number[]).push(0);
+        (this._waveformData.deviceStates.get(deviceId) as string[]).push('normal');
       }
-      
-      // TODO: 获取实际设备电流
-      (this._waveformData.deviceCurrents.get(deviceId) as number[]).push(0);
-      (this._waveformData.deviceStates.get(deviceId) as string[]).push('normal');
     }
   }
 
@@ -1197,9 +1334,11 @@ export class CircuitSimulationEngine {
     }
     
     // 设备电流和状态存储
-    for (const device of this._devices.values()) {
-      (this._waveformData.deviceCurrents as Map<string, number[]>).set(device.deviceId, []);
-      (this._waveformData.deviceStates as Map<string, string[]>).set(device.deviceId, []);
+    const devices = Array.from(this._devices.values());
+    for (const device of devices) {
+      const deviceId = isIntelligentDeviceModel(device) ? device.deviceId : device.name;
+      (this._waveformData.deviceCurrents as Map<string, number[]>).set(deviceId, []);
+      (this._waveformData.deviceStates as Map<string, string[]>).set(deviceId, []);
     }
   }
 
@@ -1258,10 +1397,24 @@ export class CircuitSimulationEngine {
   }
 
   /**
-   * 🔧 获取设备列表
+   * 🔧 获取设备列表 (更新为统一接口)
    */
-  getDevices(): Map<string, IIntelligentDeviceModel> {
+  getDevices(): Map<string, ComponentInterface> {
     return new Map(this._devices);
+  }
+  
+  /**
+   * 🔧 获取智能设备列表 (仅返回智能设备)
+   */
+  getIntelligentDevices(): Map<string, IIntelligentDeviceModel> {
+    const intelligentDevices = new Map<string, IIntelligentDeviceModel>();
+    const deviceEntries = Array.from(this._devices.entries());
+    for (const [key, device] of deviceEntries) {
+      if (isIntelligentDeviceModel(device)) {
+        intelligentDevices.set(key, device);
+      }
+    }
+    return intelligentDevices;
   }
 
   /**
@@ -1275,30 +1428,53 @@ export class CircuitSimulationEngine {
    * 🎯 檢測預步事件
    */
   private async _detectPreStepEvents(): Promise<any[]> {
-    // 檢測可能的器件狀態變化
+    // 檢測可能的器件狀態變化 - 只對智能設備進行
     const events: any[] = [];
     
-    for (const device of this._devices.values()) {
-      // 檢查二極管是否即將轉換狀態
-      if (device.deviceType === 'diode') {
-        const nodes = device.nodes;
-        if (nodes.length >= 2 && nodes[0] !== undefined && nodes[1] !== undefined) {
-          const currentV = this._solutionVector.get(nodes[0]) - 
-                          this._solutionVector.get(nodes[1]);
-          const threshold = 0.6; // 二極管轉折電壓
-          
-          if (Math.abs(currentV - threshold) < 0.1) {
-            events.push({
-              type: 'diode_transition',
-              device: device,
-              voltage: currentV
-            });
+    const devices = Array.from(this._devices.values());
+    for (const device of devices) {
+      if (isIntelligentDeviceModel(device)) {
+        // 檢查二極管是否即將轉換狀態
+        if (device.deviceType === 'diode') {
+          const nodes = device.nodes;
+          if (nodes.length >= 2 && nodes[0] !== undefined && nodes[1] !== undefined) {
+            // 使用 nodeMapping 來獲取節點的矩陣索引
+            const node0Index = this._getNodeIndex(nodes[0]);
+            const node1Index = this._getNodeIndex(nodes[1]);
+            
+            if (node0Index !== -1 && node1Index !== -1) {
+              const currentV = this._solutionVector.get(node0Index) - 
+                              this._solutionVector.get(node1Index);
+              const threshold = 0.6; // 二極管轉折電壓
+              
+              if (Math.abs(currentV - threshold) < 0.1) {
+                events.push({
+                  type: 'diode_transition',
+                  device: device,
+                  voltage: currentV
+                });
+              }
+            }
           }
         }
       }
     }
     
     return events;
+  }
+  
+  /**
+   * 輔助方法：根據節點 ID 獲取矩陣索引
+   */
+  private _getNodeIndex(nodeId: number): number {
+    // 對於智能設備，節點 ID 通常是數字，需要找到對應的字符串映射
+    const nodeMappingEntries = Array.from(this._nodeMapping.entries());
+    for (const [nodeName, index] of nodeMappingEntries) {
+      if (parseInt(nodeName) === nodeId) {
+        return index;
+      }
+    }
+    return -1; // 未找到
   }
 
   /**
@@ -1414,10 +1590,16 @@ export class CircuitSimulationEngine {
   }
 
   /**
-   * ♻️ 清理资源
+   * ♻️ 清理资源 - 只对智能设备调用 dispose
    */
   dispose(): void {
-    this._devices.forEach(device => device.dispose());
+    // 只对智能设备调用 dispose 方法
+    this._devices.forEach(device => {
+      if (isIntelligentDeviceModel(device)) {
+        device.dispose();
+      }
+      // 基础组件通常不需要特殊的资源清理
+    });
     this._devices.clear();
     this._events = [];
     this._state = SimulationState.IDLE;

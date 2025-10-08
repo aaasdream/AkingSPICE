@@ -93,11 +93,17 @@ const stepUp = TransformerFactory.createStepUpTransformer(
 理想变压器需要扩展 MNA 矩阵来处理耦合关系：
 
 ```typescript
-// 设置电流支路索引
-transformer.setCurrentIndices(primaryIndex, secondaryIndex);
+// 创建组装上下文
+const context = {
+  matrix,
+  rhs,
+  nodeMap,
+  currentTime: 0,
+  getExtraVariableIndex: (name, type) => { /* ... */ }
+};
 
 // 装配到 MNA 矩阵
-transformer.stamp(matrix, rhs, nodeMap);
+transformer.assemble(context);
 ```
 
 ### 矩阵结构

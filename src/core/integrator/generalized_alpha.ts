@@ -165,6 +165,64 @@ export class GeneralizedAlphaIntegrator implements IIntegrator {
     this._logInfo(`   Newmark 參數: γ=${this._gamma.toFixed(4)}, β=${this._beta.toFixed(4)}`);
   }
 
+  /**
+   * 🆕 在時間步內插值解
+   * 
+   * 使用三次 Hermite 插值，根據當前和前一個時間步的解和導數，
+   * 精確計算任意時間點的解向量。這是事件檢測二分法的關鍵。
+   * 
+   * @param time 目標插值時間
+   * @returns 插值後的解向量
+   */
+  public interpolate(time: Time): IVector {
+    if (!this._currentState || !this._previousState) {
+      // 如果歷史記錄不完整，返回當前解
+      return this._currentState?.solution.clone() ?? new Vector(0);
+    }
+
+    const t_prev = this._previousState.time;
+    const t_curr = this._currentState.time;
+
+    if (time < t_prev || time > t_curr) {
+      throw new Error(`Interpolation time ${time} is outside the valid interval [${t_prev}, ${t_curr}]`);
+    }
+    
+    if (Math.abs(time - t_curr) < 1e-15) {
+        return this._currentState.solution.clone();
+    }
+    if (Math.abs(time - t_prev) < 1e-15) {
+        return this._previousState.solution.clone();
+    }
+
+    const h = t_curr - t_prev;
+    if (h < 1e-15) {
+      // 時間步過小，直接返回當前解
+      return this._currentState.solution.clone();
+    }
+
+    const s = (time - t_prev) / h;
+
+    const s2 = s * s;
+    const s3 = s2 * s;
+
+    const h00 = 2 * s3 - 3 * s2 + 1;
+    const h10 = s3 - 2 * s2 + s;
+    const h01 = -2 * s3 + 3 * s2;
+    const h11 = s3 - s2;
+
+    const v_prev = this._previousState.solution;
+    const v_curr = this._currentState.solution;
+    const d_prev = this._previousState.velocity;
+    const d_curr = this._currentState.velocity;
+
+    const interpolatedSolution = v_prev.scale(h00)
+      .plus(d_prev.scale(h * h10))
+      .plus(v_curr.scale(h01))
+      .plus(d_curr.scale(h * h11));
+
+    return interpolatedSolution;
+  }
+
   get order(): number {
     return 2; // Generalized-α 是 2階精確方法
   }
@@ -185,12 +243,12 @@ export class GeneralizedAlphaIntegrator implements IIntegrator {
    * 3. 誤差估計與步長調整
    * 4. 狀態更新與歷史管理
    */
-  step(
+  async step(
     system: IMNASystem,
     t: Time,
     dt: Time,
     solution: VoltageVector
-  ): IntegratorResult {
+  ): Promise<IntegratorResult> {
     this._totalSteps++;
     const startTime = performance.now();
     

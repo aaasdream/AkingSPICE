@@ -5,9 +5,7 @@
  * 支持直流、正弦波、脉冲等多种波形
  */
 
-import { ComponentInterface, SourceInterface, ValidationResult, ComponentInfo, WaveformDescriptor, ScalableSource } from '../../core/interfaces/component';
-import { SparseMatrix } from '../../math/sparse/matrix';
-import { Vector } from '../../math/sparse/vector';
+import { ComponentInterface, SourceInterface, ValidationResult, ComponentInfo, WaveformDescriptor, ScalableSource, AssemblyContext } from '../../core/interfaces/component';
 
 /**
  * ⚡ 理想电压源组件
@@ -192,48 +190,51 @@ export class VoltageSource implements ComponentInterface, SourceInterface, Scala
   }
   
   /**
-   * 🔥 MNA 矩阵装配
-   * 
-   * 电压源需要扩展 MNA 矩阵:
-   * - 添加电压源电流变量
-   * - 施加电压约束方程
+   * ✅ 统一组装方法 (NEW!)
    */
-  stamp(
-    matrix: SparseMatrix, 
-    rhs: Vector, 
-    nodeMap: Map<string, number>,
-    currentTime: number = 0
-  ): void {
-    const n1 = nodeMap.get(this.nodes[0]);
-    const n2 = nodeMap.get(this.nodes[1]);
+  assemble(context: AssemblyContext): void {
+    const n1 = context.nodeMap.get(this.nodes[0]);
+    const n2 = context.nodeMap.get(this.nodes[1]);
     
     if (this._currentIndex === undefined) {
       throw new Error(`电压源 ${this.name} 的电流支路索引未设置`);
     }
     
     const iv = this._currentIndex;
-    const voltage = this.getValue(currentTime);
+    const voltage = this.getValue(context.currentTime);
     
     // B 矩阵: 节点到支路的关联 (KCL)
     if (n1 !== undefined && n1 >= 0) {
-      matrix.add(n1, iv, 1);  // 电流从正端流出
+      context.matrix.add(n1, iv, 1);
     }
     if (n2 !== undefined && n2 >= 0) {
-      matrix.add(n2, iv, -1); // 电流流入负端
+      context.matrix.add(n2, iv, -1);
     }
     
     // C 矩阵: 支路到节点的关联 (KVL)
     if (n1 !== undefined && n1 >= 0) {
-      matrix.add(iv, n1, 1);  // V+ 
+      context.matrix.add(iv, n1, 1);
     }
     if (n2 !== undefined && n2 >= 0) {
-      matrix.add(iv, n2, -1); // -V-
+      context.matrix.add(iv, n2, -1);
     }
     
     // 电压约束: V+ - V- = Vs
-    rhs.add(iv, voltage);
+    context.rhs.add(iv, voltage);
   }
-  
+
+  /**
+   * ⚡️ 检查此组件是否可能产生事件
+   * 
+   * 对于理想电压源，其值由时间决定，不依赖于电路状态，
+   * 因此它本身不产生需要二分法定位的“状态改变”事件。
+   * 波形的不连续点（如脉冲边沿）由积分器通过步长控制来处理。
+   */
+  hasEvents(): boolean {
+    return false;
+  }
+
+
   /**
    * 🔍 组件验证
    */

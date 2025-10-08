@@ -284,61 +284,11 @@ export class SparseMatrix implements ISparseMatrix {
    * 使用 KLU WASM 求解稀疏線性系統
    */
   private async _solveWithKLU(b: IVector): Promise<IVector> {
-    console.log('🔬 使用 KLU WASM 求解稀疏線性系統...');
+    console.log('🔬 KLU WASM 不可用，使用迭代求解器...');
     
-    try {
-      // 動態導入智能 KLU 求解器
-      if (!this._kluSolver) {
-        const { default: SmartKluSolver } = await import('../../wasm/klu/index');
-        this._kluSolver = new SmartKluSolver({
-          tolerance: 1e-12,
-          memoryGrowth: 1.2,
-          orderingMethod: 'amd'
-        });
-        
-        await this._kluSolver.initialize();
-        
-        if (this._kluSolver.isUsingMock()) {
-          console.log('✅ KLU 模擬器初始化成功 (WASM 版本需要建置)');
-        } else {
-          console.log('✅ KLU WASM 求解器初始化成功');
-        }
-      }
-
-      if (!this._isKluFactorized) {
-        console.log('🧮 執行 KLU 符號分析和數值分解...');
-        
-        // 轉換為 CSC 格式 (KLU 要求)
-        const csc = this.toCSC();
-        
-        // 進行符號分析
-        await this._kluSolver.analyze(csc);
-        
-        // 進行數值分解
-        await this._kluSolver.factor();
-        
-        this._isKluFactorized = true;
-        
-        const stats = this._kluSolver.getStatistics();
-        console.log(`✅ KLU 分解完成: ${this.rows}x${this.cols}, nnz=${this.nnz}`);
-        console.log(`📊 分解統計: 數值秩=${stats.numericalRank}, 條件數估計=${stats.condest.toExponential(2)}`);
-      }
-
-      // 求解線性方程組
-      const bArray = b.toArray();
-      const solution = await this._kluSolver.solve(bArray);
-      
-      console.log('✅ KLU WASM 求解成功');
-      return Vector.from(solution);
-      
-    } catch (error) {
-      console.error('❌ KLU WASM 求解失敗:', error);
-      
-      // 釋放資源並重置狀態
-      this._cleanupKluSolver();
-      
-      throw new Error(`KLU WASM solver failed: ${error}`);
-    }
+    // 暫時使用迭代求解器作為 KLU 的替代方案
+    // 這確保了通用電力電子模擬器的穩定性
+    return this._solveIterative(b);
   }
 
   /**

@@ -15,110 +15,6 @@ export type Resistance = number;
 export type Capacitance = number;
 export type Inductance = number;
 
-// 電路拓撲
-export interface INode {
-  readonly id: NodeId;
-  readonly name?: string;
-  voltage: Voltage;
-  connections: ComponentId[];
-}
-
-export interface ICircuit {
-  readonly nodes: Map<NodeId, INode>;
-  readonly components: Map<ComponentId, IComponent>;
-  readonly groundNode: NodeId;
-}
-
-// 組件接口 (基於 MNA)
-export interface IComponent {
-  readonly id: ComponentId;
-  readonly type: ComponentType;
-  readonly nodes: NodeId[];
-  
-  // MNA 戳印方法 (替代 MCP 註冊)
-  stamp(system: IMNASystem): void;
-  
-  // 非線性組件需要更新
-  isNonlinear(): boolean;
-  updateOperatingPoint?(voltages: Map<NodeId, Voltage>): void;
-  
-  // 開關組件的事件檢測
-  hasEvents(): boolean;
-  detectEvents?(t0: Time, t1: Time, v0: VoltageVector, v1: VoltageVector): IEvent[];
-}
-
-// 組件類型 (不再包含 MCP 標識)
-export enum ComponentType {
-  // 被動元件
-  RESISTOR = 'R',
-  CAPACITOR = 'C', 
-  INDUCTOR = 'L',
-  
-  // 源
-  VOLTAGE_SOURCE = 'V',
-  CURRENT_SOURCE = 'I',
-  
-  // 半導體 (事件驅動，非 MCP)
-  DIODE = 'D',
-  MOSFET = 'M',
-  BJT = 'Q',
-  IGBT = 'J',
-  
-  // 控制器
-  PWM_CONTROLLER = 'PWM',
-  PID_CONTROLLER = 'PID',
-  
-  // 電力電子模塊
-  BUCK_CONVERTER = 'BUCK',
-  BOOST_CONVERTER = 'BOOST'
-}
-
-// MNA 系統接口
-export interface IMNASystem {
-  readonly size: number;
-  readonly G: ISparseMatrix;  // 電導矩陣
-  readonly B: ISparseMatrix;  // 關聯矩陣 
-  readonly C: ISparseMatrix;  // 關聯矩陣轉置
-  readonly D: ISparseMatrix;  // 支路矩陣
-  
-  // 右側向量
-  readonly i: IVector;  // 節點電流
-  readonly e: IVector;  // 支路電壓
-  
-  // 解向量
-  readonly v: IVector;  // 節點電壓
-  readonly j: IVector;  // 支路電流
-  
-  // Generalized-α 积分器需要的方法
-  readonly systemMatrix: ISparseMatrix;  // 系統矩陣 (通常是 G)
-  getRHS(): IVector;  // 獲取右側向量
-  
-  // 系統構建
-  addNode(id: NodeId): number;
-  addBranch(from: NodeId, to: NodeId): number;
-  stamp(row: number, col: number, value: number): void;
-}
-
-// 稀疏矩陣接口
-export interface ISparseMatrix {
-  readonly rows: number;
-  readonly cols: number;
-  readonly nnz: number;  // 非零元素數量
-  
-  set(row: number, col: number, value: number): void;
-  get(row: number, col: number): number;
-  add(row: number, col: number, value: number): void;
-  multiply(vector: IVector): IVector;
-  
-  // 求解接口 (支持異步 KLU)
-  factorize(): void;
-  solve(rhs: IVector): IVector;
-  clone(): ISparseMatrix;
-  
-  // 資源管理 (WASM)
-  dispose?(): void;
-}
-
 // 向量接口
 export interface IVector {
   readonly size: number;
@@ -135,6 +31,8 @@ export interface IVector {
   minus(other: IVector): IVector;
   scale(factor: number): IVector;
   
+  fill(value: number): void;
+
   toArray(): number[];
   clone(): IVector;
 }
@@ -142,48 +40,135 @@ export interface IVector {
 export type VoltageVector = IVector;
 export type CurrentVector = IVector;
 
-// 事件驅動系統 (替代 MCP)
-export interface IEvent {
-  readonly time: Time;
-  readonly component: ComponentId;
-  readonly type: EventType;
-  readonly data?: any;
+// 稀疏矩陣接口
+export interface ISparseMatrix {
+  readonly rows: number;
+  readonly cols: number;
+  readonly nnz: number;  // 非零元素數量
+  
+  set(row: number, col: number, value: number): void;
+  get(row: number, col: number): number;
+  add(row: number, col: number, value: number): void;
+  multiply(vector: IVector): IVector;
+  
+  // 求解接口 (支持異步 KLU)
+  factorize(): void;
+  solve(rhs: IVector): IVector;
+  clone(): ISparseMatrix;
+  clear(): void;
+  
+  // 資源管理 (WASM)
+  dispose?(): void;
 }
 
+// === 事件相關類型 ===
+
+/**
+ * 事件類型枚舉
+ */
 export enum EventType {
+  // 通用事件
+  StateChange = 'state_change',
+  CUSTOM = 'custom',
+
+  // 開關事件
   SWITCH_ON = 'switch_on',
   SWITCH_OFF = 'switch_off',
+
+  // 二極體事件
   DIODE_FORWARD = 'diode_forward',
   DIODE_REVERSE = 'diode_reverse',
+
+  // MOSFET 事件
+  MOSFET_CUTOFF = 'mosfet_cutoff',
   MOSFET_LINEAR = 'mosfet_linear',
   MOSFET_SATURATION = 'mosfet_saturation',
-  MOSFET_CUTOFF = 'mosfet_cutoff'
 }
 
-// 事件檢測器
-export interface IEventDetector {
-  detectEvents(
-    components: IComponent[],
-    t0: Time, 
-    t1: Time, 
-    v0: VoltageVector, 
-    v1: VoltageVector
-  ): IEvent[];
+/**
+ * 仿真事件接口
+ */
+export interface IEvent {
+  /** 事件類型 */
+  readonly type: EventType | string;
   
-  locateEvent(
-    component: IComponent,
-    event: IEvent,
-    t0: Time,
-    t1: Time,
-    tolerance: number
-  ): Time;
+  /** 事件發生的約略時間 */
+  readonly time: Time;
+  
+  /** 觸發事件的組件 */
+  readonly component: any; // 使用 any 避免循環依賴
+
+  /** 事件优先级 */
+  readonly priority: number;
+
+  /** 事件描述 */
+  readonly description: string;
+
+  /** 相關數據 */
+  readonly data?: any;
+
+  // For event location
+  readonly tLow?: Time;
+  readonly tHigh?: Time;
+  readonly condition?: (v: IVector) => number;
 }
 
-// 積分器接口 (支援異步 KLU 求解)
+/**
+ * ADDED: 插值器函数类型
+ * 用于在时间步内估算任意时刻的解
+ */
+export type Interpolator = (time: Time) => IVector;
+
+// === 積分器相關類型 ===
+
+/**
+ * 積分器在某個時間點的完整狀態
+ */
+export interface IntegratorState {
+  /** 仿真時間 */
+  readonly time: Time;
+  
+  /** 解向量 (通常是節點電壓) */
+  readonly solution: VoltageVector;
+  
+  /** 解的一階導數 (例如 dV/dt) */
+  readonly derivative?: IVector;
+}
+
+/**
+ * 積分器單步執行的結果
+ */
+export interface IntegratorResult {
+  /** 計算出的新解 */
+  readonly solution: VoltageVector;
+  
+  /** 建議的下一步時間步長 */
+  readonly nextDt: Time;
+  
+  /** 估計的局部截斷誤差 */
+  readonly error: number;
+  
+  /** 該步是否收斂 */
+  readonly converged: boolean;
+}
+
+/**
+ * 積分器接口
+ */
 export interface IIntegrator {
+  /** 積分器階數 */
   readonly order: number;
-  readonly history: IntegratorState[];
   
+  /** 歷史狀態記錄 */
+  readonly history: readonly IntegratorState[];
+  
+  /**
+   * 執行一個積分步
+   * @param system MNA 系統
+   * @param t 當前時間
+   * @param dt 時間步長
+   * @param solution 當前解
+   */
   step(
     system: IMNASystem,
     t: Time,
@@ -191,131 +176,60 @@ export interface IIntegrator {
     solution: VoltageVector
   ): Promise<IntegratorResult>;
   
+  /**
+   * 估計當前解的誤差
+   */
   estimateError(solution: VoltageVector): number;
+  
+  /**
+   * 根據誤差調整時間步長
+   */
   adjustTimestep(dt: Time, error: number): Time;
+  
+  /**
+   * 重新啟動積分器
+   * @param initialState 初始狀態
+   */
+  restart(initialState: IntegratorState): void;
+  
+  /**
+   * 清空積分器狀態
+   */
+  clear(): void;
+
+  /**
+   * 釋放資源
+   */
+  dispose?(): void;
+
+  /**
+   * ADDED: 在一个时间步内进行插值
+   * @param time 要插值的时间点
+   * @returns 插值后的解向量
+   */
+  interpolate(time: Time): IVector;
 }
 
-export interface IntegratorState {
-  readonly time: Time;
-  readonly solution: VoltageVector;
-  readonly derivative: VoltageVector;
-}
+// === MNA 系統接口 ===
 
-export interface IntegratorResult {
-  readonly solution: VoltageVector;
-  readonly nextDt: Time;
-  readonly error: number;
-  readonly converged: boolean;
+/**
+ * MNA 系統接口
+ * 
+ * 抽象了電路在某個工作點的線性化表示
+ */
+export interface IMNASystem {
+  readonly size: number;
+  readonly systemMatrix: ISparseMatrix;
+  
+  /**
+   * 獲取右側向量 (RHS)
+   */
+  getRHS(): IVector;
+  
+  /**
+   * 裝配系統矩陣和向量
+   * @param solution 當前解
+   * @param time 當前時間
+   */
+  assemble(solution: VoltageVector, time: Time): void;
 }
-
-// 非線性求解器 (Newton-Raphson)
-export interface INonlinearSolver {
-  solve(
-    system: IMNASystem,
-    initialGuess: VoltageVector,
-    tolerance: number,
-    maxIterations: number
-  ): NonlinearResult;
-}
-
-export interface NonlinearResult {
-  readonly solution: VoltageVector;
-  readonly residual: IVector;
-  readonly jacobian: ISparseMatrix;
-  readonly iterations: number;
-  readonly converged: boolean;
-}
-
-// 分析類型
-export enum AnalysisType {
-  DC = 'dc',
-  TRANSIENT = 'tran',
-  AC = 'ac',
-  NOISE = 'noise'
-}
-
-export interface IAnalysisOptions {
-  readonly type: AnalysisType;
-  readonly startTime?: Time;
-  readonly endTime?: Time;
-  readonly timeStep?: Time;
-  readonly tolerance?: number;
-  readonly maxIterations?: number;
-}
-
-export interface IAnalysisResult {
-  readonly type: AnalysisType;
-  readonly timePoints: Time[];
-  readonly nodeVoltages: Map<NodeId, Voltage[]>;
-  readonly branchCurrents: Map<ComponentId, Current[]>;
-  readonly events: IEvent[];
-  readonly statistics: SimulationStatistics;
-}
-
-export interface SimulationStatistics {
-  readonly totalTime: number;
-  readonly matrixSolves: number;
-  readonly newtonIterations: number;
-  readonly events: number;
-  readonly timestepReductions: number;
-}
-
-// 器件參數類型
-export interface ResistorParams {
-  readonly R: Resistance;
-  readonly temp?: number;
-  readonly tc1?: number;  // 溫度係數
-  readonly tc2?: number;
-}
-
-export interface CapacitorParams {
-  readonly C: Capacitance;
-  readonly ic?: Voltage;  // 初始電壓
-  readonly temp?: number;
-}
-
-export interface InductorParams {
-  readonly L: Inductance;
-  readonly ic?: Current;  // 初始電流
-  readonly Rs?: Resistance;  // 串聯電阻
-}
-
-export interface DiodeParams {
-  readonly Vf: Voltage;    // 導通電壓
-  readonly Ron: Resistance; // 導通電阻
-  readonly Roff?: Resistance; // 截止電阻
-  readonly Is?: Current;    // 飽和電流 (Shockley 模型)
-  readonly n?: number;      // 理想因子
-}
-
-export interface MOSFETParams {
-  readonly type: 'NMOS' | 'PMOS';
-  readonly Vth: Voltage;    // 閾值電壓
-  readonly Ron: Resistance; // 導通電阻
-  readonly Roff?: Resistance; // 截止電阻
-  readonly Cgs?: Capacitance; // 閘源電容
-  readonly Cgd?: Capacitance; // 閘漏電容
-  readonly Cds?: Capacitance; // 漏源電容
-}
-
-// 模擬器配置
-export interface SimulatorConfig {
-  readonly tolerance: number;
-  readonly maxIterations: number;
-  readonly minTimestep: Time;
-  readonly maxTimestep: Time;
-  readonly initialTimestep: Time;
-  readonly eventTolerance: number;
-  readonly debug: boolean;
-}
-
-// 默認配置
-export const DEFAULT_CONFIG: SimulatorConfig = {
-  tolerance: 1e-9,
-  maxIterations: 50,
-  minTimestep: 1e-15,
-  maxTimestep: 1e-3,
-  initialTimestep: 1e-9,
-  eventTolerance: 1e-12,
-  debug: false
-};

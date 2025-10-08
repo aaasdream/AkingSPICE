@@ -5,9 +5,7 @@
  * 支持 Backward Euler 和 Trapezoidal 积分方法
  */
 
-import { ComponentInterface, ValidationResult, ComponentInfo } from '../../core/interfaces/component';
-import { SparseMatrix } from '../../math/sparse/matrix';
-import { Vector } from '../../math/sparse/vector';
+import { ComponentInterface, ValidationResult, ComponentInfo, AssemblyContext } from '../../core/interfaces/component';
 
 /**
  * 🔋 线性电容组件
@@ -67,6 +65,54 @@ export class Capacitor implements ComponentInterface {
   }
   
   /**
+   * ✅ 统一组装方法 (NEW!)
+   */
+  assemble(context: AssemblyContext): void {
+    const n1 = context.nodeMap.get(this.nodes[0]);
+    const n2 = context.nodeMap.get(this.nodes[1]);
+    
+    // 等效电导 G_eq = C / Δt
+    const geq = this._capacitance / this._timeStep;
+    
+    // 等效电流源 I_eq = G_eq * V_prev
+    const ieq = geq * this._previousVoltage;
+    
+    // 装配电导矩阵 (类似电阻)
+    if (n1 !== undefined && n1 >= 0) {
+      context.matrix.add(n1, n1, geq);
+      
+      if (n2 !== undefined && n2 >= 0) {
+        context.matrix.add(n1, n2, -geq);
+      }
+    }
+    
+    if (n2 !== undefined && n2 >= 0) {
+      context.matrix.add(n2, n2, geq);
+      
+      if (n1 !== undefined && n1 >= 0) {
+        context.matrix.add(n2, n1, -geq);
+      }
+    }
+    
+    // 装配等效电流源到右侧向量
+    if (n1 !== undefined && n1 >= 0) {
+      context.rhs.add(n1, ieq);
+    }
+    if (n2 !== undefined && n2 >= 0) {
+      context.rhs.add(n2, -ieq);
+    }
+  }
+
+  /**
+   * ⚡️ 检查此组件是否可能产生事件
+   * 
+   * 对于线性电容，它本身不产生事件。
+   */
+  hasEvents(): boolean {
+    return false;
+  }
+
+  /**
    * ⏱️ 设置时间步长
    */
   setTimeStep(dt: number): void {
@@ -94,58 +140,7 @@ export class Capacitor implements ComponentInterface {
     this._previousCurrent = current;
   }
   
-  /**
-   * 🔥 MNA 矩阵装配 (Backward Euler)
-   * 
-   * 伴随模型:
-   * G_eq = C / Δt  (等效电导)
-   * I_eq = G_eq * V_prev  (等效电流源)
-   * 
-   * 矩阵装配:
-   * [G_eq  -G_eq] [V1]   [I_eq ]
-   * [-G_eq  G_eq] [V2] = [-I_eq]
-   */
-  stamp(
-    matrix: SparseMatrix, 
-    rhs: Vector, 
-    nodeMap: Map<string, number>,
-    _currentTime?: number
-  ): void {
-    const n1 = nodeMap.get(this.nodes[0]);
-    const n2 = nodeMap.get(this.nodes[1]);
-    
-    // 等效电导 G_eq = C / Δt
-    const geq = this._capacitance / this._timeStep;
-    
-    // 等效电流源 I_eq = G_eq * V_prev
-    const ieq = geq * this._previousVoltage;
-    
-    // 装配电导矩阵 (类似电阻)
-    if (n1 !== undefined && n1 >= 0) {
-      matrix.add(n1, n1, geq);
-      
-      if (n2 !== undefined && n2 >= 0) {
-        matrix.add(n1, n2, -geq);
-      }
-    }
-    
-    if (n2 !== undefined && n2 >= 0) {
-      matrix.add(n2, n2, geq);
-      
-      if (n1 !== undefined && n1 >= 0) {
-        matrix.add(n2, n1, -geq);
-      }
-    }
-    
-    // 装配等效电流源到右侧向量
-    if (n1 !== undefined && n1 >= 0) {
-      rhs.add(n1, ieq);
-    }
-    if (n2 !== undefined && n2 >= 0) {
-      rhs.add(n2, -ieq);
-    }
-  }
-  
+
   /**
    * 🔍 组件验证
    */
@@ -232,47 +227,7 @@ export class Capacitor implements ComponentInterface {
     return 0.5 * this._capacitance * voltage * voltage;
   }
   
-  /**
-   * 🔄 梯形积分方法装配 (可选的高精度方法)
-   */
-  stampTrapezoidal(
-    matrix: SparseMatrix, 
-    rhs: Vector, 
-    nodeMap: Map<string, number>
-  ): void {
-    const n1 = nodeMap.get(this.nodes[0]);
-    const n2 = nodeMap.get(this.nodes[1]);
-    
-    // 梯形公式: G_eq = 2C / Δt
-    const geq = 2 * this._capacitance / this._timeStep;
-    
-    // 等效电流源包含历史项
-    const ieq = geq * this._previousVoltage + this._previousCurrent;
-    
-    // 装配矩阵
-    if (n1 !== undefined && n1 >= 0) {
-      matrix.add(n1, n1, geq);
-      if (n2 !== undefined && n2 >= 0) {
-        matrix.add(n1, n2, -geq);
-      }
-    }
-    
-    if (n2 !== undefined && n2 >= 0) {
-      matrix.add(n2, n2, geq);
-      if (n1 !== undefined && n1 >= 0) {
-        matrix.add(n2, n1, -geq);
-      }
-    }
-    
-    // 装配右侧向量
-    if (n1 !== undefined && n1 >= 0) {
-      rhs.add(n1, ieq);
-    }
-    if (n2 !== undefined && n2 >= 0) {
-      rhs.add(n2, -ieq);
-    }
-  }
-  
+
   /**
    * 🔍 调试信息
    */

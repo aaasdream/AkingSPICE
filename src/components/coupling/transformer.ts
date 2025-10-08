@@ -5,9 +5,7 @@
  * Vp/Vs = n, n*Ip + Is = 0
  */
 
-import { ComponentInterface, ValidationResult, ComponentInfo } from '../../core/interfaces/component';
-import { SparseMatrix } from '../../math/sparse/matrix';
-import { Vector } from '../../math/sparse/vector';
+import { ComponentInterface, ValidationResult, ComponentInfo, AssemblyContext } from '../../core/interfaces/component';
 import { ComponentValidation, MNAStampingHelpers } from '../../math/numerical/safety';
 
 export class IdealTransformer implements ComponentInterface {
@@ -56,24 +54,20 @@ export class IdealTransformer implements ComponentInterface {
   }
 
   /**
-   * 🔥 MNA 矩阵装配
-   *
-   * 需要扩展 MNA 矩阵，增加两个电流变量 i_p 和 i_s
-   * 对应增加两个方程:
-   * 1. 电压关系: Vp - n*Vs = 0  => (Vp1 - Vp2) - n*(Vs1 - Vs2) = 0
-   * 2. 电流关系: n*ip + is = 0
+   * 👁️ 检查此组件是否会产生事件
    */
-  stamp(
-    matrix: SparseMatrix,
-    _rhs: Vector, // 理想变压器不需要右侧向量贡献
-    nodeMap: Map<string, number>
-  ): void {
-    // 理想变压器不需要右侧向量贡献
-    
-    const np1 = nodeMap.get(this.nodes[0]);
-    const np2 = nodeMap.get(this.nodes[1]);
-    const ns1 = nodeMap.get(this.nodes[2]);
-    const ns2 = nodeMap.get(this.nodes[3]);
+  hasEvents(): boolean {
+    return false;
+  }
+
+  /**
+   * ✅ 统一组装方法 (NEW!)
+   */
+  assemble(context: AssemblyContext): void {
+    const np1 = context.nodeMap.get(this.nodes[0]);
+    const np2 = context.nodeMap.get(this.nodes[1]);
+    const ns1 = context.nodeMap.get(this.nodes[2]);
+    const ns2 = context.nodeMap.get(this.nodes[3]);
     
     if (this._primaryCurrentIndex === undefined || this._secondaryCurrentIndex === undefined) {
       throw new Error(`变压器 ${this.name} 的电流支路索引未设置`);
@@ -83,24 +77,24 @@ export class IdealTransformer implements ComponentInterface {
     const is = this._secondaryCurrentIndex;
     const n = this._turnsRatio;
 
-    // KCL 方程贡献 - 使用安全的矩阵操作
-    MNAStampingHelpers.safeMatrixAdd(matrix, np1, ip, 1, this.name);
-    MNAStampingHelpers.safeMatrixAdd(matrix, np2, ip, -1, this.name);
-    MNAStampingHelpers.safeMatrixAdd(matrix, ns1, is, 1, this.name);
-    MNAStampingHelpers.safeMatrixAdd(matrix, ns2, is, -1, this.name);
+    // KCL 方程贡献
+    if (np1 !== undefined) MNAStampingHelpers.safeMatrixAdd(context.matrix, np1, ip, 1, this.name);
+    if (np2 !== undefined) MNAStampingHelpers.safeMatrixAdd(context.matrix, np2, ip, -1, this.name);
+    if (ns1 !== undefined) MNAStampingHelpers.safeMatrixAdd(context.matrix, ns1, is, 1, this.name);
+    if (ns2 !== undefined) MNAStampingHelpers.safeMatrixAdd(context.matrix, ns2, is, -1, this.name);
 
     // 支路方程 (Branch Equations)
     // 方程1: 电压关系 Vp - n*Vs = 0
-    // (Vp1-Vp2) - n*(Vs1-Vs2) = 0
-    MNAStampingHelpers.safeMatrixAdd(matrix, ip, np1, 1, this.name);
-    MNAStampingHelpers.safeMatrixAdd(matrix, ip, np2, -1, this.name);
-    MNAStampingHelpers.safeMatrixAdd(matrix, ip, ns1, -n, this.name);
-    MNAStampingHelpers.safeMatrixAdd(matrix, ip, ns2, n, this.name);
+    if (np1 !== undefined) MNAStampingHelpers.safeMatrixAdd(context.matrix, ip, np1, 1, this.name);
+    if (np2 !== undefined) MNAStampingHelpers.safeMatrixAdd(context.matrix, ip, np2, -1, this.name);
+    if (ns1 !== undefined) MNAStampingHelpers.safeMatrixAdd(context.matrix, ip, ns1, -n, this.name);
+    if (ns2 !== undefined) MNAStampingHelpers.safeMatrixAdd(context.matrix, ip, ns2, n, this.name);
     
     // 方程2: 电流关系 n*ip + is = 0
-    MNAStampingHelpers.safeMatrixAdd(matrix, is, ip, n, this.name);
-    MNAStampingHelpers.safeMatrixAdd(matrix, is, is, 1, this.name);
+    MNAStampingHelpers.safeMatrixAdd(context.matrix, is, ip, n, this.name);
+    MNAStampingHelpers.safeMatrixAdd(context.matrix, is, is, 1, this.name);
   }
+
 
   getExtraVariableCount(): number {
     return 2; // 需要两个额外的电流变量

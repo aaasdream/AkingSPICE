@@ -7,15 +7,45 @@
 
 import { SparseMatrix } from '../../math/sparse/matrix';
 import { Vector } from '../../math/sparse/vector';
+import { IComponent, IEvent, IVector } from '../../types/index';
 
 // 类型别名，简化接口
 type Matrix = SparseMatrix;
 
 /**
- * 🎯 核心组件接口
+ * 🎯 统一组装上下文接口
  * 
- * 所有电路组件（基础、智能）都必须实现此接口
- * 这是架构的核心抽象
+ * 为所有组件提供统一的 MNA 组装环境
+ * 解决 stamp() vs load() 的接口分裂问题
+ */
+export interface AssemblyContext {
+  /** MNA 系统矩阵 */
+  readonly matrix: SparseMatrix;
+  
+  /** 右侧向量 */
+  readonly rhs: Vector;
+  
+  /** 节点名称到矩阵索引的映射 */
+  readonly nodeMap: Map<string, number>;
+  
+  /** 当前仿真时间 */
+  readonly currentTime: number;
+  
+  /** 当前解向量 (供智能设备使用) */
+  readonly solutionVector?: Vector;
+  
+  /** Gmin 参数 (供 Gmin Stepping 使用) */
+  readonly gmin?: number;
+  
+  /** 额外变数索引管理器的引用 (供需要额外变数的组件使用) */
+  readonly getExtraVariableIndex?: (componentName: string, variableType: string) => number | undefined;
+}
+
+/**
+ * 🎯 核心组件接口 (重构版本)
+ * 
+ * 所有电路组件必须实现此接口
+ * 统一了基础组件和智能设备的交互方式
  */
 export interface ComponentInterface {
   /** 组件唯一标识符 */
@@ -25,25 +55,36 @@ export interface ComponentInterface {
   readonly type: string;
   
   /** 组件连接的节点列表 */
-  readonly nodes: readonly string[];
+  readonly nodes: readonly (string | number)[];
   
   /**
-   * 🔥 MNA 矩阵装配方法
+   * ✅ 统一组装方法 (NEW!)
    * 
-   * 这是组件与仿真引擎交互的核心方法
-   * 每个组件负责将自己的贡献装配到系统矩阵中
+   * 替代原本的 stamp() 和 load() 方法
+   * 所有组件使用相同的方式与仿真引擎交互
    * 
-   * @param matrix - MNA 系统矩阵 (G矩阵)
-   * @param rhs - 右侧向量 (激励向量)
-   * @param nodeMap - 节点名称到矩阵索引的映射
-   * @param currentTime - 当前仿真时间 (用于时变组件)
+   * @param context - 组装上下文，包含所有必要的信息
    */
-  stamp(
-    matrix: Matrix, 
-    rhs: Vector, 
-    nodeMap: Map<string, number>,
-    currentTime?: number
-  ): void;
+  assemble(context: AssemblyContext): void;
+  
+  /**
+   * ⚡️ 检查此组件是否可能产生事件
+   */
+  hasEvents?(): boolean;
+
+  /**
+   * 🆕 返回一个或多个条件函数，其零点对应一个事件。
+   * @returns { type: EventType, condition: (v: IVector) => number }[]
+   */
+  getEventFunctions?(): { type: string, condition: (v: IVector) => number }[];
+
+  /**
+   * 📢 处理一个已确认发生的事件
+   * @param event 发生的事件
+   * @param context 组装上下文
+   */
+  handleEvent?(event: IEvent, context: AssemblyContext): void;
+
   
   /**
    * 🔍 组件参数验证
@@ -119,25 +160,6 @@ export interface SourceInterface extends ComponentInterface {
    * @param waveform - 波形描述
    */
   setWaveform(waveform: WaveformDescriptor): void;
-}
-
-/**
- * ⚡️ 可缩放激励源接口
- * 
- * 用于源步进 (Source Stepping) 等 Homotopy 方法
- * 允许仿真引擎动态调整激励源强度
- */
-export interface ScalableSource {
-  /**
-   * ⚖️ 缩放源值
-   * @param factor - 缩放因子 (0 到 1)
-   */
-  scaleSource(factor: number): void;
-
-  /**
-   * ⏪ 恢复原始源值
-   */
-  restoreSource(): void;
 }
 
 /**
