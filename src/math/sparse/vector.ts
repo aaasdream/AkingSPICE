@@ -133,6 +133,39 @@ export class Vector implements IVector {
   }
 
   /**
+   * In-place vector addition: this += other
+   */
+  addInPlace(other: IVector): void {
+    if (other.size !== this.size) {
+      throw new Error(`向量維度不匹配: ${this.size} vs ${other.size}`);
+    }
+    for (let i = 0; i < this.size; i++) {
+      this._data[i]! += other.get(i);
+    }
+  }
+
+  /**
+   * In-place vector subtraction: this -= other
+   */
+  subtractInPlace(other: IVector): void {
+    if (other.size !== this.size) {
+      throw new Error(`向量維度不匹配: ${this.size} vs ${other.size}`);
+    }
+    for (let i = 0; i < this.size; i++) {
+      this._data[i]! -= other.get(i);
+    }
+  }
+
+  /**
+   * In-place scalar multiplication: this *= scalar
+   */
+  scaleInPlace(scalar: number): void {
+    for (let i = 0; i < this.size; i++) {
+      this._data[i]! *= scalar;
+    }
+  }
+
+  /**
    * 零向量檢測
    */
   isZero(tolerance = 1e-12): boolean {

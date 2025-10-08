@@ -7,7 +7,7 @@
 
 import { SparseMatrix } from '../../math/sparse/matrix';
 import { Vector } from '../../math/sparse/vector';
-import { IComponent, IEvent, IVector } from '../../types/index';
+import { IEvent, IVector } from '../../types/index';
 
 // 类型别名，简化接口
 type Matrix = SparseMatrix;
@@ -37,6 +37,12 @@ export interface AssemblyContext {
   /** Gmin 参数 (供 Gmin Stepping 使用) */
   readonly gmin?: number;
   
+  /** 当前时间步长 */
+  readonly dt: number;
+  
+  /** 上一个时间点的解 */
+  readonly previousSolutionVector?: Vector;
+
   /** 额外变数索引管理器的引用 (供需要额外变数的组件使用) */
   readonly getExtraVariableIndex?: (componentName: string, variableType: string) => number | undefined;
 }
@@ -102,6 +108,16 @@ export interface ComponentInterface {
    * 用于调试和可视化
    */
   getInfo(): ComponentInfo;
+}
+
+/**
+ * 🆕 可缩放激励源接口
+ * 
+ * 用于源步进 DC 分析
+ */
+export interface ScalableSource {
+  scaleSource(factor: number): void;
+  restoreSource(): void;
 }
 
 /**

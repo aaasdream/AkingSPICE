@@ -22,11 +22,6 @@ import { ComponentInterface, ValidationResult, ComponentInfo, AssemblyContext } 
 export class Inductor implements ComponentInterface {
   readonly type = 'L';
   
-  // 历史状态
-  private _previousCurrent = 0;
-  private _previousVoltage = 0;
-  private _timeStep = 1e-6;
-  
   // 电流支路索引 (用于扩展 MNA)
   private _currentIndex?: number;
   
@@ -47,10 +42,6 @@ export class Inductor implements ComponentInterface {
     if (nodes[0] === nodes[1]) {
       throw new Error(`电感不能连接到同一节点: ${nodes[0]}`);
     }
-    
-    // 初始化历史状态为零（电感初始条件）
-    this._previousCurrent = 0.0;
-    this._previousVoltage = 0.0;
   }
   
   /**
@@ -61,48 +52,76 @@ export class Inductor implements ComponentInterface {
   }
   
   /**
-   * 📊 获取历史电流
-   */
-  get previousCurrent(): number {
-    return this._previousCurrent;
-  }
-  
-  /**
    * ✅ 统一组装方法 (NEW!)
    */
   assemble(context: AssemblyContext): void {
-    const n1 = context.nodeMap.get(this.nodes[0]);
-    const n2 = context.nodeMap.get(this.nodes[1]);
+    const { matrix, nodeMap, dt, previousSolutionVector, getExtraVariableIndex } = context;
+    const n1 = nodeMap.get(this.nodes[0]);
+    const n2 = nodeMap.get(this.nodes[1]);
     
+    // At the beginning of the simulation, get the index of the extra variable representing the current of the inductor
     if (this._currentIndex === undefined) {
-      throw new Error(`电感 ${this.name} 的电流支路索引未设置`);
+      if (!getExtraVariableIndex) {
+        throw new Error(`电感 ${this.name} 需要 getExtraVariableIndex 但未在 context 中提供`);
+      }
+      const index = getExtraVariableIndex(this.name, 'i');
+      if (index === undefined) {
+        throw new Error(`无法为电感 ${this.name} 获取电流支路索引`);
+      }
+      this._currentIndex = index;
     }
     
-    const iL = this._currentIndex;
-    const Req = this._inductance / this._timeStep;
-    const Veq = Req * this._previousCurrent;
+    if (dt <= 0 || !previousSolutionVector) {
+      // DC analysis: inductor is a short circuit.
+      // We add a zero-volt voltage source constraint.
+      // V1 - V2 = 0
+      // To improve numerical stability, instead of a hard short (which can lead to
+      // a singular matrix if it forms a loop with other voltage sources), we model
+      // it as a very small resistor. This is a standard SPICE technique.
+      const R_short = 1e-9; // 1 nano-ohm, effectively a short but non-zero.
+      if (n1 !== undefined && n1 >= 0) {
+        matrix.add(this._currentIndex, n1, 1);
+        matrix.add(n1, this._currentIndex, 1);
+      }
+      if (n2 !== undefined && n2 >= 0) {
+        matrix.add(this._currentIndex, n2, -1);
+        matrix.add(n2, this._currentIndex, -1);
+      }
+      // Add the small resistance to the branch equation
+      matrix.add(this._currentIndex, this._currentIndex, -R_short);
+      // The equation is V1 - V2 - R_short * iL = 0, so the RHS is 0.
+      return;
+    }
+    
+    const iL_idx = this._currentIndex;
+    
+    // 从上一步的解中获取历史电流
+    const previousCurrent = previousSolutionVector.get(iL_idx);
+
+    const Req = this._inductance / dt;
+    const Veq = Req * previousCurrent;
     
     // B 矩阵: 节点到支路的关联矩阵
     if (n1 !== undefined && n1 >= 0) {
-      context.matrix.add(n1, iL, 1);
+      context.matrix.add(n1, iL_idx, 1);
     }
     if (n2 !== undefined && n2 >= 0) {
-      context.matrix.add(n2, iL, -1);
+      context.matrix.add(n2, iL_idx, -1);
     }
     
     // C 矩阵: 支路到节点的关联矩阵 (B^T)
     if (n1 !== undefined && n1 >= 0) {
-      context.matrix.add(iL, n1, 1);
+      context.matrix.add(iL_idx, n1, 1);
     }
     if (n2 !== undefined && n2 >= 0) {
-      context.matrix.add(iL, n2, -1);
+      context.matrix.add(iL_idx, n2, -1);
     }
     
     // D 矩阵: 支路阻抗
-    context.matrix.add(iL, iL, -Req);
+    context.matrix.add(iL_idx, iL_idx, -Req);
     
     // 等效电压源
-    context.rhs.add(iL, Veq);
+    context.rhs.add(iL_idx, Veq);
   }
 
   /**
@@ -131,41 +150,6 @@ export class Inductor implements ComponentInterface {
     return this._currentIndex !== undefined;
   }
   
-  /**
-   * ⏱️ 设置时间步长
-   */
-  setTimeStep(dt: number): void {
-    if (dt <= 0) {
-      throw new Error(`时间步长必须为正数: ${dt}`);
-    }
-    if (!isFinite(dt) || isNaN(dt)) {
-      throw new Error(`时间步长必须为有限数值: ${dt}`);
-    }
-    if (dt > 1e-3) {
-      console.warn(`电感 ${this.name} 的时间步长过大，可能导致数值不稳定: ${dt}s，建议小于1ms`);
-    }
-    this._timeStep = dt;
-  }
-  
-  /**
-   * 📈 更新历史状态
-   */
-  updateHistory(current: number, voltage: number): void {
-    // 检查数值有效性
-    if (!isFinite(current) || isNaN(current)) {
-      console.warn(`电感 ${this.name} 的电流值无效: ${current}，使用前一值`);
-      current = this._previousCurrent;
-    }
-    if (!isFinite(voltage) || isNaN(voltage)) {
-      console.warn(`电感 ${this.name} 的电压值无效: ${voltage}，使用前一值`);
-      voltage = this._previousVoltage;
-    }
-    
-    this._previousCurrent = current;
-    this._previousVoltage = voltage;
-  }
-  
-
   /**
    * 🔍 组件验证
    */
@@ -197,11 +181,6 @@ export class Inductor implements ComponentInterface {
       errors.push(`电感不能连接到同一节点: ${this.nodes[0]}`);
     }
     
-    // 检查时间步长
-    if (this._timeStep <= 0) {
-      errors.push(`时间步长必须为正数: ${this._timeStep}`);
-    }
-    
     return {
       isValid: errors.length === 0,
       errors,
@@ -219,19 +198,11 @@ export class Inductor implements ComponentInterface {
       nodes: [...this.nodes],
       parameters: {
         inductance: this._inductance,
-        timeStep: this._timeStep,
-        previousCurrent: this._previousCurrent,
-        previousVoltage: this._previousVoltage,
         currentIndex: this._currentIndex,
-        equivalentResistance: this._inductance / this._timeStep
       },
       units: {
         inductance: 'H',
-        timeStep: 's',
-        previousCurrent: 'A',
-        previousVoltage: 'V',
         currentIndex: '#',
-        equivalentResistance: 'Ω'
       }
     };
   }
@@ -240,9 +211,12 @@ export class Inductor implements ComponentInterface {
    * ⚡ 计算瞬时电压
    * 
    * V = L * dI/dt ≈ L * (I - I_prev) / Δt
+   * NOTE: This method is for post-simulation analysis and is not used by the solver.
+   * It requires external provision of previous current and dt.
    */
-  calculateVoltage(currentCurrent: number): number {
-    return this._inductance * (currentCurrent - this._previousCurrent) / this._timeStep;
+  calculateVoltage(currentCurrent: number, previousCurrent: number, dt: number): number {
+    if (dt <= 0) return 0;
+    return this._inductance * (currentCurrent - previousCurrent) / dt;
   }
   
   /**

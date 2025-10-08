@@ -16,10 +16,10 @@ import type {
   IEvent,
   Time,
   VoltageVector,
-  IVector
+  IVector,
 } from '../../types/index';
 import { EventType } from '../../types/index';
-import { ComponentInterface } from '../interfaces/component';
+import type { ComponentInterface } from '../interfaces/component';
 
 /**
  * 🆕 新增類型：電壓插值函數
@@ -179,91 +179,6 @@ export class EventDetector {
         return 80;
       default:
         return 50;
-    }
-  }
-}
-
-/**
- * 具體的事件檢測函數
- */
-export class EventDetectionFunctions {
-  /**
-   * 二極體事件檢測：檢測 Vd 的零交叉
-   */
-  static detectDiodeEvents(
-    anodeVoltage0: number,
-    cathodeVoltage0: number,
-    anodeVoltage1: number, 
-    cathodeVoltage1: number,
-    Vf: number = 0.7
-  ): { hasEvent: boolean; eventType?: EventType } {
-    const Vd0 = anodeVoltage0 - cathodeVoltage0;
-    const Vd1 = anodeVoltage1 - cathodeVoltage1;
-    
-    const condition0 = Vd0 - Vf;
-    const condition1 = Vd1 - Vf;
-
-    // 檢測零交叉
-    if (Math.sign(condition0) !== Math.sign(condition1)) {
-      const eventType = condition1 > 0 
-        ? EventType.DIODE_FORWARD 
-        : EventType.DIODE_REVERSE;
-      
-      return { hasEvent: true, eventType };
-    }
-
-    return { hasEvent: false };
-  }
-
-  /**
-   * MOSFET 事件檢測：檢測工作區域轉換
-   */
-  static detectMOSFETEvents(
-    Vgs0: number,
-    Vds0: number,
-    Vgs1: number,
-    Vds1: number,
-    Vth: number = 1.0
-  ): { hasEvent: boolean; eventType?: EventType } {
-    const mode0 = this._getMOSFETMode(Vgs0, Vds0, Vth);
-    const mode1 = this._getMOSFETMode(Vgs1, Vds1, Vth);
-
-    if (mode0 !== mode1) {
-      return { hasEvent: true, eventType: mode1 };
-    }
-
-    return { hasEvent: false };
-  }
-
-  /**
-   * 理想開關事件檢測：檢測控制信號變化
-   */
-  static detectSwitchEvents(
-    control0: number,
-    control1: number,
-    threshold: number = 0.5
-  ): { hasEvent: boolean; eventType?: EventType } {
-    const state0 = control0 > threshold;
-    const state1 = control1 > threshold;
-
-    if (state0 !== state1) {
-      const eventType = state1 
-        ? EventType.SWITCH_ON 
-        : EventType.SWITCH_OFF;
-      
-      return { hasEvent: true, eventType };
-    }
-
-    return { hasEvent: false };
-  }
-
-  private static _getMOSFETMode(Vgs: number, Vds: number, Vth: number): EventType {
-    if (Vgs < Vth) {
-      return EventType.MOSFET_CUTOFF;
-    } else if (Vds < Vgs - Vth) {
-      return EventType.MOSFET_LINEAR;
-    } else {
-      return EventType.MOSFET_SATURATION;
     }
   }
 }

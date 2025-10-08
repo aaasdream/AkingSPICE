@@ -83,10 +83,16 @@ export class VoltageSource implements ComponentInterface, SourceInterface, Scala
    * 📈 获取当前激励值
    */
   getValue(time: number): number {
+    // During DC analysis (time = 0), always use the scaled DC value,
+    // regardless of the waveform type. This is crucial for source stepping.
+    if (time === 0) {
+      return this._dcValue;
+    }
+
     switch (this._waveform.type) {
       case 'DC':
-        // 将缩放因子应用于直流值
-        return (this._waveform.parameters['value'] || this._dcValue) * this._dcScaleFactor;
+        // For transient analysis, use the original unscaled value.
+        return this._originalValue;
         
       case 'SIN':
         {
@@ -109,9 +115,9 @@ export class VoltageSource implements ComponentInterface, SourceInterface, Scala
       case 'PULSE':
         {
           const params = this._waveform.parameters;
-          // 对脉冲波形也应用缩放
-          const v1 = (params['v1'] || 0) * this._dcScaleFactor;
-          const v2 = (params['v2'] || 1) * this._dcScaleFactor;
+          // For transient, use original unscaled values
+          const v1 = (params['v1'] || 0);
+          const v2 = (params['v2'] || 1);
           const td = params['delay'] || 0;
           const tr = params['rise_time'] || 1e-9;
           const tf = params['fall_time'] || 1e-9;

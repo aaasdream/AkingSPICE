@@ -24,16 +24,14 @@
  */
 
 import type { 
-  VoltageVector, 
-  CurrentVector
+  VoltageVector,
+  IVector
 } from '../../types/index';
-import { Vector } from '../../math/sparse/vector';
+import { 
+  AssemblyContext,
+} from '../interfaces/component';
 import { 
   IntelligentDeviceModelBase,
-  LoadResult,
-  MatrixStamp,
-  StampEntry,
-  StampType,
   DeviceState,
   ConvergenceInfo,
   PredictionHint,
@@ -43,149 +41,115 @@ import {
 } from './intelligent_device_model';
 
 /**
- * 二极管工作状态枚举
+ * Diode operating state enumeration
  */
 export enum DiodeState {
-  FORWARD_BIAS = 'forward_bias',     // 正向偏置
-  REVERSE_BIAS = 'reverse_bias',     // 反向偏置  
-  BREAKDOWN = 'breakdown',           // 击穿状态
-  TRANSITION = 'transition'          // 过渡状态
+  FORWARD_BIAS = 'forward_bias',     // Forward bias
+  REVERSE_BIAS = 'reverse_bias',     // Reverse bias
+  BREAKDOWN = 'breakdown',           // Breakdown state
+  TRANSITION = 'transition'          // Transition state
 }
 
 /**
- * 🚀 智能二极管模型实现
+ * 🚀 Intelligent Diode Model Implementation
  * 
- * 提供物理准确、数值稳定的二极管建模
- * 专为高频整流和开关应用优化
+ * Provides physically accurate and numerically stable diode modeling
+ * Optimized for high-frequency rectification and switching applications
  */
 export class IntelligentDiode extends IntelligentDeviceModelBase {
-  private readonly _anodeNode: number;
-  private readonly _cathodeNode: number;
   private readonly _diodeParams: DiodeParameters;
   
-  // 物理常数
-  private static readonly VT = 0.026; // 热电压 (26mV @ 300K)
-  private static readonly KB = 1.381e-23; // 玻尔兹曼常数
+  // Physical constants
+  private static readonly VT = 0.026; // Thermal voltage (26mV @ 300K)
   
-  // 数值常数  
-  private static readonly MIN_CONDUCTANCE = 1e-12; // 最小电导
-  private static readonly MAX_EXPONENTIAL_ARG = 50; // 最大指数参数 (避免溢出)
-  private static readonly FORWARD_VOLTAGE_LIMIT = 2.0; // 正向电压限制 (V)
-  private static readonly CONVERGENCE_VOLTAGE_TOL = 1e-9; // 电压收敛容差 (nV)
+  // Numerical constants
+  private static readonly MIN_CONDUCTANCE = 1e-12; // Minimum conductance
+  private static readonly MAX_EXPONENTIAL_ARG = 50; // Maximum exponential argument (prevents overflow)
+  private static readonly FORWARD_VOLTAGE_LIMIT = 2.0; // Forward voltage limit (V)
+  private static readonly CONVERGENCE_VOLTAGE_TOL = 1e-9; // Voltage convergence tolerance (nV)
   
-  private _gminConductance: number = 0;
-
   constructor(
     deviceId: string,
-    nodes: [number, number], // [Anode, Cathode]  
+    nodes: [string, string], // [Anode, Cathode]
     parameters: DiodeParameters
   ) {
     super(deviceId, 'DIODE', nodes, parameters as any);
-    
-    [this._anodeNode, this._cathodeNode] = nodes;
     this._diodeParams = parameters;
-    
-    // 初始化二极管状态
     this._initializeDiodeState();
   }
 
   /**
-   * 🔥 二极管载入实现
-   * 
-   * 核心载入逻辑：
-   * 1. 提取端电压
-   * 2. 计算指数特性 
-   * 3. 线性化处理
-   * 4. 生成 MNA 印花
-   * 5. 更新内部状态
+   * 🧠 Unified assembly entry point (replaces load)
    */
-  override load(voltage: VoltageVector): LoadResult {
-    const startTime = performance.now();
-    this._totalLoadCalls++;
+  override assemble(context: AssemblyContext): void {
+    const { matrix, rhs, solutionVector, nodeMap, gmin } = context;
     
-    try {
-      // 1. 提取端电压
-      const Va = voltage.get(this._anodeNode);
-      const Vc = voltage.get(this._cathodeNode);
-      const Vd = Va - Vc; // 二极管端电压
-      
-      // 2. 确定工作状态
-      const state = this._determineOperatingState(Vd);
-      
-      // 3. 计算 DC 特性
-      const dcAnalysis = this._computeDCCharacteristics(Vd, state);
-      
-      // 4. 计算小信号电导
-      const conductance = this._computeConductance(Vd, state);
-      
-      // 5. 计算电容效应
-      const capacitance = this._computeCapacitance(Vd);
-      
-      // 6. 生成 MNA 印花
-      const matrixStamp = this._generateMNAStamp(conductance);
-      
-      // 7. 计算右侧向量贡献
-      const rhsContribution = this._computeRHSContribution(dcAnalysis, conductance, Vd);
-      
-      // 8. 更新设备状态
-      const newState = this._createNewDeviceState(Vd, state, dcAnalysis, conductance, capacitance);
-      
-      const loadTime = performance.now() - startTime;
-      this._totalLoadTime += loadTime;
-      
-      return {
-        success: true,
-        matrixStamp,
-        rhsContribution,
-        deviceState: newState,
-        stats: {
-          loadTime,
-          nonlinearIterations: 1,
-          jacobianEvaluations: 1
-        }
-      };
-      
-    } catch (error) {
-      const loadTime = performance.now() - startTime;
-      this._totalLoadTime += loadTime;
-      
-      return {
-        success: false,
-        matrixStamp: this._createEmptyStamp(),
-        rhsContribution: new Vector(voltage.size),
-        deviceState: this._currentState,
-        errorMessage: `Diode ${this.deviceId} load failed: ${error}`,
-        stats: {
-          loadTime,
-          nonlinearIterations: 0,
-          jacobianEvaluations: 0
-        }
-      };
+    const anodeIndex = nodeMap.get(this.nodes[0].toString());
+    const cathodeIndex = nodeMap.get(this.nodes[1].toString());
+
+    if (anodeIndex === undefined || cathodeIndex === undefined) {
+      throw new Error(`Diode ${this.name}: Node not found in mapping.`);
     }
-  }
-
-  /**
-   * ⚡️ Gmin Stepping 支持
-   * 
-   * 在 MNA 矩阵中并联一个临时电导
-   */
-  stampGmin(gmin: number): void {
-    this._gminConductance = gmin;
-  }
-
-  /**
-   * 🎯 二极管收敛性检查
-   * 
-   * 专门针对二极管指数特性的收敛判断：
-   * 1. 指数函数收敛性
-   * 2. 正反向偏置稳定性  
-   * 3. 电流连续性检查
-   */
-  override checkConvergence(deltaV: VoltageVector): ConvergenceInfo {
-    const baseCheck = super.checkConvergence(deltaV);
     
-    // 二极管特定检查
-    const diodeCheck = this._checkDiodeSpecificConvergence(deltaV);
+    if (!solutionVector) {
+        throw new Error(`Diode ${this.name}: Solution vector is not available in assembly context.`);
+    }
+
+    const Va = solutionVector.get(anodeIndex);
+    const Vc = solutionVector.get(cathodeIndex);
+    let Vd = Va - Vc;
+
+    // --- BEGIN CRITICAL VOLTAGE LIMITING ---
+    const lastVd = this._currentState.internalStates['voltage'] as number || 0;
+    const { n, Is } = this._diodeParams;
+    const Vt = IntelligentDiode.VT;
+    const Vcrit = n * Vt * Math.log(n * Vt / (Math.SQRT2 * Is));
+
+    if (Vd > Vcrit) {
+        Vd = lastVd + n * Vt * Math.log((Vd - lastVd) / (n * Vt) + 1);
+    }
+    // --- END CRITICAL VOLTAGE LIMITING ---
+
+    const state = this._determineOperatingState(Vd);
+    const dcAnalysis = this._computeDCCharacteristics(Vd, state);
+    const conductance = this._computeConductance(Vd, state);
+    
+    // Key: Add Gmin to ensure numerical stability
+    const totalConductance = conductance + (gmin || 0);
+
+    // Linearization error compensation: I_actual - G*V
+    const linearCurrent = conductance * Vd;
+    const error = dcAnalysis.current - linearCurrent;
+
+    // Stamp Matrix
+    matrix.add(anodeIndex, anodeIndex, totalConductance);
+    matrix.add(anodeIndex, cathodeIndex, -totalConductance);
+    matrix.add(cathodeIndex, anodeIndex, -totalConductance);
+    matrix.add(cathodeIndex, cathodeIndex, totalConductance);
+
+    // Stamp RHS
+    rhs.add(anodeIndex, -error);
+    rhs.add(cathodeIndex, error);
+
+    // Update internal state after assembly
+    const capacitance = this._computeCapacitance(Vd);
+    this._currentState = this._createNewDeviceState(Vd, state, dcAnalysis, conductance, capacitance);
+  }
+
+  /**
+   * 🎯 Diode Convergence Check
+   */
+  override checkConvergence(deltaV: VoltageVector, nodeMap: Map<string, number>): ConvergenceInfo {
+    const baseCheck = super.checkConvergence(deltaV, nodeMap);
+    
+    const anodeIndex = nodeMap.get(this.nodes[0].toString());
+    const cathodeIndex = nodeMap.get(this.nodes[1].toString());
+
+    if (anodeIndex === undefined || cathodeIndex === undefined) {
+      return { ...baseCheck, confidence: 0.1, reason: "Node mapping not found" };
+    }
+    
+    const diodeCheck = this._checkDiodeSpecificConvergence(deltaV, anodeIndex, cathodeIndex);
     
     return {
       ...baseCheck,
@@ -198,34 +162,27 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
   }
 
   /**
-   * 🛡️ 二极管 Newton 步长限制
-   * 
-   * 防止指数函数数值溢出和发散：
-   * 1. 正向电压限制
-   * 2. 指数参数裁剪
-   * 3. 电导下界保护
+   * 🛡️ Diode Newton Step Limiting
    */
-  override limitUpdate(deltaV: VoltageVector): VoltageVector {
-    const limited = super.limitUpdate(deltaV);
+  override limitUpdate(deltaV: VoltageVector, nodeMap: Map<string, number>): VoltageVector {
+    const limited = super.limitUpdate(deltaV, nodeMap);
     
-    // 二极管特定限制
-    this._applyDeviceSpecificLimits(limited);
+    const anodeIndex = nodeMap.get(this.nodes[0].toString());
+    const cathodeIndex = nodeMap.get(this.nodes[1].toString());
+
+    if (anodeIndex !== undefined && cathodeIndex !== undefined) {
+      this._applyDeviceSpecificLimits(limited, anodeIndex, cathodeIndex);
+    }
     
     return limited;
   }
-
+  
   /**
-   * 🔮 二极管状态预测
-   * 
-   * 预测二极管的开关行为和恢复特性
+   * 🔮 Diode State Prediction
    */
   override predictNextState(dt: number): PredictionHint {
     const baseHint = super.predictNextState(dt);
-    
-    // 检测开关事件
     const switchingEvents = this._predictSwitchingEvents(dt);
-    
-    // 识别数值挑战
     const challenges = this._identifyDiodeChallenges(dt);
     
     return {
@@ -235,15 +192,13 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
     };
   }
 
-  // === 二极管特定的私有方法 ===
-
-  /**
-   * ADDED: 获取二极管在给定电压下的工作模式
-   * 实现了基类的抽象方法
-   */
-  override getOperatingMode(voltage: VoltageVector): string {
-    const Va = voltage.get(this._anodeNode);
-    const Vc = voltage.get(this._cathodeNode);
+  override getOperatingMode(solution: IVector, nodeMap: Map<string, number>): string {
+    const anodeIndex = nodeMap.get(this.nodes[0].toString());
+    const cathodeIndex = nodeMap.get(this.nodes[1].toString());
+    if (anodeIndex === undefined || cathodeIndex === undefined) return DiodeState.REVERSE_BIAS;
+    
+    const Va = solution.get(anodeIndex);
+    const Vc = solution.get(cathodeIndex);
     const Vd = Va - Vc;
     return this._determineOperatingState(Vd);
   }
@@ -263,57 +218,41 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
     };
   }
 
-  /**
-   * 确定二极管工作状态
-   */
   private _determineOperatingState(Vd: number): DiodeState {
     const { n } = this._diodeParams;
     const Vt = IntelligentDiode.VT;
     
-    // 击穿检查 (简化：只检查反向击穿)
-    if (Vd < -5.0) { // -5V 作为击穿阈值示例
+    if (Vd < -5.0) {
       return DiodeState.BREAKDOWN;
     }
     
-    // 过渡态：接近零偏置
     if (Math.abs(Vd) < 2 * n * Vt) {
       return DiodeState.TRANSITION;
     }
     
-    // 正向 vs 反向偏置
     return Vd > 0 ? DiodeState.FORWARD_BIAS : DiodeState.REVERSE_BIAS;
   }
 
-  /**
-   * 计算二极管 DC 特性
-   */
   private _computeDCCharacteristics(Vd: number, state: DiodeState) {
     const { Is, n, Rs } = this._diodeParams;
     const Vt = IntelligentDiode.VT;
     
     switch (state) {
       case DiodeState.REVERSE_BIAS:
-        // 反向饱和电流
         return { current: -Is, voltage: Vd };
         
       case DiodeState.FORWARD_BIAS:
-        // Shockley 方程：I = Is*(exp(V/nVt) - 1)
-        // 考虑串联电阻的迭代求解简化为直接计算
-        const expArg = Math.min(Vd / (n * Vt), IntelligentDiode.MAX_EXPONENTIAL_ARG);
+        const expArgUnsafe = Vd / (n * Vt);
+        const expArg = Math.max(-IntelligentDiode.MAX_EXPONENTIAL_ARG, Math.min(expArgUnsafe, IntelligentDiode.MAX_EXPONENTIAL_ARG));
         const current = Is * (Math.exp(expArg) - 1);
-        
-        // 考虑串联电阻压降
         const voltageAcrossJunction = Vd - current * Rs;
-        
         return { current, voltage: voltageAcrossJunction };
         
       case DiodeState.BREAKDOWN:
-        // 击穿区：简化为大电导模型
-        const breakdownCurrent = -(Vd + 5.0) * 0.1; // 简化击穿特性
+        const breakdownCurrent = -(Vd + 5.0) * 0.1;
         return { current: breakdownCurrent, voltage: Vd };
         
       case DiodeState.TRANSITION:
-        // 过渡区：线性化处理
         const transitionCurrent = Is * Vd / (n * Vt);
         return { current: transitionCurrent, voltage: Vd };
         
@@ -322,9 +261,6 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
     }
   }
 
-  /**
-   * 计算小信号电导
-   */
   private _computeConductance(Vd: number, state: DiodeState): number {
     const { Is, n, Rs } = this._diodeParams;
     const Vt = IntelligentDiode.VT;
@@ -334,17 +270,14 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
         return IntelligentDiode.MIN_CONDUCTANCE;
         
       case DiodeState.FORWARD_BIAS:
-        // 动态电导：gd = dI/dV = Is*exp(V/nVt)/(nVt)
-        const expArg = Math.min(Vd / (n * Vt), IntelligentDiode.MAX_EXPONENTIAL_ARG);
+        const expArgUnsafe = Vd / (n * Vt);
+        const expArg = Math.max(-IntelligentDiode.MAX_EXPONENTIAL_ARG, Math.min(expArgUnsafe, IntelligentDiode.MAX_EXPONENTIAL_ARG));
         const intrinsicConductance = (Is / (n * Vt)) * Math.exp(expArg);
-        
-        // 考虑串联电阻
         const totalConductance = 1 / (1 / intrinsicConductance + Rs);
-        
         return Math.max(totalConductance, IntelligentDiode.MIN_CONDUCTANCE);
         
       case DiodeState.BREAKDOWN:
-        return 0.1; // 击穿区高电导
+        return 0.1;
         
       case DiodeState.TRANSITION:
         return Math.max(Is / (n * Vt), IntelligentDiode.MIN_CONDUCTANCE);
@@ -354,69 +287,17 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
     }
   }
 
-  /**
-   * 计算结电容
-   */
   private _computeCapacitance(Vd: number): number {
     const { Cj0, Vj, m } = this._diodeParams;
     
     if (Vd >= 0) {
-      // 正向偏置：电容增大
       return Cj0 * (1 + Vd / Vj);
     } else {
-      // 反向偏置：结电容变化
       const factor = Math.pow(1 - Vd / Vj, -m);
       return Cj0 * factor;
     }
   }
 
-  /**
-   * 生成 MNA 印花
-   */
-  private _generateMNAStamp(conductance: number): MatrixStamp {
-    const totalConductance = conductance + this._gminConductance;
-    const entries: StampEntry[] = [
-      // 阳极方程：Ia = G*(Va - Vc)
-      { row: this._anodeNode, col: this._anodeNode, value: totalConductance },
-      { row: this._anodeNode, col: this._cathodeNode, value: -totalConductance },
-      
-      // 阴极方程：Ic = -Ia
-      { row: this._cathodeNode, col: this._anodeNode, value: -totalConductance },
-      { row: this._cathodeNode, col: this._cathodeNode, value: totalConductance }
-    ];
-    
-    return {
-      entries,
-      type: StampType.NONLINEAR,
-      isLinear: false,
-      conditionEstimate: 1.0 / conductance
-    };
-  }
-
-  /**
-   * 计算右侧向量贡献
-   */
-  private _computeRHSContribution(
-    dcAnalysis: any, 
-    conductance: number, 
-    Vd: number
-  ): CurrentVector {
-    const rhs = new Vector(2); // [Anode, Cathode]
-    const { current } = dcAnalysis;
-    
-    // 线性化误差补偿：I_actual - G*V
-    const linearCurrent = conductance * Vd;
-    const error = current - linearCurrent;
-    
-    rhs.set(this._anodeNode, -error);   // 阳极电流
-    rhs.set(this._cathodeNode, error);  // 阴极电流
-    
-    return rhs;
-  }
-
-  /**
-   * 创建新的设备状态
-   */
   private _createNewDeviceState(
     Vd: number,
     state: DiodeState,
@@ -438,24 +319,10 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
     };
   }
 
-  private _createEmptyStamp(): MatrixStamp {
-    return {
-      entries: [],
-      type: StampType.RESISTIVE,
-      isLinear: true
-    };
-  }
-
-  /**
-   * 二极管特定收敛检查
-   */
-  private _checkDiodeSpecificConvergence(deltaV: VoltageVector) {
-    const deltaVd = deltaV.get(this._anodeNode) - deltaV.get(this._cathodeNode);
-    
-    // 检查电压变化是否在合理范围
+  private _checkDiodeSpecificConvergence(deltaV: VoltageVector, anodeIndex: number, cathodeIndex: number) {
+    const deltaVd = deltaV.get(anodeIndex) - deltaV.get(cathodeIndex);
     const voltageChangeReasonable = Math.abs(deltaVd) < IntelligentDiode.CONVERGENCE_VOLTAGE_TOL * 1000;
     
-    // 检查是否可能跨越工作状态边界
     const currentVd = this._currentState.internalStates['voltage'] as number || 0;
     const newVd = currentVd + deltaVd;
     const currentState = this._currentState.internalStates['state'] as DiodeState;
@@ -463,7 +330,6 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
     
     const stateStable = currentState === newState;
     
-    // 计算置信度
     let confidence = 0.8;
     if (!voltageChangeReasonable) confidence *= 0.5;
     if (!stateStable) confidence *= 0.3;
@@ -471,29 +337,21 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
     return { stateStable, confidence };
   }
 
-  /**
-   * 二极管特定步长限制  
-   */
-  protected override _applyDeviceSpecificLimits(deltaV: VoltageVector): void {
-    const deltaVd = deltaV.get(this._anodeNode) - deltaV.get(this._cathodeNode);
+  protected override _applyDeviceSpecificLimits(deltaV: VoltageVector, anodeIndex: number, cathodeIndex: number): void {
+    const deltaVd = deltaV.get(anodeIndex) - deltaV.get(cathodeIndex);
     
-    // 限制正向电压步长
     if (deltaVd > IntelligentDiode.FORWARD_VOLTAGE_LIMIT) {
       const scale = IntelligentDiode.FORWARD_VOLTAGE_LIMIT / deltaVd;
-      deltaV.set(this._anodeNode, deltaV.get(this._anodeNode) * scale);
-      deltaV.set(this._cathodeNode, deltaV.get(this._cathodeNode) * scale);
+      deltaV.set(anodeIndex, deltaV.get(anodeIndex) * scale);
+      deltaV.set(cathodeIndex, deltaV.get(cathodeIndex) * scale);
     }
   }
 
-  /**
-   * 预测开关事件
-   */
   private _predictSwitchingEvents(dt: number): readonly SwitchingEvent[] {
     const events: SwitchingEvent[] = [];
     const currentVd = this._currentState.internalStates['voltage'] as number || 0;
     const currentState = this._currentState.internalStates['state'] as DiodeState;
     
-    // 如果接近状态切换边界，预测开关事件
     if (currentState === DiodeState.REVERSE_BIAS && currentVd > -0.1) {
       events.push({
         eventType: 'turn_on',
@@ -515,15 +373,11 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
     return events;
   }
 
-  /**
-   * 识别二极管数值挑战
-   */
   private _identifyDiodeChallenges(_dt: number): readonly NumericalChallenge[] {
     const challenges: NumericalChallenge[] = [];
     const conductance = this._currentState.internalStates['conductance'] as number || 0;
     const voltage = this._currentState.internalStates['voltage'] as number || 0;
     
-    // 高电导导致的病态问题
     if (conductance > 1e6) {
       challenges.push({
         type: 'ill_conditioning',
@@ -532,7 +386,6 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
       });
     }
     
-    // 指数函数接近溢出
     const { n } = this._diodeParams;
     const expArg = voltage / (n * IntelligentDiode.VT);
     if (expArg > 30) {
@@ -544,5 +397,26 @@ export class IntelligentDiode extends IntelligentDeviceModelBase {
     }
     
     return challenges;
+  }
+
+  override getEventFunctions(nodeMap: Map<string, number>) {
+    const anodeIndex = nodeMap.get(this.nodes[0].toString());
+    const cathodeIndex = nodeMap.get(this.nodes[1].toString());
+
+    if (anodeIndex === undefined || cathodeIndex === undefined) {
+      return [];
+    }
+
+    return [
+      {
+        type: 'diode_threshold_crossing',
+        condition: (v: IVector) => {
+          const Va = v.get(anodeIndex);
+          const Vc = v.get(cathodeIndex);
+          const Vf = 0.7; 
+          return (Va - Vc) - Vf;
+        }
+      }
+    ];
   }
 }

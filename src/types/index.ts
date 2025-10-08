@@ -30,6 +30,11 @@ export interface IVector {
   plus(other: IVector): IVector;
   minus(other: IVector): IVector;
   scale(factor: number): IVector;
+
+  // In-place operations for performance
+  addInPlace(other: IVector): void;
+  subtractInPlace(other: IVector): void;
+  scaleInPlace(scalar: number): void;
   
   fill(value: number): void;
 
@@ -57,6 +62,10 @@ export interface ISparseMatrix {
   clone(): ISparseMatrix;
   clear(): void;
   
+  // MNA 接地與除錯
+  print(): void;
+  submatrix(rowsToRemove: number[], colsToRemove: number[]): { matrix: ISparseMatrix, mapping: number[] };
+
   // 資源管理 (WASM)
   dispose?(): void;
 }

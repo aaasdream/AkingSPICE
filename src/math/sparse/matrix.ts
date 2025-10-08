@@ -33,7 +33,6 @@ export class SparseMatrix implements ISparseMatrix {
   
   // KLU 求解器實例 (未來使用)
   private _kluSolver: any | null = null;
-  private _isKluFactorized = false;
 
   constructor(
     public readonly rows: number,
@@ -119,7 +118,6 @@ export class SparseMatrix implements ISparseMatrix {
     }
     
     this._factorized = false;
-    this._isKluFactorized = false;
   }
 
   /**
@@ -263,7 +261,7 @@ export class SparseMatrix implements ISparseMatrix {
   private _solveWithNumeric(b: IVector): IVector {
     console.log('📊 使用 numeric.js 求解稠密線性系統...');
     
-    // 轉換為稠密矩陣
+    // 轉換為稠密矩阵
     const denseA = this.toDense();
     const denseB = b.toArray();
     
@@ -286,7 +284,7 @@ export class SparseMatrix implements ISparseMatrix {
   private async _solveWithKLU(b: IVector): Promise<IVector> {
     console.log('🔬 KLU WASM 不可用，使用迭代求解器...');
     
-    // 暫時使用迭代求解器作為 KLU 的替代方案
+    // 暫時使用迭代求解器作作为 KLU 的替代方案
     // 這確保了通用電力電子模擬器的穩定性
     return this._solveIterative(b);
   }
@@ -350,7 +348,6 @@ export class SparseMatrix implements ISparseMatrix {
   setSolverMode(mode: 'iterative' | 'numeric' | 'klu'): void {
     this._solverMode = mode;
     this._factorized = false;
-    this._isKluFactorized = false;
   }
 
   /**
@@ -373,7 +370,6 @@ export class SparseMatrix implements ISparseMatrix {
       }
       this._kluSolver = null;
     }
-    this._isKluFactorized = false;
   }
 
   /**
@@ -384,7 +380,6 @@ export class SparseMatrix implements ISparseMatrix {
     this._colIndices = [];
     this._rowPointers.fill(0);
     this._factorized = false;
-    this._isKluFactorized = false;
     this._kluSolver = null;
   }
 
@@ -417,7 +412,7 @@ export class SparseMatrix implements ISparseMatrix {
       const end = this._rowPointers[i + 1]!;
       
       for (let k = start; k < end; k++) {
-        const j = this._colIndices[k]!;
+        const j = this._colIndices[k]!
         const value = this._values[k]!;
         dense[i]![j] = value;
       }
@@ -425,6 +420,100 @@ export class SparseMatrix implements ISparseMatrix {
     
     return dense;
   }
+
+  /**
+   * 打印矩阵内容 (调試用)
+   */
+  print(): void {
+    console.log(`SparseMatrix (${this.rows}x${this.cols}), NNZ=${this.nnz}`);
+    const dense = this.toDense();
+    let header = '      ';
+    for(let j=0; j<this.cols; j++) {
+      header += `${j}`.padStart(8, ' ');
+    }
+    console.log(header);
+    console.log('    ' + '—'.repeat(header.length-4));
+
+    for (let i = 0; i < this.rows; i++) {
+      let rowStr = `[${i}]`.padStart(5, ' ') + ' |';
+      for (let j = 0; j < this.cols; j++) {
+        const val = dense[i]![j]!
+        if (Math.abs(val) < 1e-12) {
+          rowStr += '    .   ';
+        } else {
+          rowStr += val.toExponential(1).padStart(8, ' ');
+        }
+      }
+      console.log(rowStr);
+    }
+  }
+
+  /**
+   * 🆕 提取子矩陣 (用於處理接地節點)
+   * 
+   * 移除指定的行和列，返回一個新的、更小的非奇異矩陣
+   * 以及一個映射，用於將子問題的解映射回原始維度
+   * 
+   * @param rowsToRemove 要移除的行索引
+   * @param colsToRemove 要移除的列索引
+   * @returns 一個包含子矩陣和索引映射的對象
+   */
+  submatrix(rowsToRemove: number[], colsToRemove: number[]): { matrix: ISparseMatrix, mapping: number[] } {
+    const rowsToRemoveSet = new Set(rowsToRemove);
+    const colsToRemoveSet = new Set(colsToRemove);
+
+    const newRows = this.rows - rowsToRemove.length;
+    const newCols = this.cols - colsToRemove.length;
+
+    const subMatrix = new SparseMatrix(newRows, newCols);
+    
+    // 創建從舊索引到新索引的映射
+    const rowMapping: number[] = [];
+    let currentRow = 0;
+    for (let i = 0; i < this.rows; i++) {
+      if (!rowsToRemoveSet.has(i)) {
+        rowMapping[i] = currentRow++;
+      }
+    }
+
+    const colMapping: number[] = [];
+    let currentCol = 0;
+    for (let i = 0; i < this.cols; i++) {
+      if (!colsToRemoveSet.has(i)) {
+        colMapping[i] = currentCol++;
+      }
+    }
+
+    // 填充子矩陣
+    for (let i = 0; i < this.rows; i++) {
+      if (rowsToRemoveSet.has(i)) continue;
+
+      const start = this._rowPointers[i]!
+      const end = this._rowPointers[i + 1]!;
+
+      for (let k = start; k < end; k++) {
+        const j = this._colIndices[k]!;
+        if (colsToRemoveSet.has(j)) continue;
+
+        const newRow = rowMapping[i]!;
+        const newCol = colMapping[j]!;
+        const value = this._values[k]!;
+        
+        subMatrix.add(newRow, newCol, value);
+      }
+    }
+
+    // 返回從新索引到舊索引的映射，用於還原解
+    const inverseColMapping: number[] = [];
+    for(let i=0; i<colMapping.length; i++) {
+      if(colMapping[i] !== undefined) {
+        inverseColMapping[colMapping[i]!] = i;
+      }
+    }
+
+    return { matrix: subMatrix, mapping: inverseColMapping };
+  }
+
 
   // 私有方法
 
@@ -485,7 +574,7 @@ export class SparseMatrix implements ISparseMatrix {
   }
 
   /**
-   * 轉換為 CSC (Compressed Sparse Column) 格式
+   * 轉换為 CSC (Compressed Sparse Column) 格式
    * 
    * KLU 求解器需要 CSC 格式輸入
    * 

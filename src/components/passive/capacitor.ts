@@ -22,11 +22,6 @@ import { ComponentInterface, ValidationResult, ComponentInfo, AssemblyContext } 
 export class Capacitor implements ComponentInterface {
   readonly type = 'C';
   
-  // 历史状态 (用于时间积分)
-  private _previousVoltage = 0;
-  private _previousCurrent = 0;
-  private _timeStep = 1e-6; // 默认时间步长
-  
   constructor(
     public readonly name: string,
     public readonly nodes: readonly [string, string],
@@ -44,10 +39,6 @@ export class Capacitor implements ComponentInterface {
     if (nodes[0] === nodes[1]) {
       throw new Error(`电容不能连接到同一节点: ${nodes[0]}`);
     }
-    
-    // 初始化历史状态为零（电容初始条件）
-    this._previousVoltage = 0.0;
-    this._previousCurrent = 0.0;
   }
   
   /**
@@ -58,48 +49,66 @@ export class Capacitor implements ComponentInterface {
   }
   
   /**
-   * 📊 获取历史电压
-   */
-  get previousVoltage(): number {
-    return this._previousVoltage;
-  }
-  
-  /**
    * ✅ 统一组装方法 (NEW!)
    */
   assemble(context: AssemblyContext): void {
-    const n1 = context.nodeMap.get(this.nodes[0]);
-    const n2 = context.nodeMap.get(this.nodes[1]);
+    const { nodeMap, dt, previousSolutionVector, matrix, rhs } = context;
+    const n1 = nodeMap.get(this.nodes[0]);
+    const n2 = nodeMap.get(this.nodes[1]);
+
+    // 🧠 统一的 Gmin 注入
+    // 无论瞬态还是DC，都为电容的每个节点添加一个微小的对地电导。
+    // 这可以防止浮动节点，并确保矩阵在数值上更加稳定。
+    const GMIN = 1e-12;
+    if (n1 !== undefined && n1 >= 0) {
+      matrix.add(n1, n1, GMIN);
+    }
+    if (n2 !== undefined && n2 >= 0) {
+      matrix.add(n2, n2, GMIN);
+    }
+
+    if (!previousSolutionVector || dt <= 0) {
+      // 在直流分析 (dt=0) 或初始时间点，电容仅贡献 GMIN，行为类似开路。
+      // GMIN 的注入已经完成，所以这里直接返回。
+      return;
+    }
+
+    // --- 以下是瞬态分析部分 ---
+
+    // 从上一步的解中获取历史电压
+    const v1_prev = (n1 !== undefined && n1 >= 0) ? previousSolutionVector.get(n1) : 0;
+    const v2_prev = (n2 !== undefined && n2 >= 0) ? previousSolutionVector.get(n2) : 0;
+    const previousVoltage = v1_prev - v2_prev;
     
     // 等效电导 G_eq = C / Δt
-    const geq = this._capacitance / this._timeStep;
+    const geq = this._capacitance / dt;
     
     // 等效电流源 I_eq = G_eq * V_prev
-    const ieq = geq * this._previousVoltage;
+    const ieq = geq * previousVoltage;
     
     // 装配电导矩阵 (类似电阻)
     if (n1 !== undefined && n1 >= 0) {
-      context.matrix.add(n1, n1, geq);
+      matrix.add(n1, n1, geq);
       
       if (n2 !== undefined && n2 >= 0) {
-        context.matrix.add(n1, n2, -geq);
+        matrix.add(n1, n2, -geq);
       }
     }
     
     if (n2 !== undefined && n2 >= 0) {
-      context.matrix.add(n2, n2, geq);
+      matrix.add(n2, n2, geq);
       
       if (n1 !== undefined && n1 >= 0) {
-        context.matrix.add(n2, n1, -geq);
+        matrix.add(n2, n1, -geq);
       }
     }
     
     // 装配等效电流源到右侧向量
     if (n1 !== undefined && n1 >= 0) {
-      context.rhs.add(n1, ieq);
+      rhs.add(n1, ieq);
     }
     if (n2 !== undefined && n2 >= 0) {
-      context.rhs.add(n2, -ieq);
+      rhs.add(n2, -ieq);
     }
   }
 
@@ -111,35 +120,6 @@ export class Capacitor implements ComponentInterface {
   hasEvents(): boolean {
     return false;
   }
-
-  /**
-   * ⏱️ 设置时间步长
-   */
-  setTimeStep(dt: number): void {
-    if (dt <= 0) {
-      throw new Error(`时间步长必须为正数: ${dt}`);
-    }
-    this._timeStep = dt;
-  }
-  
-  /**
-   * 📈 更新历史状态
-   */
-  updateHistory(voltage: number, current: number): void {
-    // 检查数值有效性
-    if (!isFinite(voltage) || isNaN(voltage)) {
-      console.warn(`电容 ${this.name} 的电压值无效: ${voltage}，使用前一值`);
-      voltage = this._previousVoltage;
-    }
-    if (!isFinite(current) || isNaN(current)) {
-      console.warn(`电容 ${this.name} 的电流值无效: ${current}，使用前一值`);
-      current = this._previousCurrent;
-    }
-    
-    this._previousVoltage = voltage;
-    this._previousCurrent = current;
-  }
-  
 
   /**
    * 🔍 组件验证
@@ -172,11 +152,6 @@ export class Capacitor implements ComponentInterface {
       errors.push(`电容不能连接到同一节点: ${this.nodes[0]}`);
     }
     
-    // 检查时间步长
-    if (this._timeStep <= 0) {
-      errors.push(`时间步长必须为正数: ${this._timeStep}`);
-    }
-    
     return {
       isValid: errors.length === 0,
       errors,
@@ -194,17 +169,9 @@ export class Capacitor implements ComponentInterface {
       nodes: [...this.nodes],
       parameters: {
         capacitance: this._capacitance,
-        timeStep: this._timeStep,
-        previousVoltage: this._previousVoltage,
-        previousCurrent: this._previousCurrent,
-        equivalentConductance: this._capacitance / this._timeStep
       },
       units: {
         capacitance: 'F',
-        timeStep: 's',
-        previousVoltage: 'V',
-        previousCurrent: 'A',
-        equivalentConductance: 'S'
       }
     };
   }
@@ -213,9 +180,12 @@ export class Capacitor implements ComponentInterface {
    * ⚡ 计算瞬时电流
    * 
    * I = C * dV/dt ≈ C * (V - V_prev) / Δt
+   * NOTE: This method is for post-simulation analysis and is not used by the solver.
+   * It requires external provision of previous voltage and dt.
    */
-  calculateCurrent(currentVoltage: number): number {
-    return this._capacitance * (currentVoltage - this._previousVoltage) / this._timeStep;
+  calculateCurrent(currentVoltage: number, previousVoltage: number, dt: number): number {
+    if (dt <= 0) return 0;
+    return this._capacitance * (currentVoltage - previousVoltage) / dt;
   }
   
   /**

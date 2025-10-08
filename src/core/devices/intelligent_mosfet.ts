@@ -23,10 +23,9 @@
  */
 
 import type { 
-  VoltageVector, 
-  CurrentVector
+  VoltageVector,
+  IVector
 } from '../../types/index';
-import { Vector } from '../../math/sparse/vector';
 import { 
   IntelligentDeviceModelBase,
   LoadResult,
@@ -54,19 +53,9 @@ export enum MOSFETRegion {
 /**
  * MOSFET 内部状态
  */
-interface MOSFETInternalState {
-  readonly region: MOSFETRegion;
-  readonly Vgs: number;        // 栅源电压
-  readonly Vds: number;        // 漏源电压
-  readonly Vbs: number;        // 体源电压
-  readonly gm: number;         // 跨导
-  readonly gds: number;        // 输出电导
-  readonly gmbs: number;       // 体效应跨导
-  readonly Cgs: number;        // 栅源电容
-  readonly Cgd: number;        // 栅漏电容
-  readonly Cdb: number;        // 漏体电容
-  readonly Csb: number;        // 源体电容
-}
+// import type { 
+//   MOSFETInternalState
+// } from './intelligent_device_model';
 
 /**
  * 🚀 智能 MOSFET 模型实现
@@ -75,14 +64,13 @@ interface MOSFETInternalState {
  * 专为电力电子高频开关应用优化
  */
 export class IntelligentMOSFET extends IntelligentDeviceModelBase {
-  private readonly _drainNode: number;
-  private readonly _gateNode: number;
-  private readonly _sourceNode: number;
+  private readonly _drainNode: string;
+  private readonly _gateNode: string;
+  private readonly _sourceNode: string;
   private readonly _mosfetParams: MOSFETParameters;
   
   // 物理常数
   private static readonly VT = 0.026; // 热电压 (26mV @ 300K)
-  private static readonly EPS_SI = 8.854e-12; // 硅介电常数
   
   // 数值常数
   private static readonly MIN_CONDUCTANCE = 1e-12; // 最小电导 (避免奇异)
@@ -93,7 +81,7 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
 
   constructor(
     deviceId: string,
-    nodes: [number, number, number], // [Drain, Gate, Source]
+    nodes: [string, string, string], // [Drain, Gate, Source]
     parameters: MOSFETParameters
   ) {
     super(deviceId, 'MOSFET', nodes, parameters);
@@ -106,86 +94,83 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
   }
 
   /**
-   * 🔥 MOSFET 载入实现
-   * 
-   * 核心载入逻辑：
-   * 1. 提取节点电压
-   * 2. 确定工作区域
-   * 3. 计算线性化模型
-   * 4. 生成 MNA 印花
-   * 5. 更新内部状态
+   * 🧠 Unified assembly entry point for MOSFET
    */
-  override load(voltage: VoltageVector): LoadResult {
-    const startTime = performance.now();
-    this._totalLoadCalls++;
-    
-    try {
-      // 1. 提取节点电压
-      const Vd = voltage.get(this._drainNode);
-      const Vg = voltage.get(this._gateNode);
-      const Vs = voltage.get(this._sourceNode);
-      
-      // 2. 计算端电压
-      const Vgs = Vg - Vs;
-      const Vds = Vd - Vs;
-      // const Vbs = 0 - Vs; // 假设体端接地 - 目前模型不考虑体效应
-      
-      // 3. 确定工作区域
-      const region = this._determineOperatingRegion(Vgs, Vds);
-      
-      // 4. 计算 DC 特性
-      const dcAnalysis = this._computeDCCharacteristics(Vgs, Vds, region);
-      
-      // 5. 计算小信号参数
-      const smallSignal = this._computeSmallSignalParameters(Vgs, Vds, region);
-      
-      // 6. 计算电容效应
-      const capacitance = this._computeCapacitances(Vgs, Vds);
-      
-      // 7. 生成 MNA 印花
-      const matrixStamp = this._generateMNAStamp(smallSignal, capacitance);
-      
-      // 8. 计算右侧向量
-      const rhsContribution = this._computeRHSContribution(dcAnalysis, smallSignal, Vgs, Vds);
-      
-      // 9. 更新设备状态
-      const newState = this._createNewDeviceState(
-        Vgs, Vds, region, smallSignal, capacitance
-      );
-      
-      const loadTime = performance.now() - startTime;
-      this._totalLoadTime += loadTime;
-      
-      return {
-        success: true,
-        matrixStamp,
-        rhsContribution,
-        deviceState: newState,
-        stats: {
-          loadTime,
-          nonlinearIterations: 1,
-          jacobianEvaluations: 1
-        }
-      };
-      
-    } catch (error) {
-      const loadTime = performance.now() - startTime;
-      this._totalLoadTime += loadTime;
-      
-      return {
-        success: false,
-        matrixStamp: this._createEmptyStamp(),
-        rhsContribution,
-        deviceState: this._currentState,
-        errorMessage: `MOSFET ${this.deviceId} load failed: ${error}`,
-        stats: {
-          loadTime,
-          nonlinearIterations: 0,
-          jacobianEvaluations: 0
-        }
-      };
+  override assemble(context: AssemblyContext): void {
+    const { matrix, rhs, solutionVector, nodeMap, gmin } = context;
+
+    const drainIndex = nodeMap.get(this._drainNode);
+    const gateIndex = nodeMap.get(this._gateNode);
+    const sourceIndex = nodeMap.get(this._sourceNode);
+
+    if (drainIndex === undefined || gateIndex === undefined || sourceIndex === undefined) {
+      throw new Error(`MOSFET ${this.deviceId}: Node not found in mapping.`);
     }
+    
+    if (!solutionVector) {
+        throw new Error(`MOSFET ${this.deviceId}: Solution vector is not available in assembly context.`);
+    }
+
+    // 1. 提取节点电压
+    const Vd = solutionVector.get(drainIndex);
+    const Vg = solutionVector.get(gateIndex);
+    const Vs = solutionVector.get(sourceIndex);
+    
+    // 2. 计算端电压
+    const Vgs = Vg - Vs;
+    const Vds = Vd - Vs;
+
+    // 关键保护：检查 NaN
+    if (isNaN(Vgs) || isNaN(Vds)) {
+      const detailedError = `Input voltage is NaN for ${this.deviceId}. Vd=${Vd}, Vg=${Vg}, Vs=${Vs} -> Vgs=${Vgs}, Vds=${Vds}`;
+      console.error(detailedError);
+      throw new Error(detailedError);
+    }
+    
+    // 3. 确定工作区域
+    const region = this._determineOperatingRegion(Vgs, Vds);
+    
+    // 4. 计算 DC 特性
+    const dcAnalysis = this._computeDCCharacteristics(Vgs, Vds, region);
+    
+    // 5. 计算小信号参数
+    const smallSignal = this._computeSmallSignalParameters(Vgs, Vds, region);
+    
+    // Add Gmin
+    const totalGds = smallSignal.gds + (gmin || 0);
+
+    // 6. 计算右侧向量贡献 (线性化误差)
+    const Ieq = dcAnalysis.Id - (smallSignal.gm * Vgs + smallSignal.gds * Vds);
+
+    // 7. Stamp Matrix
+    const { gm } = smallSignal;
+    matrix.add(drainIndex, gateIndex, gm);
+    matrix.add(drainIndex, drainIndex, totalGds);
+    matrix.add(drainIndex, sourceIndex, -(gm + totalGds));
+    
+    matrix.add(sourceIndex, gateIndex, -gm);
+    matrix.add(sourceIndex, drainIndex, -totalGds);
+    matrix.add(sourceIndex, sourceIndex, gm + totalGds);
+
+    // 8. Stamp RHS
+    rhs.add(drainIndex, -Ieq);
+    rhs.add(sourceIndex, Ieq);
+
+    // 9. 更新设备状态
+    const capacitance = this._computeCapacitances(Vgs, Vds);
+    this._currentState = this._createNewDeviceState(
+      Vgs, Vds, region, smallSignal, capacitance
+    );
   }
+
+  /**
+   * 🔥 MOSFET 载入实现 (DEPRECATED)
+   */
+  /*
+  override load(voltage: VoltageVector, nodeMap: Map<string, number>): LoadResult {
+    // ... (This method is now replaced by assemble) ...
+  }
+  */
 
   /**
    * ⚡️ Gmin Stepping 支持
@@ -205,12 +190,12 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
    * 3. 栅极电压变化率
    * 4. 漏极电流连续性
    */
-  override checkConvergence(deltaV: VoltageVector): ConvergenceInfo {
+  override checkConvergence(deltaV: VoltageVector, nodeMap: Map<string, number>): ConvergenceInfo {
     // 调用基类通用检查
-    const baseCheck = super.checkConvergence(deltaV);
+    const baseCheck = super.checkConvergence(deltaV, nodeMap);
     
     // MOSFET 特定的收敛检查
-    const mosfetCheck = this._checkMOSFETSpecificConvergence(deltaV);
+    const mosfetCheck = this._checkMOSFETSpecificConvergence(deltaV, nodeMap);
     
     // 合并检查结果
     return {
@@ -231,11 +216,11 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
    * 2. 限制栅极电压过冲
    * 3. 保护工作区域边界
    */
-  override limitUpdate(deltaV: VoltageVector): VoltageVector {
-    const limited = super.limitUpdate(deltaV);
+  override limitUpdate(deltaV: VoltageVector, nodeMap: Map<string, number>): VoltageVector {
+    const limited = super.limitUpdate(deltaV, nodeMap);
     
     // MOSFET 特定的步长限制
-    this._applyDeviceSpecificLimits(limited);
+    this._applyDeviceSpecificLimits(limited, nodeMap);
     
     return limited;
   }
@@ -267,10 +252,18 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
    * ADDED: 获取 MOSFET 在给定电压下的工作模式
    * 实现了基类的抽象方法
    */
-  override getOperatingMode(voltage: VoltageVector): string {
-    const Vd = voltage.get(this._drainNode);
-    const Vg = voltage.get(this._gateNode);
-    const Vs = voltage.get(this._sourceNode);
+  override getOperatingMode(voltage: IVector, nodeMap: Map<string, number>): string {
+    const drainIndex = nodeMap.get(this._drainNode);
+    const gateIndex = nodeMap.get(this._gateNode);
+    const sourceIndex = nodeMap.get(this._sourceNode);
+
+    if (drainIndex === undefined || gateIndex === undefined || sourceIndex === undefined) {
+      return MOSFETRegion.CUTOFF; // Default if nodes not mapped
+    }
+
+    const Vd = voltage.get(drainIndex);
+    const Vg = voltage.get(gateIndex);
+    const Vs = voltage.get(sourceIndex);
     
     const Vgs = Vg - Vs;
     const Vds = Vd - Vs;
@@ -281,14 +274,22 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
   /**
    * 🆕 导出事件条件函数
    */
-  override getEventFunctions() {
+  override getEventFunctions(nodeMap: Map<string, number>) {
+    const drainIndex = nodeMap.get(this._drainNode);
+    const gateIndex = nodeMap.get(this._gateNode);
+    const sourceIndex = nodeMap.get(this._sourceNode);
+
+    if (drainIndex === undefined || gateIndex === undefined || sourceIndex === undefined) {
+      return [];
+    }
+
     return [
       {
         // 检测 Vgs 是否穿过 Vth
         type: 'Vgs_cross_Vth',
         condition: (v: IVector) => {
-          const Vg = v.get(this._gateNode);
-          const Vs = v.get(this._sourceNode);
+          const Vg = v.get(gateIndex);
+          const Vs = v.get(sourceIndex);
           return (Vg - Vs) - this._mosfetParams.Vth;
         }
       },
@@ -296,9 +297,9 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
         // 检测是否从线性区进入饱和区
         type: 'linear_to_saturation',
         condition: (v: IVector) => {
-          const Vd = v.get(this._drainNode);
-          const Vg = v.get(this._gateNode);
-          const Vs = v.get(this._sourceNode);
+          const Vd = v.get(drainIndex);
+          const Vg = v.get(gateIndex);
+          const Vs = v.get(sourceIndex);
           const Vds = Vd - Vs;
           const Vgs = Vg - Vs;
           return (Vgs - this._mosfetParams.Vth) - Vds;
@@ -333,18 +334,20 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
    */
   private _determineOperatingRegion(Vgs: number, Vds: number): MOSFETRegion {
     const { Vth } = this._mosfetParams;
-    
-    // 截止区判断
-    if (Vgs < Vth) {
-      return Vgs > Vth - 5 * IntelligentMOSFET.VT ? 
-             MOSFETRegion.SUBTHRESHOLD : 
-             MOSFETRegion.CUTOFF;
+    const transitionWidth = 5 * IntelligentMOSFET.VT; // 5 * 26mV = 130mV transition region
+
+    // Smooth transition around Vth
+    if (Vgs < Vth - transitionWidth) {
+        return MOSFETRegion.CUTOFF;
+    }
+    if (Vgs > Vth + transitionWidth) {
+        // On region
+        const Vdsat = Vgs - Vth;
+        return Vds < Vdsat ? MOSFETRegion.LINEAR : MOSFETRegion.SATURATION;
     }
     
-    // 导通时：线性区 vs 饱和区
-    const VdsatApprox = Vgs - Vth;
-    
-    return Vds < VdsatApprox ? MOSFETRegion.LINEAR : MOSFETRegion.SATURATION;
+    // Subthreshold/Transition region
+    return MOSFETRegion.SUBTHRESHOLD;
   }
 
   /**
@@ -355,21 +358,28 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
     Vds: number, 
     region: MOSFETRegion
   ) {
-    const { Vth, Kp, lambda } = this._mosfetParams;
+    const { Vth, Kp, lambda, Roff } = this._mosfetParams;
     
     switch (region) {
       case MOSFETRegion.CUTOFF:
-        return { Id: 0, Ig: 0, Is: 0 };
+        // In cutoff, model as a large resistor Roff.
+        // This is CRITICAL for numerical stability, especially during DC analysis,
+        // as it prevents the matrix from becoming singular.
+        const Id_off = Vds / Roff;
+        return { Id: Id_off, Ig: 0, Is: -Id_off };
         
       case MOSFETRegion.SUBTHRESHOLD:
         // 亚阈值传导 (指数特性)
-        const Isub = Kp * Math.exp((Vgs - Vth) / (2 * IntelligentMOSFET.VT));
+        const expArgUnsafe = (Vgs - Vth) / (2 * IntelligentMOSFET.VT);
+        const expArg = Math.max(-50, Math.min(50, expArgUnsafe)); // 限制范围
+        const Isub = Kp * Math.exp(expArg) * (1 - Math.exp(-Vds / IntelligentMOSFET.VT));
         return { Id: Isub * (1 + lambda * Vds), Ig: 0, Is: -Isub };
         
       case MOSFETRegion.LINEAR:
         // 线性区 (欧姆区)
         const VgsEff = Vgs - Vth;
-        const Id_lin = Kp * VgsEff * Vds - 0.5 * Kp * Vds * Vds;
+        // 增加平滑处理，避免 Vds 接近 0 时出现数值问题
+        const Id_lin = Kp * (VgsEff * Vds - 0.5 * Vds * Vds);
         return { Id: Id_lin * (1 + lambda * Vds), Ig: 0, Is: -Id_lin };
         
       case MOSFETRegion.SATURATION:
@@ -391,48 +401,59 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
     Vds: number, 
     region: MOSFETRegion
   ) {
-    const { Vth, Kp, lambda } = this._mosfetParams;
-    
+    const { Vth, Kp, lambda, Roff } = this._mosfetParams;
+    let gm = 0;
+    let gds = IntelligentMOSFET.MIN_CONDUCTANCE;
+
     switch (region) {
       case MOSFETRegion.CUTOFF:
-        return {
-          gm: 0,
-          gds: IntelligentMOSFET.MIN_CONDUCTANCE,
-          gmbs: 0
-        };
+        gm = 0;
+        // The conductance is 1/Roff. This provides a stable, non-zero value.
+        gds = 1 / Roff;
+        break;
         
       case MOSFETRegion.SUBTHRESHOLD:
-        const gm_sub = Kp * Math.exp((Vgs - Vth) / (2 * IntelligentMOSFET.VT)) / (2 * IntelligentMOSFET.VT);
-        return {
-          gm: gm_sub,
-          gds: gm_sub * lambda,
-          gmbs: 0
-        };
+        const n = 2; // Subthreshold slope factor
+        const expArg = (Vgs - Vth) / (n * IntelligentMOSFET.VT);
+        const I0 = Kp * (n * IntelligentMOSFET.VT)**2;
+        // Clamp the argument to prevent overflow
+        if (expArg < 50) { 
+            const expVal = Math.exp(expArg);
+            const term = (1 - Math.exp(-Vds / IntelligentMOSFET.VT));
+            gm = (I0 / (n * IntelligentMOSFET.VT)) * expVal * term;
+            gds = (I0 / IntelligentMOSFET.VT) * expVal * Math.exp(-Vds / IntelligentMOSFET.VT);
+        } else {
+            gm = 1e12; // Large but not infinite
+            gds = 1e-9;
+        }
+        break;
         
       case MOSFETRegion.LINEAR:
         const VgsEff = Vgs - Vth;
-        const gm_lin = Kp * Vds * (1 + lambda * Vds);
-        const gds_lin = Kp * (VgsEff - Vds) * (1 + lambda * Vds) + 
-                        Kp * VgsEff * Vds * lambda;
-        return {
-          gm: gm_lin,
-          gds: Math.max(gds_lin, IntelligentMOSFET.MIN_CONDUCTANCE),
-          gmbs: 0
-        };
+        gm = Kp * Vds * (1 + lambda * Vds);
+        gds = Kp * (VgsEff - Vds) * (1 + lambda * Vds) + 
+              Kp * VgsEff * Vds * lambda;
+        break;
         
       case MOSFETRegion.SATURATION:
         const VgsEff_sat = Vgs - Vth;
-        const gm_sat = Kp * VgsEff_sat * (1 + lambda * Vds);
-        const gds_sat = 0.5 * Kp * VgsEff_sat * VgsEff_sat * lambda;
-        return {
-          gm: gm_sat,
-          gds: Math.max(gds_sat, IntelligentMOSFET.MIN_CONDUCTANCE),
-          gmbs: 0
-        };
+        gm = Kp * VgsEff_sat * (1 + lambda * Vds);
+        gds = 0.5 * Kp * VgsEff_sat * VgsEff_sat * lambda;
+        break;
         
       default:
         throw new Error(`Unknown MOSFET region: ${region}`);
     }
+
+    // Final validation to prevent NaN/Infinity
+    gm = isFinite(gm) ? gm : 1e12;
+    gds = isFinite(gds) && gds > 0 ? gds : IntelligentMOSFET.MIN_CONDUCTANCE;
+
+    return {
+      gm,
+      gds,
+      gmbs: 0 // Not modeled yet
+    };
   }
 
   /**
@@ -451,62 +472,28 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
   }
 
   /**
-   * 生成 MNA 印花
+   * 生成 MNA 印花 (DEPRECATED)
    */
-  private _generateMNAStamp(smallSignal: any, capacitance: any): MatrixStamp {
-    const { gm, gds } = smallSignal;
-    const totalGds = gds + this._gminConductance;
-    const entries: StampEntry[] = [];
-    
-    // DC 印花：受控电流源模型
-    // Id = gm * Vgs + gds * Vds
-    
-    // 漏极方程：Id = gm*(Vg-Vs) + gds*(Vd-Vs)
-    entries.push(
-      { row: this._drainNode, col: this._gateNode, value: gm },     // dId/dVg
-      { row: this._drainNode, col: this._drainNode, value: totalGds },   // dId/dVd  
-      { row: this._drainNode, col: this._sourceNode, value: -(gm + totalGds) }, // dId/dVs
-      
-      // 源极方程：Is = -Id
-      { row: this._sourceNode, col: this._gateNode, value: -gm },
-      { row: this._sourceNode, col: this._drainNode, value: -totalGds },
-      { row: this._sourceNode, col: this._sourceNode, value: gm + totalGds }
-    );
-    
-    // TODO: 添加电容印花 (需要时域信息)
-    
-    return {
-      entries,
-      type: StampType.NONLINEAR,
-      isLinear: false,
-      conditionEstimate: 1.0 / gds
-    };
+  /*
+  private _generateMNAStamp(smallSignal: any, _capacitance: any, nodeMap: Map<string, number>): MatrixStamp {
+    // ... (This logic is now inside assemble) ...
   }
+  */
 
   /**
-   * 计算右侧向量贡献
+   * 计算右侧向量贡献 (DEPRECATED)
    */
+  /*
   private _computeRHSContribution(
     dcAnalysis: any, 
     smallSignal: any,
     Vgs: number,
-    Vds: number
+    Vds: number,
+    nodeMap: Map<string, number>
   ): { index: number, value: number }[] {
-    const { Id } = dcAnalysis;
-    const { gm, gds } = smallSignal;
-    
-    // The linearized model at the current operating point is:
-    // I_linear = gm * Vgs + gds * Vds
-    // The RHS contribution is the current source that corrects the error between the nonlinear model and the linear approximation.
-    // I_eq = Id_nonlinear - I_linear
-    
-    const Ieq = Id - (gm * Vgs + gds * Vds);
-
-    return [
-        { index: this._drainNode, value: -Ieq },
-        { index: this._sourceNode, value: Ieq }
-    ];
+    // ... (This logic is now inside assemble) ...
   }
+  */
 
   /**
    * 创建新的设备状态
@@ -542,12 +529,18 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
   /**
    * MOSFET 特定收敛检查
    */
-  private _checkMOSFETSpecificConvergence(deltaV: VoltageVector) {
-    const currentRegion = this._currentState.internalStates['region'] as MOSFETRegion;
+  private _checkMOSFETSpecificConvergence(deltaV: VoltageVector, nodeMap: Map<string, number>) {
+    const gateIndex = nodeMap.get(this._gateNode);
+    const sourceIndex = nodeMap.get(this._sourceNode);
+    const drainIndex = nodeMap.get(this._drainNode);
+
+    if (gateIndex === undefined || sourceIndex === undefined || drainIndex === undefined) {
+      return { regionStable: false, confidence: 0.1 };
+    }
     
     // 检查工作区域是否稳定
-    const deltaVgs = deltaV.get(this._gateNode) - deltaV.get(this._sourceNode);
-    const deltaVds = deltaV.get(this._drainNode) - deltaV.get(this._sourceNode);
+    const deltaVgs = deltaV.get(gateIndex) - deltaV.get(sourceIndex);
+    const deltaVds = deltaV.get(drainIndex) - deltaV.get(sourceIndex);
     
     // 如果电压变化可能导致区域切换，降低置信度
     const regionStable = Math.abs(deltaVgs) < IntelligentMOSFET.SWITCH_THRESHOLD &&
@@ -561,13 +554,22 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
   /**
    * MOSFET 特定步长限制
    */
-  protected override _applyDeviceSpecificLimits(deltaV: VoltageVector): void {
+  protected override _applyDeviceSpecificLimits(deltaV: VoltageVector, nodeMap: Map<string, number>): void {
+    const gateIndex = nodeMap.get(this._gateNode);
+    const sourceIndex = nodeMap.get(this._sourceNode);
+
+    if (gateIndex === undefined || sourceIndex === undefined) {
+      return;
+    }
+
     // 限制栅源电压变化
-    const deltaVgs = deltaV.get(this._gateNode) - deltaV.get(this._sourceNode);
+    const deltaVgs = deltaV.get(gateIndex) - deltaV.get(sourceIndex);
     if (Math.abs(deltaVgs) > IntelligentMOSFET.MAX_VOLTAGE_STEP) {
       const scale = IntelligentMOSFET.MAX_VOLTAGE_STEP / Math.abs(deltaVgs);
       
       // 缩放所有节点电压变化
+      // Note: This is a simple approach. A more sophisticated method might
+      // only scale the relevant node voltages (gate, source).
       for (let i = 0; i < deltaV.size; i++) {
         deltaV.set(i, deltaV.get(i) * scale);
       }
@@ -603,7 +605,7 @@ export class IntelligentMOSFET extends IntelligentDeviceModelBase {
   /**
    * 识别 MOSFET 数值挑战
    */
-  private _identifyMOSFETChallenges(dt: number): readonly NumericalChallenge[] {
+  private _identifyMOSFETChallenges(_dt: number): readonly NumericalChallenge[] {
     const challenges: NumericalChallenge[] = [];
     const region = this._currentState.internalStates['region'] as MOSFETRegion;
     

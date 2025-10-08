@@ -24,13 +24,9 @@
  */
 
 import { 
-  VoltageVector, 
-  CurrentVector, 
-  IMNASystem,
   Time,
   IEvent,
-  Interpolator,
-  EventType,
+  IVector,
 } from '../../types/index';
 import { Vector } from '../../math/sparse/vector';
 // ADDED: Import the base interface
@@ -47,7 +43,7 @@ export interface LoadResult {
   readonly matrixStamp: MatrixStamp;
   
   /** 右侧向量贡献 */
-  readonly rhsContribution: readonly { index: number, value: number }[];
+  readonly rhsContribution: { index: number, value: number }[];
   
   /** 设备当前状态 */
   readonly deviceState: DeviceState;
@@ -105,10 +101,10 @@ export interface DeviceState {
   readonly time: Time;
   
   /** 设备端电压 */
-  readonly voltage: VoltageVector;
+  readonly voltage: Vector;
   
   /** 设备端电流 */
-  readonly current: CurrentVector;
+  readonly current: Vector;
   
   /** 设备工作模式 */
   readonly operatingMode: string;
@@ -226,31 +222,18 @@ export interface IIntelligentDeviceModel extends ComponentInterface {
   readonly deviceType: string;
   
   /** 设备节点连接 (重载为数值索引，智能设备在数值计算层面工作) */
-  readonly nodes: readonly number[];
+  readonly nodes: readonly string[];
   
   /** 设备参数 */
   readonly parameters: Readonly<Record<string, number>>;
   
   /**
-   * 🔥 核心方法：载入设备到 MNA 系统
-   * 
-   * 这是设备模型的核心方法，负责：
-   * 1. 计算设备在当前状态下的线性化模型
-   * 2. 生成 MNA 矩阵印花 (stamp)
-   * 3. 计算右侧向量贡献
-   * 4. 更新设备内部状态
-   * 
-   * @param voltage 当前节点电压向量
-   * @returns 载入结果，包含矩阵印花和状态信息
-   */
-  load(voltage: VoltageVector): LoadResult;
-
-  /**
    * ADDED: 获取设备在给定电压下的工作模式
    * @param voltage 节点电压向量
+   * @param nodeMap 可选的节点映射，用于将字符串节点名转换为索引
    * @returns 代表工作模式的字符串
    */
-  getOperatingMode(voltage: VoltageVector): string;
+  getOperatingMode(voltage: IVector, nodeMap?: Map<string, number>): string;
   
   /**
    * 🎯 收敛性检查：物理意义驱动的 Newton 收敛判断
@@ -264,7 +247,7 @@ export interface IIntelligentDeviceModel extends ComponentInterface {
    * @param deltaV Newton 迭代的电压变化量
    * @returns 详细的收敛分析结果
    */
-  checkConvergence(deltaV: VoltageVector): ConvergenceInfo;
+  checkConvergence(deltaV: IVector, nodeMap?: Map<string, number>): ConvergenceInfo;
   
   /**
    * 🛡️ Newton 步长限制：防止数值发散的智能控制
@@ -278,7 +261,7 @@ export interface IIntelligentDeviceModel extends ComponentInterface {
    * @param deltaV 原始 Newton 步长
    * @returns 经过智能限制的安全步长
    */
-  limitUpdate(deltaV: VoltageVector): VoltageVector;
+  limitUpdate(deltaV: IVector, nodeMap?: Map<string, number>): IVector;
   
   /**
    * 🔮 状态预测：辅助积分器的智能时间步长控制
@@ -346,9 +329,9 @@ export abstract class IntelligentDeviceModelFactory {
    * 创建 MOSFET 智能模型
    */
   static createMOSFET(
-    deviceId: string,
-    nodes: [number, number, number], // [Drain, Gate, Source]
-    parameters: MOSFETParameters
+    _deviceId: string,
+    _nodes: [number, number, number], // [Drain, Gate, Source]
+    _parameters: MOSFETParameters
   ): IIntelligentDeviceModel {
     throw new Error('Factory implementation not loaded. Import from intelligent_device_factory.ts');
   }
@@ -357,9 +340,9 @@ export abstract class IntelligentDeviceModelFactory {
    * 创建二极管智能模型  
    */
   static createDiode(
-    deviceId: string,
-    nodes: [number, number], // [Anode, Cathode]
-    parameters: DiodeParameters
+    _deviceId: string,
+    _nodes: [number, number], // [Anode, Cathode]
+    _parameters: DiodeParameters
   ): IIntelligentDeviceModel {
     throw new Error('Factory implementation not loaded. Import from intelligent_device_factory.ts');
   }
@@ -415,7 +398,7 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
   constructor(
     public readonly deviceId: string,
     public readonly deviceType: string,
-    public readonly nodes: readonly number[],
+    public readonly nodes: readonly string[],
     public readonly parameters: Readonly<Record<string, number>>
   ) {
     // 初始化设备状态
@@ -498,17 +481,18 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
    * 对于智能设备，主要动作是更新其内部状态
    */
   handleEvent(event: IEvent, context: AssemblyContext): void {
-    if (event.type === EventType.StateChange && context.solutionVector) {
-        const currentMode = this.getOperatingMode(context.solutionVector);
+    // 检查是否是和自己相关的状态改变事件
+    if (event.component === this && context.solutionVector) {
+        const newMode = this.getOperatingMode(context.solutionVector);
         
-        // 更新当前状态的工作模式
+        // 更新当前状态的工作模式和时间
         this._currentState = {
             ...this._currentState,
-            operatingMode: currentMode,
-            time: event.time, // 同步事件时间
+            operatingMode: newMode,
+            time: event.time,
         };
         
-        console.log(`Handled event for ${this.name} at time ${event.time}: new state is ${currentMode}`);
+        console.log(`[${this.name}] handled event at t=${event.time.toExponential(3)}s. New mode: ${newMode}`);
     }
   }
 
@@ -536,13 +520,6 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
     
     if (this.nodes.length === 0) {
       errors.push('Device must have at least one node');
-    }
-    
-    // 检查节点索引的有效性
-    for (const nodeIndex of this.nodes) {
-      if (!Number.isInteger(nodeIndex) || nodeIndex < 0) {
-        errors.push(`Invalid node index: ${nodeIndex}. Must be non-negative integer.`);
-      }
     }
     
     return {
@@ -573,18 +550,33 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
     return undefined;
   }
 
-  abstract load(voltage: VoltageVector): LoadResult;
+  /**
+   * 🔥 核心方法：载入设备到 MNA 系统
+   * 
+   * 这是设备模型的核心方法，负责：
+   * 1. 计算设备在当前状态下的线性化模型
+   * 2. 生成 MNA 矩阵印花 (stamp)
+   * 3. 计算右侧向量贡献
+   * 4. 更新设备内部状态
+   * 
+   * @param voltage 当前节点电压向量
+   * @returns 载入结果，包含矩阵印花和状态信息
+   * @deprecated The `load` method is deprecated and will be removed. Use `assemble` instead.
+   */
+  load(_voltage: IVector): LoadResult {
+      throw new Error(`The 'load' method is deprecated for device ${this.name}. Use the 'assemble' method instead.`);
+  };
   
   /**
    * ADDED: 新增的抽象方法，子类必须实现
    * 获取设备在给定电压下的工作模式
    */
-  abstract getOperatingMode(voltage: VoltageVector): string;
+  abstract getOperatingMode(voltage: IVector, nodeMap?: Map<string, number>): string;
 
   /**
    * 🎯 通用收敛性检查实现
    */
-  checkConvergence(deltaV: VoltageVector): ConvergenceInfo {
+  checkConvergence(deltaV: IVector, nodeMap?: Map<string, number>): ConvergenceInfo {
     const startTime = performance.now();
     
     try {
@@ -593,7 +585,7 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
       const relativeDelta = this._getRelativeChange(deltaV);
       
       // 2. 物理合理性检查
-      const physicalCheck = this._checkPhysicalConsistency(deltaV);
+      const physicalCheck = this._checkPhysicalConsistency(deltaV, nodeMap);
       
       // 3. 数值稳定性评估
       const stabilityCheck = this._assessNumericalStability(deltaV);
@@ -628,8 +620,9 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
   /**
    * 🛡️ 通用 Newton 步长限制实现
    */
-  limitUpdate(deltaV: VoltageVector): VoltageVector {
-    const limited = deltaV.clone();
+  limitUpdate(deltaV: IVector, nodeMap?: Map<string, number>): IVector {
+    // Since IVector doesn't have clone, we create a new Vector from it.
+    const limited = Vector.from(deltaV.toArray());
     
     // 1. 物理边界限制
     this._applyPhysicalLimits(limited);
@@ -638,7 +631,7 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
     this._applyStabilityLimits(limited);
     
     // 3. 器件特定限制 (子类可重写)
-    this._applyDeviceSpecificLimits(limited);
+    this._applyDeviceSpecificLimits(limited, nodeMap);
     
     return limited;
   }
@@ -700,7 +693,7 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
 
   // === 保护方法：子类可访问的通用功能 ===
 
-  protected _getMaxAbsValue(vector: VoltageVector): number {
+  protected _getMaxAbsValue(vector: IVector): number {
     let max = 0;
     for (let i = 0; i < vector.size; i++) {
       max = Math.max(max, Math.abs(vector.get(i)));
@@ -708,25 +701,27 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
     return max;
   }
 
-  protected _getRelativeChange(deltaV: VoltageVector): number {
+  protected _getRelativeChange(deltaV: IVector): number {
     const deltaNorm = deltaV.norm();
     const stateNorm = Math.max(this._currentState.voltage.norm(), 1e-12);
     return deltaNorm / stateNorm;
   }
 
-  protected _checkPhysicalConsistency(deltaV: VoltageVector): PhysicalConsistency {
-    const newVoltage = this._currentState.voltage.plus(deltaV);
+  protected _checkPhysicalConsistency(deltaV: IVector, nodeMap?: Map<string, number>): PhysicalConsistency {
+    // We need to perform vector addition, so we ensure we have a Vector object.
+    const currentVoltage = this._currentState.voltage.clone();
+    const newVoltage = currentVoltage.plus(deltaV);
     
     return {
       voltageValid: this._isVoltageInRange(newVoltage),
-      currentValid: this._isCurrentReasonable(newVoltage),
+      currentValid: this._isCurrentReasonable(newVoltage, nodeMap),
       powerConsistent: this._checkPowerConsistency(newVoltage),
-      operatingRegionValid: this._isOperatingRegionValid(newVoltage),
+      operatingRegionValid: this._isOperatingRegionValid(newVoltage, nodeMap),
       details: []
     };
   }
 
-  protected _assessNumericalStability(deltaV: VoltageVector): number {
+  protected _assessNumericalStability(deltaV: IVector): number {
     // 评估数值稳定性 (0-1, 1为最稳定)
     const deltaRate = this._getRelativeChange(deltaV);
     const convergenceTrend = this._analyzeConvergenceTrend();
@@ -788,7 +783,7 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
   }
 
   private _generateDiagnostics(
-    deltaV: VoltageVector,
+    deltaV: IVector,
     physicalCheck: PhysicalConsistency,
     stability: number
   ): ConvergenceDiagnostics {
@@ -801,7 +796,7 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
     };
   }
 
-  private _isVoltageInRange(voltage: VoltageVector): boolean {
+  private _isVoltageInRange(voltage: IVector): boolean {
     // 检查电压是否在合理范围内 (例如 ±1kV)
     for (let i = 0; i < voltage.size; i++) {
       const v = voltage.get(i);
@@ -810,19 +805,19 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
     return true;
   }
 
-  private _isCurrentReasonable(_voltage: VoltageVector): boolean {
+  private _isCurrentReasonable(_voltage: IVector, _nodeMap?: Map<string, number>): boolean {
     // 基于电压估算电流是否合理
     // 简化实现：假设设备不会产生超过 1kA 的电流
     return true; // TODO: 实现具体的电流检查逻辑
   }
 
-  private _checkPowerConsistency(_voltage: VoltageVector): boolean {
+  private _checkPowerConsistency(_voltage: IVector): boolean {
     // 检查功率是否守恒
     // 简化实现：总是返回 true
     return true; // TODO: 实现功率一致性检查
   }
 
-  private _isOperatingRegionValid(_voltage: VoltageVector): boolean {
+  private _isOperatingRegionValid(_voltage: IVector, _nodeMap?: Map<string, number>): boolean {
     // 检查器件是否在有效工作区域
     return true; // 子类应重写此方法
   }
@@ -859,7 +854,7 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
   }
 
   // 步长限制方法
-  protected _applyPhysicalLimits(deltaV: VoltageVector): void {
+  protected _applyPhysicalLimits(deltaV: Vector): void {
     // 限制单步电压变化不超过 10V
     const MAX_VOLTAGE_STEP = 10.0;
     
@@ -871,7 +866,7 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
     }
   }
 
-  protected _applyStabilityLimits(deltaV: VoltageVector): void {
+  protected _applyStabilityLimits(deltaV: Vector): void {
     // 基于数值稳定性的步长限制
     const stabilityFactor = this._assessNumericalStability(deltaV);
     
@@ -883,7 +878,7 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
     }
   }
 
-  protected _applyDeviceSpecificLimits(_deltaV: VoltageVector): void {
+  protected _applyDeviceSpecificLimits(_deltaV: Vector, _nodeMap?: Map<string, number>): void {
     // 子类重写实现设备特定的限制
   }
 
@@ -936,8 +931,8 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
  * ADDED: 關鍵的類型守衛函數
  * 這個函數將被引擎用來區分智能設備和基礎組件
  * 
- * 檢查邏輯：智能設備必須具有 'load' 方法
+ * 檢查邏輯：智能設備必須具有 'assemble' 方法
  */
 export function isIntelligentDeviceModel(component: ComponentInterface): component is IIntelligentDeviceModel {
-  return 'load' in component && typeof (component as any).load === 'function';
+  return 'assemble' in component && typeof (component as any).assemble === 'function';
 }
