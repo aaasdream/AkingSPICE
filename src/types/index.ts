@@ -199,7 +199,7 @@ export interface IIntegrator {
    * 重新啟動積分器
    * @param initialState 初始狀態
    */
-  restart(initialState: IntegratorState): void;
+  restart(initialState: IntegratorState): Promise<void>;
   
   /**
    * 清空積分器狀態

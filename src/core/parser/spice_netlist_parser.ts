@@ -786,7 +786,7 @@ export class SpiceNetlistParser {
                   // 理想情况下，智能设备也应该接受 string[]。
                   return SmartDeviceFactory.createDiode(
                       element.name,
-                      [0, 1], // 占位符，因为接口需要 number[]，这是架构问题
+                      [nodes[0], nodes[1]],
                       { /* ... model params ... */ }
                   );
 
@@ -795,7 +795,7 @@ export class SpiceNetlistParser {
                   // [修正] 节点问题同上
                   return SmartDeviceFactory.createMOSFET(
                       element.name,
-                      [0, 1, 2], // 占位符
+                      [nodes[0], nodes[1], nodes[2]],
                       { /* ... model params ... */ }
                   );
               
@@ -940,5 +940,141 @@ export class SpiceNetlistParser {
    */
   reset(): void {
     this._reset();
+  }
+
+  private _parseDevice(line: string, tokens: string[]): void {
+    const deviceId = tokens[0];
+    const deviceType = deviceId[0].toUpperCase();
+    const nodes = tokens.slice(1, tokens.length - 1);
+    const modelName = tokens[tokens.length - 1];
+
+    switch (deviceType) {
+      // ... (R, L, C, V, I cases)
+
+      case 'D': {
+        const model = this._models[modelName] as DiodeParameters | undefined;
+        if (!model) {
+          this._errors.push(`Model ${modelName} not found for diode ${deviceId}`);
+          return;
+        }
+        const diode = SmartDeviceFactory.createDiode(
+          deviceId,
+          [nodes[0], nodes[1]],
+          model
+        );
+        this._circuit.addDevice(diode);
+        break;
+      }
+
+      case 'M': {
+        const model = this._models[modelName] as MOSFETParameters | undefined;
+        if (!model) {
+          this._errors.push(`Model ${modelName} not found for MOSFET ${deviceId}`);
+          return;
+        }
+        const mosfet = SmartDeviceFactory.createMOSFET(
+          deviceId,
+          [nodes[0], nodes[1], nodes[2]],
+          model
+        );
+        this._circuit.addDevice(mosfet);
+        break;
+      }
+
+      // ... (other cases)
+    }
+  }
+
+  private _parseSubcircuitDefinition(lines: string[], startIndex: number): number {
+    let i = startIndex;
+    const line = lines[i];
+    if (!line) return i;
+
+    const tokens = line.split(/\s+/);
+    if (tokens.length < 2) return i;
+
+    const subcktName = tokens[0].toUpperCase();
+    const instanceId = `X${i}`;
+    const instanceNodes = tokens.slice(1);
+
+    // 处理参数
+    const params: { [key: string]: number } = {};
+    for (let j = 2; j < tokens.length; j++) {
+      const paramTokens = tokens[j].split(/=/);
+      if (paramTokens.length === 2) {
+        const paramName = paramTokens[0].trim();
+        const paramValue = this._evaluateExpression(paramTokens[1].trim());
+        params[paramName] = paramValue;
+      }
+    }
+
+    // 尝试作为子电路实例化
+    const subcktComponent = this._createSubcircuitComponent(
+      instanceId,
+      instanceNodes,
+      subcktName,
+      params
+    );
+    if (subcktComponent) {
+      this._circuit.addComponent(subcktComponent);
+    } else {
+      // Fallback for intelligent devices if not found as regular components
+      const model = this._models[subcktName];
+      if (model) {
+        if (instanceId.startsWith('D') && model.hasOwnProperty('Is')) {
+          this._circuit.addDevice(SmartDeviceFactory.createDiode(
+            instanceId,
+            [instanceNodes[0], instanceNodes[1]],
+            model as DiodeParameters
+          ));
+        } else if (instanceId.startsWith('M') && model.hasOwnProperty('Vth')) {
+          this._circuit.addDevice(SmartDeviceFactory.createMOSFET(
+            instanceId,
+            [instanceNodes[0], instanceNodes[1], instanceNodes[2]],
+            model as MOSFETParameters
+          ));
+        }
+      }
+    }
+    i++; // Move to the next line
+
+    return i;
+  }
+
+  private _createSubcircuitComponent(
+    id: string,
+    nodes: string[],
+    subcktName: string,
+    params: { [key: string]: number }
+  ): Component | undefined {
+    const subckt = this._subcircuits[subcktName];
+    if (!subckt) {
+      this._errors.push(`Subcircuit definition for '${subcktName}' not found.`);
+      return undefined;
+    }
+
+    // This is a simplified placeholder. A real implementation would involve
+    // creating a new Circuit object for the subcircuit's contents and
+    // mapping the external nodes to the internal nodes.
+    // For now, we'll try to handle some known intelligent devices as a special case.
+
+    if (subcktName.toLowerCase().includes('diode')) {
+      return SmartDeviceFactory.createDiode(
+        id,
+        [nodes[0], nodes[1]],
+        { Is: 1e-14, n: 1.0, ...params }
+      );
+    }
+
+    if (subcktName.toLowerCase().includes('mosfet')) {
+      return SmartDeviceFactory.createMOSFET(
+        id,
+        [nodes[0], nodes[1], nodes[2]],
+        { Vth: 1.5, Kp: 0.1, ...params }
+      );
+    }
+
+    this._warnings.push(`Subcircuit instantiation for '${subcktName}' is not fully implemented.`);
+    return undefined;
   }
 }

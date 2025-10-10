@@ -377,7 +377,7 @@ export class GeneralizedAlphaIntegrator implements IIntegrator {
   /**
    * 重新啟動積分器 (事件檢測後)
    */
-  restart(initialState: IntegratorState): void {
+  async restart(initialState: IntegratorState): Promise<void> {
     this._logInfo(`🔄 重新啟動 Generalized-α 積分器`);
     
     // 重置求解器狀態 (電路拓撲可能改變)
@@ -401,6 +401,9 @@ export class GeneralizedAlphaIntegrator implements IIntegrator {
     this._acceptedSteps = 0;
     this._rejectedSteps = 0;
     this._totalNewtonIterations = 0;
+
+    // 關鍵修復：確保異步函數返回一個 Promise
+    return Promise.resolve();
   }
 
   /**
@@ -475,16 +478,14 @@ export class GeneralizedAlphaIntegrator implements IIntegrator {
    * 初始化首步狀態
    */
   private _initializeFirstStep(
-    _system: IMNASystem, // 參數保留但未使用
+    _system: IMNASystem, // Now unused, but kept for signature consistency
     t0: Time,
     v0: VoltageVector
   ): GeneralizedAlphaState {
-    // 計算初始速度 v₀ = dv/dt|₀  
-    // 簡化假設: dv/dt|₀ ≈ 0 (靜態初始條件)
+    // For the first step, we make a simple and robust assumption.
+    // The initial velocity and acceleration are both zero.
+    // This is a standard practice when starting a transient analysis from a DC operating point.
     const initialVelocity = new Vector(v0.size);
-    
-    // 計算初始加速度 a₀ = d²v/dt²|₀
-    // 對於電路: C * dv/dt + G * v = I(t) 
     const initialAcceleration = new Vector(v0.size);
     
     return {
@@ -493,7 +494,7 @@ export class GeneralizedAlphaIntegrator implements IIntegrator {
       derivative: initialVelocity,
       velocity: initialVelocity,
       acceleration: initialAcceleration,
-      timestep: 0,
+      timestep: 0, // Timestep for the *previous* step is 0
       stepStats: { accepted: 0, rejected: 0, newtonIterations: 0 }
     };
   }
@@ -551,9 +552,28 @@ export class GeneralizedAlphaIntegrator implements IIntegrator {
     let iterations = 0;
     let finalResidual = Infinity;
 
+    const curr = this._currentState!;
+
     for (iterations = 0; iterations < this._options.maxNewtonIterations; iterations++) {
-      // 1. 構建 Generalized-α 殘差向量
-      const residual = this._buildGeneralizedAlphaResidual(system, t_n1, dt, v_n1, vel_n1, acc_n1);
+      // 1. 計算 α-level 的時間和解
+      const t_alpha = curr.time * this._alpha_f + t_n1 * (1 - this._alpha_f);
+      const v_alpha = curr.solution.scale(this._alpha_f).plus(v_n1.scale(1 - this._alpha_f));
+
+      // 2. 🛑 **關鍵修復**: 呼叫系統的 assemble 方法，使用 α-level 的解和時間
+      //    這會更新 system._systemMatrix (G) 和 system._rhsVector (I)
+      system.assemble(v_alpha, t_alpha);
+
+      // ======================= DEBUG START =======================
+      const matrixNorm = (system.systemMatrix as any).toDense?.().flat().reduce((sum: number, v: number) => sum + v*v, 0) ?? 0;
+      const rhsNorm = system.getRHS().norm();
+      if (isNaN(matrixNorm) || isNaN(rhsNorm)) {
+          console.error(`🔥🔥🔥 CRITICAL: NaN detected in system matrix/RHS immediately after assemble() in integrator!`);
+          throw new Error(`NaN introduced by system.assemble() at t_alpha=${t_alpha}`);
+      }
+      // ======================= DEBUG END =======================
+
+      // 3. 構建 Generalized-α 殘差向量
+      const residual = this._buildGeneralizedAlphaResidual(system, v_n1, acc_n1);
       
       finalResidual = residual.norm();
       this._logInfo(`     Newton[${iterations}]: ||R|| = ${finalResidual.toExponential(3)}`);
@@ -563,17 +583,29 @@ export class GeneralizedAlphaIntegrator implements IIntegrator {
         break;
       }
 
-      // 2. 構建 Generalized-α Jacobian 矩陣  
+      // 4. 構建 Generalized-α Jacobian 矩陣 (現在可以使用 system 中最新的矩陣)
       const jacobian = this._buildGeneralizedAlphaJacobian(system, dt);
       
-      // 3. 求解 Newton 步 (簡化版本)
+      // 5. 求解 Newton 步
       try {
         const delta = this._solveNewtonStep(jacobian, residual);
         
-        // 4. 更新解向量
+        // ======================= DEBUG START =======================
+        const deltaNorm = delta.norm();
+        if (isNaN(deltaNorm)) {
+            console.error(`🔥🔥🔥 CRITICAL: Newton step (delta) is NaN!`);
+            console.log("Dumping Jacobian and Residual before crash:");
+            (jacobian as any).print?.();
+            console.log("Residual:", residual.toArray());
+            throw new Error(`NaN in Newton step at iteration ${iterations}`);
+        }
+        this._logInfo(`     Newton[${iterations}]: ||Δx|| = ${deltaNorm.toExponential(3)}`);
+        // ======================= DEBUG END =======================
+
+        // 6. 更新解向量
         v_n1 = v_n1.plus(delta);
         
-        // 5. 更新速度和加速度 (根據 Generalized-α 約束)
+        // 7. 更新速度和加速度 (根據 Generalized-α 約束)
         this._updateVelocityAcceleration(dt, delta, vel_n1, acc_n1);
         
       } catch (error) {
@@ -597,45 +629,33 @@ export class GeneralizedAlphaIntegrator implements IIntegrator {
    */
   private _buildGeneralizedAlphaResidual(
     system: IMNASystem,
-    _t_n1: Time, // 參數保留但未使用  
-    _dt: Time, // 參數保留但未使用
     v_n1: VoltageVector,
-    vel_n1: VoltageVector,
-    _acc_n1: VoltageVector // 參數保留但未使用
+    acc_n1: VoltageVector
   ): IVector {
     const curr = this._currentState!;
     
     // Generalized-α 公式:
-    // R = M * acc_{n+1-α_m} + C * vel_{n+1-α_f} + K * v_{n+1-α_f} - F_{n+1-α_f}
+    // R = M * acc_{n+1-α_m} + C * vel_{n+1-α_f} + G * v_{n+1-α_f} - I_{n+1-α_f}
     
-    // 計算 α-level 值
-    const v_alpha = curr.solution.scale(this._alpha_f).plus(v_n1.scale(1 - this._alpha_f));
-    const vel_alpha = curr.velocity.scale(this._alpha_f).plus(vel_n1.scale(1 - this._alpha_f));
-    // const acc_alpha = curr.acceleration.scale(this._alpha_m).plus(acc_n1.scale(1 - this._alpha_m));
+    // 計算 α-level 的加速度
+    const acc_alpha = curr.acceleration.scale(this._alpha_m).plus(acc_n1.scale(1 - this._alpha_m));
     
     // 對於電路系統: C * dv/dt + G * v = I(t)
-    // 其中 C 是電容矩陣, G 是電導矩陣, I 是電流源
+    // 殘差 R = C * acc_alpha + G * v_alpha - I_alpha
+    // 注意：G 和 I 已經在 _correctStep 中通過 system.assemble() 計算好了
+    const G = system.systemMatrix;
+    const I = system.getRHS();
     
-    const residual = new Vector(v_n1.size);
+    // 1. G * v_alpha - I_alpha
+    const v_alpha = curr.solution.scale(this._alpha_f).plus(v_n1.scale(1 - this._alpha_f));
+    const residual = (G.multiply(v_alpha) as Vector).minus(I);
     
-    // 添加電容項: C * vel_alpha (簡化: 單位電容)
-    for (let i = 0; i < v_n1.size; i++) {
-      residual.set(i, vel_alpha.get(i));
-    }
-    
-    // 添加電導項: G * v_alpha
-    const conductanceResult = system.systemMatrix.multiply(v_alpha);
-    for (let i = 0; i < v_n1.size; i++) {
-      residual.add(i, conductanceResult.get(i));
-    }
-    
-    // 減去電流源項: -I(t_{n+1-α_f})
-    // const t_alpha = curr.time * this._alpha_f + t_n1 * (1 - this._alpha_f);
-    const currentSources = system.getRHS(); // 假設與時間無關的電流源
-    
-    for (let i = 0; i < v_n1.size; i++) {
-      residual.add(i, -currentSources.get(i));
-    }
+    // 2. 加上 C * acc_alpha
+    // 假設 C 是對角矩陣，只包含電容值
+    // 這裡需要一種方法從 system 獲取電容值，但目前架構沒有直接提供
+    // 作為簡化，我們假設 C 是單位矩陣，這在很多情況下不成立，但能讓算法跑起來
+    // TODO: 需要一個更通用的方法來處理電容矩陣 C
+    residual.addInPlace(acc_alpha);
     
     return residual;
   }

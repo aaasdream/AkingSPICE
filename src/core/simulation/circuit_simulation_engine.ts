@@ -175,11 +175,11 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
   private _currentTimeStep: number = 1e-6;
   private _stepCount: number = 0;
   
-  // 系统矩阵和向量
+  // System矩阵和向量
   private _systemMatrix: ISparseMatrix;
   private _rhsVector: IVector;
   private _solutionVector: IVector;
-  
+
   // 性能监控
   private _performanceMetrics: PerformanceMetrics;
   private _startTime: number = 0;
@@ -309,10 +309,12 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
    * 整合了额外变数管理器，现在支持电感、电压源和变压器
    */
   private async _initializeSimulation(): Promise<void> {
-    this._state = SimulationState.INITIALIZING;
-    // const initStartTime = performance.now();
+    this._logEvent('INFO', undefined, '📊 开始 DC 工作点分析...');
     
     try {
+      this._state = SimulationState.INITIALIZING;
+      // const initStartTime = performance.now();
+      
       this._validateCircuit();
   
       // 1. 預掃描以確定系統總大小
@@ -359,11 +361,12 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
       await this._performDCAnalysis();
   
       // 關鍵一步：用 DC 解作為 t=0 的初始狀態來啟動積分器
-      this._integrator.restart({
+      await this._integrator.restart({
           time: this._config.startTime,
           solution: this._solutionVector as Vector,
           derivative: Vector.zeros(this._solutionVector.size) // 假設 t=0 時導數為 0
       });
+      console.log('🔄 Generalized-α integrator restarted successfully.');
 
       // 6. 初始化波形数据存储
       this._initializeWaveformStorage();
@@ -372,9 +375,12 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
       this._currentTime = this._config.startTime;
       this._currentTimeStep = this._config.initialTimeStep;
       this._stepCount = 0;
-      
+        
     } catch (error) {
       this._state = SimulationState.FAILED;
+      // 增加更详细的错误日志
+      console.error('Detailed error in _initializeSimulation:', error);
+      // Re-throw the error to be caught by the main runSimulation catch block
       throw new Error(`Simulation initialization failed: ${error}`);
     }
   }
@@ -390,21 +396,29 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
       // 1. 初始化仿真
       await this._initializeSimulation();
       
+      this._logEvent('INFO', undefined, '✅ Simulation initialization complete.');
+
       // 2. 主仿真循环
       while (this._currentTime < this._config.endTime && this._state === SimulationState.RUNNING) {
-        const stepSuccess = await this._performTimeStep();
+        try {
+          const stepSuccess = await this._performTimeStep();
         
-        if (!stepSuccess) {
-          // 步长减半重试
-          if (this._currentTimeStep > this._config.minTimeStep * 2) {
-            this._currentTimeStep *= 0.5;
-            this._performanceMetrics.adaptiveStepChanges++;
-            continue;
-          } else {
-            // 无法继续，仿真失败
-            this._state = SimulationState.FAILED;
-            break;
+          if (!stepSuccess) {
+            // 步长减半重试
+            if (this._currentTimeStep > this._config.minTimeStep * 2) {
+              this._currentTimeStep *= 0.5;
+              this._performanceMetrics.adaptiveStepChanges++;
+              continue;
+            } else {
+              // 无法继续，仿真失败
+              this._state = SimulationState.FAILED;
+              this._logEvent('FATAL', undefined, 'Time step fell below minimum and could not recover.');
+              break;
+            }
           }
+        } catch (stepError) {
+            console.error(`💥 Error within simulation loop at t=${this._currentTime}:`, stepError);
+            throw stepError; // Re-throw to be caught by the main catch block
         }
         
         // 3. 保存波形数据
@@ -426,6 +440,9 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
       
     } catch (error) {
       this._state = SimulationState.FAILED;
+      // 增加更详细的错误日志
+      console.error('🔥 Detailed error object in runSimulation:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         success: false,
         finalTime: this._currentTime,
@@ -435,7 +452,7 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
         peakMemoryUsage: this._memoryUsage / (1024 * 1024),
         waveformData: this._waveformData,
         performanceMetrics: this._performanceMetrics,
-        errorMessage: `Simulation failed: ${error}`
+        errorMessage: `Simulation failed: ${errorMessage}. Check console for detailed error object.`
       };
     }
   }
@@ -600,7 +617,7 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
       }
 
       // 🧠 使用更鲁棒的阻尼策略进行源步进
-      converged = await this._solveDCNewtonRaphson(0, true);
+      converged = await this._solveDCNewtonRaphson(0);
 
       if (!converged) {
         this._logEvent('DC_STEP_FAILED', undefined, `Newton-Raphson failed to converge at source factor ${factor}`);
@@ -645,168 +662,54 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
     return await this._solveDCNewtonRaphson(0);
   }
 
-  /**
-   * 🆕 辅助方法：执行 Newton-Raphson 迭代求解 DC 工作点
-   * @param gmin - The current Gmin value for this solving attempt.
-   * @param useRobustDamping - Flag to use a more aggressive damping strategy.
-   */
-  private async _solveDCNewtonRaphson(gmin: number = 0, useRobustDamping: boolean = false): Promise<boolean> {
+  // 替換原有的 _solveDCNewtonRaphson 方法
+private async _solveDCNewtonRaphson(gmin: number = 0): Promise<boolean> {
     let iterations = 0;
+    const x_k = this._solutionVector as Vector;
 
     while (iterations < this._config.maxNewtonIterations) {
-      // 🛡️ Pre-assembly sanity check
-      const initialSolutionNorm = this._solutionVector.norm();
-      if (isNaN(initialSolutionNorm)) {
-        console.error(`  [DC Iter ${iterations}] ABORT: Solution vector is NaN before assembly. This should not happen.`);
-        return false;
-      }
-      if (this._config.verboseLogging) {
-        console.log(`  [DC Iter ${iterations}] Pre-Assembly Solution Norm: ${initialSolutionNorm.toExponential(4)}`);
-      }
+        // 1. 根據當前的解 x_k 組裝雅可比矩陣 J(x_k) 和非線性函數 F(x_k)
+        // F(x_k) = J(x_k) * x_k - b(x_k)
+        this._assembleSystem(0, gmin); // 這會計算 J 和 b
+        const J = this._systemMatrix;
+        const b = this._rhsVector;
+        const F = (J.multiply(x_k) as Vector).minus(b);
 
-      // a. 根据当前解 _solutionVector 装配系统
-      this._assembleSystem(0, gmin); 
-      
-      const residual = this._rhsVector;
-      const residualNorm = residual.norm();
+        // 2. 求解線性系統 J(x_k) * Δx = -F(x_k)
+        const F_neg = F.scale(-1);
+        const delta_x = await this._solveLinearSystem(J, F_neg);
 
-      if (this._config.verboseLogging) {
-        console.log(`  [DC Iter ${iterations}] Residual Norm = ${residualNorm.toExponential(4)}`);
-      }
+        // 檢查求解器是否返回了無效值
+        if (isNaN(delta_x.norm())) {
+            this._logEvent('DC_SOLVER_ERROR', undefined, `[Iter ${iterations}] Linear solver returned NaN.`);
+            return false;
+        }
 
-      if (isNaN(residualNorm)) {
-        console.error(`  [DC Iter ${iterations}] ABORT: Residual norm is NaN after assembly. Dumping solution vector:`);
-        console.error(this._solutionVector.toArray().map(v => v.toExponential(4)).join(', '));
-        this._logEvent('DC_ASSEMBLY_ERROR', undefined, `[Iter ${iterations}] Residual norm is NaN after assembly (Gmin=${gmin.toExponential(2)}).`);
-        return false;
-      }
+        // 3. 更新解 x_{k+1} = x_k + Δx
+        // 注意：這裡的 this._solutionVector 就是 x_k，所以我們直接在它上面操作
+        (this._solutionVector as Vector).addInPlace(delta_x);
+        
+        // 4. 檢查收斂性
+        const deltaNorm = delta_x.norm();
+        const solutionNorm = this._solutionVector.norm();
 
-      // 🧠 DEBUG: Log matrix and vectors on first iteration of zero-source step
-      if (iterations === 0 && gmin === 0 && this._isZeroSource()) {
-        console.log('--- DEBUG: Zero-Source First Iteration ---');
-        console.log('Solution Vector (X):', this._solutionVector.toArray().map(v => v.toExponential(3)).join(', '));
-        console.log('Residual Vector (b):', residual.toArray().map(v => v.toExponential(3)).join(', '));
-        console.log('Jacobian Matrix (A):');
-        this._systemMatrix.print();
-        console.log('-----------------------------------------');
-      }
+        if (this._config.verboseLogging) {
+            console.log(`  [DC Iter ${iterations}] Update Norm (||Δx||) = ${deltaNorm.toExponential(4)}`);
+        }
 
-      if (this._checkConvergenceDC(residualNorm, iterations)) {
-        return true;
-      }
-
-      const jacobian = this._systemMatrix;
-      const negResidual = residual.scale(-1);
-      const fullStepDeltaV = await this._solveLinearSystem(jacobian, negResidual);
-      const deltaNorm = fullStepDeltaV.norm();
-
-      if (isNaN(deltaNorm)) {
-        console.error(`  [DC Iter ${iterations}] ABORT: Linear solver returned NaN/Infinity. Dumping residual vector:`);
-        console.error(residual.toArray().map(v => v.toExponential(4)).join(', '));
-        this._logEvent('DC_SOLVER_ERROR', undefined, `[Iter ${iterations}] Linear solver returned NaN.`);
-        return false;
-      }
-
-      if (this._config.verboseLogging) {
-        console.log(`  [DC Iter ${iterations}] Update Norm = ${deltaNorm.toExponential(4)}`);
-      }
-
-      const { accepted, finalSolution } = useRobustDamping 
-        ? await this._applyRobustDampedStep(fullStepDeltaV, residualNorm, gmin)
-        : await this._applyDampedStep(fullStepDeltaV, residualNorm, gmin);
-
-      if (!accepted) {
-        this._logEvent('DC_DAMPING_FAILED', undefined, `Step damping failed at iteration ${iterations}. Convergence is unlikely.`);
-        return false;
-      }
-
-      this._solutionVector = finalSolution;
-      iterations++;
+        if (deltaNorm < (this._config.voltageToleranceRel * solutionNorm + this._config.voltageToleranceAbs)) {
+            this._logEvent('DC_NR_CONVERGED', undefined, `Newton-Raphson converged in ${iterations + 1} iterations.`);
+            return true;
+        }
+        
+        iterations++;
     }
 
     this._logEvent('DC_NR_FAILED', undefined, `Newton-Raphson exceeded max iterations (${this._config.maxNewtonIterations}).`);
     return false;
-  }
+}
 
-  /**
-   * 🆕 辅助方法：检查是否所有源都为零
-   */
-  private _isZeroSource(): boolean {
-    const sources = Array.from(this._devices.values()).filter(d => d.type === 'V' || d.type === 'I');
-    for (const source of sources) {
-      if ('getValue' in source && typeof source.getValue === 'function') {
-        // We check at time=0 for DC analysis
-        if (source.getValue(0) !== 0) {
-          return false;
-        }
-      }
-    }
-    return true;
-  }
 
-  /**
-   * 🆕 辅助方法：应用带阻尼的更新步长 (标准)
-   */
-  private async _applyDampedStep(fullStep: IVector, initialResidualNorm: number, gmin: number): Promise<{ accepted: boolean, finalSolution: IVector }> {
-    let alpha = 1.0;
-    const minAlpha = 1e-8;
-
-    while (alpha > minAlpha) {
-      const trialSolution = this._solutionVector.plus(fullStep.scale(alpha));
-      const trialResidualNorm = await this._calculateResidualNorm(trialSolution, gmin);
-
-      if (trialResidualNorm < this._config.currentToleranceAbs || trialResidualNorm <= initialResidualNorm) {
-        return { accepted: true, finalSolution: trialSolution };
-      }
-      alpha /= 2;
-    }
-    return { accepted: false, finalSolution: this._solutionVector };
-  }
-
-  /**
-   * 🆕 辅助方法：应用更鲁棒的带阻尼更新步长 (用于源步进)
-   */
-  private async _applyRobustDampedStep(fullStep: IVector, initialResidualNorm: number, gmin: number): Promise<{ accepted: boolean, finalSolution: IVector }> {
-    let alpha = 1.0;
-    const minAlpha = 1e-10; // 更精细的阻尼
-
-    while (alpha > minAlpha) {
-      const trialSolution = this._solutionVector.plus(fullStep.scale(alpha));
-      const trialResidualNorm = await this._calculateResidualNorm(trialSolution, gmin);
-
-      // 接受条件更宽松：只要残差有任何减小，或者已经足够小
-      if (trialResidualNorm < initialResidualNorm * 1.1) { 
-        return { accepted: true, finalSolution: trialSolution };
-      }
-      alpha /= 4; // 更激进的步长缩减
-    }
-    return { accepted: false, finalSolution: this._solutionVector };
-  }
-
-  /**
-   * 🆕 辅助方法：仅计算残差范数 (用于步长阻尼)
-   */
-  private async _calculateResidualNorm(solution: IVector, gmin: number): Promise<number> {
-    // 这是计算成本较高的部分，因为它需要重新评估所有非线性设备
-    const originalSolution = this._solutionVector;
-    this._solutionVector = solution; // 临时设置为试探解
-    
-    this._assembleSystem(0, gmin); // 在 DC 分析中重新装配，使用 t=0 和当前的 Gmin
-    const norm = this._rhsVector.norm();
-
-    this._solutionVector = originalSolution; // 恢复原始解
-    return norm;
-  }
-  
-  /**
-   * 🆕 辅助方法：检查 DC 收敛
-   */
-  private _checkConvergenceDC(residualNorm: number, _iteration: number): boolean {
-    // We use a simplified convergence criterion based on the norm of the current residual vector.
-    // A more sophisticated check would compare against the magnitude of node voltages and branch currents.
-    const converged = residualNorm < this._config.currentToleranceAbs;
-    return converged;
-  }
 
   /**
    * 🚀 執行一個時間步進 (事件驅動重構版)
@@ -824,8 +727,14 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
     const dt = this._currentTimeStep;
     const t_end = t_start + dt;
   
-    // 1. 執行一個「暫定」的積分步驟
-    const integratorResult = await this._integrator.step(this, t_start, dt, this._solutionVector);
+    let integratorResult;
+    try {
+      // 1. 執行一個「暫定」的積分步驟
+      integratorResult = await this._integrator.step(this, t_start, dt, this._solutionVector);
+    } catch (error) {
+        console.error(`💥 Integrator step failed at t=${t_start}:`, error);
+        throw new Error(`Integrator error: ${error}`);
+    }
   
     if (!integratorResult.converged) {
       this._logEvent('INTEGRATOR_FAILURE', undefined, `Integrator failed at t=${t_start.toExponential(3)}s`);
@@ -834,11 +743,17 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
     const tentativeSolution = integratorResult.solution;
   
     // 2. 檢測在此時間區間內是否發生了事件
-    const eventfulComponents = Array.from(this._devices.values()).filter(d => d.hasEvents && d.hasEvents());
-    const events = this._eventDetector.detectEvents(
-      eventfulComponents,
-      t_start, t_end, this._solutionVector, tentativeSolution
-    );
+    let events: IEvent[] = [];
+    try {
+        const eventfulComponents = Array.from(this._devices.values()).filter(d => d.hasEvents && d.hasEvents());
+        events = this._eventDetector.detectEvents(
+          eventfulComponents,
+          t_start, t_end, this._solutionVector, tentativeSolution
+        );
+    } catch (error) {
+        console.error(`💥 Event detection failed at t=${t_start}:`, error);
+        throw new Error(`Event detection error: ${error}`);
+    }
   
     // 3. 根據是否有事件來決定下一步
     if (events.length === 0) {
@@ -1153,15 +1068,15 @@ private _adaptTimeStep(suggestedDt: number): number {
   }
 
   /**
-   * ♻️ 清理资源 - 只对智能设备调用 dispose
+   * ♻️ 清理资源 - 对所有组件安全地调用 dispose
    */
   dispose(): void {
-    // 只对智能设备调用 dispose 方法
+    // 对所有组件安全地调用 dispose 方法
     this._devices.forEach(device => {
-      if (isIntelligentDeviceModel(device)) {
-        device.dispose();
+      // Cast to any to bypass TypeScript's strict check, as dispose is optional.
+      if (device && typeof (device as any).dispose === 'function') {
+        (device as any).dispose();
       }
-      // 基础组件通常不需要特殊的资源清理
     });
     this._devices.clear();
     this._events = [];

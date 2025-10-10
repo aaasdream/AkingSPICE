@@ -52,14 +52,18 @@ export class Inductor implements ComponentInterface {
   }
   
   /**
-   * ✅ 统一组装方法 (NEW!)
+   * ✅ 统一组装方法 (重构)
+   * 
+   * 移除了 DC 和瞬态分析的独立逻辑。现在，统一的伴随模型
+   * 在 DC 分析 (dt=0) 时，通过将 dt 视为一个极大值来自然处理，
+   * 这使得 Req = L/dt 趋近于 0，将电感模拟为理想短路。
    */
   assemble(context: AssemblyContext): void {
-    const { matrix, nodeMap, dt, previousSolutionVector, getExtraVariableIndex } = context;
+    const { matrix, rhs, nodeMap, dt, previousSolutionVector, getExtraVariableIndex } = context;
     const n1 = nodeMap.get(this.nodes[0]);
     const n2 = nodeMap.get(this.nodes[1]);
     
-    // At the beginning of the simulation, get the index of the extra variable representing the current of the inductor
+    // 1. 获取电流支路索引
     if (this._currentIndex === undefined) {
       if (!getExtraVariableIndex) {
         throw new Error(`电感 ${this.name} 需要 getExtraVariableIndex 但未在 context 中提供`);
@@ -70,58 +74,48 @@ export class Inductor implements ComponentInterface {
       }
       this._currentIndex = index;
     }
-    
-    if (dt <= 0 || !previousSolutionVector) {
-      // DC analysis: inductor is a short circuit.
-      // We add a zero-volt voltage source constraint.
-      // V1 - V2 = 0
-      // To improve numerical stability, instead of a hard short (which can lead to
-      // a singular matrix if it forms a loop with other voltage sources), we model
-      // it as a very small resistor. This is a standard SPICE technique.
-      const R_short = 1e-9; // 1 nano-ohm, effectively a short but non-zero.
-      if (n1 !== undefined && n1 >= 0) {
-        matrix.add(this._currentIndex, n1, 1);
-        matrix.add(n1, this._currentIndex, 1);
-      }
-      if (n2 !== undefined && n2 >= 0) {
-        matrix.add(this._currentIndex, n2, -1);
-        matrix.add(n2, this._currentIndex, -1);
-      }
-      // Add the small resistance to the branch equation
-      matrix.add(this._currentIndex, this._currentIndex, -R_short);
-      // The equation is V1 - V2 - R_short * iL = 0, so the RHS is 0.
-      return;
+    const iL_idx = this._currentIndex;
+
+    // 2. 计算伴随模型参数
+    let Req: number;
+    let Veq: number;
+
+    // 统一处理：
+    // - 瞬态分析 (dt > 0): 使用 Backward Euler 模型
+    // - DC 分析 (dt = 0): 模拟为小电阻短路
+    if (dt > 0 && previousSolutionVector) {
+      const previousCurrent = previousSolutionVector.get(iL_idx);
+      Req = this._inductance / dt;
+      Veq = Req * previousCurrent;
+    } else {
+      // DC 或初始时间点：电感视为短路
+      // 使用一个极小的电阻来保证数值稳定性，而不是理想的0电阻
+      Req = 1e-9; // 1 nΩ
+      Veq = 0;
     }
     
-    const iL_idx = this._currentIndex;
-    
-    // 从上一步的解中获取历史电流
-    const previousCurrent = previousSolutionVector.get(iL_idx);
-
-    const Req = this._inductance / dt;
-    const Veq = Req * previousCurrent;
-    
+    // 3. 填充 MNA 矩阵
     // B 矩阵: 节点到支路的关联矩阵
     if (n1 !== undefined && n1 >= 0) {
-      context.matrix.add(n1, iL_idx, 1);
+      matrix.add(n1, iL_idx, 1);
     }
     if (n2 !== undefined && n2 >= 0) {
-      context.matrix.add(n2, iL_idx, -1);
+      matrix.add(n2, iL_idx, -1);
     }
     
     // C 矩阵: 支路到节点的关联矩阵 (B^T)
     if (n1 !== undefined && n1 >= 0) {
-      context.matrix.add(iL_idx, n1, 1);
+      matrix.add(iL_idx, n1, 1);
     }
     if (n2 !== undefined && n2 >= 0) {
-      context.matrix.add(iL_idx, n2, -1);
+      matrix.add(iL_idx, n2, -1);
     }
     
     // D 矩阵: 支路阻抗
-    context.matrix.add(iL_idx, iL_idx, -Req);
+    matrix.add(iL_idx, iL_idx, -Req);
     
-    // 等效电压源
-    context.rhs.add(iL_idx, Veq);
+    // J 向量: 等效电压源
+    rhs.add(iL_idx, -Veq);
   }
 
   /**

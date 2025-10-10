@@ -934,5 +934,7 @@ export abstract class IntelligentDeviceModelBase implements IIntelligentDeviceMo
  * 檢查邏輯：智能設備必須具有 'assemble' 方法
  */
 export function isIntelligentDeviceModel(component: ComponentInterface): component is IIntelligentDeviceModel {
-  return 'assemble' in component && typeof (component as any).assemble === 'function';
+  // 使用智能設備獨有的 'deviceId' 屬性或 'checkConvergence' 方法來判斷
+  // 'checkConvergence' 更具代表性
+  return 'checkConvergence' in component && typeof (component as any).checkConvergence === 'function';
 }
