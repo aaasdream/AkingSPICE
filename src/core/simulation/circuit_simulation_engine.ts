@@ -179,6 +179,7 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
   private _systemMatrix: ISparseMatrix;
   private _rhsVector: IVector;
   private _solutionVector: IVector;
+  private _previousSolutionVector: IVector;  // 🔧 保存上一个时间步的解
 
   // 性能监控
   private _performanceMetrics: PerformanceMetrics;
@@ -239,6 +240,7 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
     this._systemMatrix = new SparseMatrix(estimatedSize, estimatedSize);
     this._rhsVector = new Vector(estimatedSize);
     this._solutionVector = new Vector(estimatedSize);
+    this._previousSolutionVector = new Vector(estimatedSize);  // 🔧 初始化历史解向量
     
     // 初始化性能指标
     this._performanceMetrics = {
@@ -309,10 +311,11 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
    * 整合了额外变数管理器，现在支持电感、电压源和变压器
    */
   private async _initializeSimulation(): Promise<void> {
-    this._logEvent('INFO', undefined, '📊 开始 DC 工作点分析...');
+    this._logEvent('INFO', undefined, '� Initializing simulation system...');
     
     try {
-      this._state = SimulationState.INITIALIZING;
+      // Note: Don't set state here, let runSimulation() manage it
+      // this._state = SimulationState.INITIALIZING;
       // const initStartTime = performance.now();
       
       this._validateCircuit();
@@ -334,6 +337,7 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
       this._systemMatrix = new SparseMatrix(totalSystemSize, totalSystemSize);
       this._rhsVector = new Vector(totalSystemSize);
       this._solutionVector = new Vector(totalSystemSize);
+      this._previousSolutionVector = new Vector(totalSystemSize);  // 🔧 重新初始化历史解向量
       
       // 4. 第二次掃描，為元件分配索引
       for (const device of this._devices.values()) {
@@ -352,21 +356,64 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
           }
       }
   
-      this._logEvent('INIT', undefined, `System size: ${totalSystemSize} (${baseNodeCount} nodes + ${extraVarsCount} extra vars).`);
+            this._logEvent('INIT', undefined, `System size: ${totalSystemSize} (${baseNodeCount} nodes + ${extraVarsCount} extra vars).`);
   
       // 关键修复：在开始 DC 分析之前，确保解向量是一个干净的全零向量
       this._solutionVector.fill(0);
 
-      // 5. 計算 DC 工作點
+      // 5. 計算 DC 工作點 (所有仿真類型都需要)
       await this._performDCAnalysis();
+      
+      // 🔧 初始化历史解向量为 DC 工作点 (瞬态分析的初始条件)
+      this._previousSolutionVector = this._solutionVector.clone();
   
-      // 關鍵一步：用 DC 解作為 t=0 的初始狀態來啟動積分器
+      // DC-only 分析 (endTime = 0) 到此結束
+      if (this._config.endTime === 0) {
+        // 🔧 關鍵修復：DC 分析後也需要保存波形數據
+        this._saveWaveformPoint();
+        this._state = SimulationState.COMPLETED;
+        return;
+      }
+  
+      // 🎯 瞬态分析：使用零初始条件 (UIC)
+      // 对于电容和电感，将其节点电压重置为 0
+      // 这模拟了 SPICE 的 .TRAN UIC 行为
+      for (const device of this._devices.values()) {
+        if (device.type === 'C' || device.type === 'L') {
+          // 对于电容/电感，将其节点设为 0（保持电压源节点不变）
+          const nodes = device.nodes;
+          for (const nodeName of nodes) {
+            const nodeNameStr = nodeName.toString();
+            if (nodeNameStr !== '0') {  // 跳过地节点
+              const nodeIndex = this._nodeMapping.get(nodeNameStr);
+              if (nodeIndex !== undefined && nodeIndex >= 0 && nodeIndex < this._nodeMapping.size) {
+                // 只重置电路节点，不重置额外变量
+                this._solutionVector.set(nodeIndex, 0);
+                this._previousSolutionVector.set(nodeIndex, 0);
+              }
+            }
+          }
+          // 🧠 關鍵修正：對所有電感器的支路電流（extra variable）初始化為 0
+          if (device.type === 'L' && typeof (device as any).hasCurrentIndexSet === 'function' && typeof (device as any).setCurrentIndex === 'function') {
+            // 取得支路電流索引
+            const currentIndex = (device as any)._currentIndex;
+            if (currentIndex !== undefined && currentIndex >= 0 && currentIndex < this._solutionVector.size) {
+              this._solutionVector.set(currentIndex, 0);
+              this._previousSolutionVector.set(currentIndex, 0);
+            }
+          }
+        }
+      }
+      
+      this._logEvent('INIT', undefined, '⚡ Applied zero initial conditions (UIC) for capacitors and inductors.');
+  
+      // 6. 用零初始狀態來啟動積分器
       await this._integrator.restart({
           time: this._config.startTime,
           solution: this._solutionVector as Vector,
           derivative: Vector.zeros(this._solutionVector.size) // 假設 t=0 時導數為 0
       });
-      console.log('🔄 Generalized-α integrator restarted successfully.');
+      console.log('🔄 Generalized-α integrator restarted with UIC.');
 
       // 6. 初始化波形数据存储
       this._initializeWaveformStorage();
@@ -433,6 +480,12 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
         }
         
         this._stepCount++;
+      }
+      
+      // Mark simulation as completed if we reached the end time normally
+      if (this._currentTime >= this._config.endTime && this._state === SimulationState.RUNNING) {
+        this._state = SimulationState.COMPLETED;
+        this._logEvent('INFO', undefined, '✅ Simulation completed successfully.');
       }
       
       // 3. 生成最终结果
@@ -527,7 +580,8 @@ export class CircuitSimulationEngine implements IMNASystem { // <--- 實現介�
       // 使用新的解和時間來重新組裝
       // 注意：這裡不能用 await，因為 IMNASystem 介面是同步的
       // 因此 _assembleSystem 也需要改成同步
-      this._assembleSystem(time); 
+      // 🎯 瞬態分析時使用 this._currentTimeStep，DC 分析時使用 0
+      this._assembleSystem(time, 0, this._currentTimeStep); 
   }
 
   // === 私有方法实现 ===
@@ -670,7 +724,7 @@ private async _solveDCNewtonRaphson(gmin: number = 0): Promise<boolean> {
     while (iterations < this._config.maxNewtonIterations) {
         // 1. 根據當前的解 x_k 組裝雅可比矩陣 J(x_k) 和非線性函數 F(x_k)
         // F(x_k) = J(x_k) * x_k - b(x_k)
-        this._assembleSystem(0, gmin); // 這會計算 J 和 b
+        this._assembleSystem(0, gmin, 0); // 🎯 time=0, gmin, dt=0 for DC analysis
         const J = this._systemMatrix;
         const b = this._rhsVector;
         const F = (J.multiply(x_k) as Vector).minus(b);
@@ -759,7 +813,11 @@ private async _solveDCNewtonRaphson(gmin: number = 0): Promise<boolean> {
     if (events.length === 0) {
       // ----- 情況 A: 沒有事件，接受這一步 -----
       this._currentTime = t_end;
+      
+      // 🔧 更新解向量並保存為歷史（供下一步使用）
       this._solutionVector = tentativeSolution;
+      this._previousSolutionVector = tentativeSolution.clone();  // 保存當前解作為下一步的歷史
+      
       await this._updateDeviceStates(); // 更新智能設備的內部狀態
       
       // 使用積分器建議的下一步長
@@ -797,7 +855,11 @@ private async _solveDCNewtonRaphson(gmin: number = 0): Promise<boolean> {
   
       // 6. 更新狀態到事件點，並處理事件
       this._currentTime = eventTime;
+      
+      // 🔧 更新解向量並保存為歷史
       this._solutionVector = finalResult.solution;
+      this._previousSolutionVector = finalResult.solution.clone();  // 保存當前解作為下一步的歷史
+      
       this._handleEvent(firstEvent); // 這個輔助函數會重啟積分器
       
       // 事件處理後，通常將步長重設為一個安全的小值
@@ -844,8 +906,9 @@ private async _solveDCNewtonRaphson(gmin: number = 0): Promise<boolean> {
    * 
    * @param time - 装配时的仿真时间 (默认使用当前时间)
    * @param gmin - Gmin Stepping 的电导值
+   * @param dt - 时间步长 (默认使用当前时间步长，DC 分析时应传入 0)
    */
-  private _assembleSystem(time: number = this._currentTime, gmin: number = 0): void {
+  private _assembleSystem(time: number = this._currentTime, gmin: number = 0, dt: number = this._currentTimeStep): void {
     const assemblyStartTime = performance.now();
     
     // 清空矩阵和向量
@@ -858,8 +921,8 @@ private async _solveDCNewtonRaphson(gmin: number = 0): Promise<boolean> {
       rhs: this._rhsVector as Vector,
       nodeMap: this._nodeMapping,
       currentTime: time,
-      dt: this._currentTimeStep,
-      previousSolutionVector: this._solutionVector as Vector, // This might need adjustment depending on context
+      dt: dt,  // 🎯 使用传入的 dt 参数，DC 分析时为 0
+      previousSolutionVector: this._previousSolutionVector as Vector, // 🔧 使用历史解向量
       solutionVector: this._solutionVector as Vector,
       gmin: gmin,
       getExtraVariableIndex: (componentName: string, variableType: string) => 
@@ -878,13 +941,19 @@ private async _solveDCNewtonRaphson(gmin: number = 0): Promise<boolean> {
     // 🧠 **关键修复：强制执行接地节点 (Node 0) 约束**
     // 这是 MNA 方法中的标准实践，用于消除矩阵的奇异性。
     // 通过将接地节点的行和列清零，并在对角线上放置1，我们强制 V[0] = 0。
-    // const groundNodeIndex = this._nodeMapping.get('0');
-    // if (groundNodeIndex !== undefined) {
-    //   this._systemMatrix.clearRow(groundNodeIndex);
-    //   this._systemMatrix.clearCol(groundNodeIndex);
-    //   this._systemMatrix.set(groundNodeIndex, groundNodeIndex, 1.0);
-    //   this._rhsVector.set(groundNodeIndex, 0.0);
-    // }
+    const groundNodeIndex = this._nodeMapping.get('0');
+    if (groundNodeIndex !== undefined) {
+      // 清除地节点的行和列
+      const n = this._systemMatrix.rows;
+      for (let j = 0; j < n; j++) {
+        this._systemMatrix.set(groundNodeIndex, j, 0);  // 清除行
+      }
+      for (let i = 0; i < n; i++) {
+        this._systemMatrix.set(i, groundNodeIndex, 0);  // 清除列
+      }
+      this._systemMatrix.set(groundNodeIndex, groundNodeIndex, 1.0);  // 设置对角线
+      this._rhsVector.set(groundNodeIndex, 0.0);  // RHS = 0
+    }
     
     this._performanceMetrics.matrixAssemblyTime += performance.now() - assemblyStartTime;
   }
@@ -1001,8 +1070,41 @@ private _adaptTimeStep(suggestedDt: number): number {
           (this._waveformData.deviceStates as Map<string, string[]>).set(deviceId, []);
         }
         
-        // TODO: 获取实际设备电流
-        (this._waveformData.deviceCurrents.get(deviceId) as number[]).push(0);
+        // 🎯 获取实际设备电流
+        let current = 0;
+        // 对于电感，电流存储在 extraVariable 中
+        if (device.type === 'L') {
+          const currentIndex = this._extraVariableManager?.getIndex(device.name, ExtraVariableType.INDUCTOR_CURRENT);
+          if (currentIndex !== undefined && currentIndex >= 0) {
+            current = this._solutionVector.get(currentIndex);
+          }
+        }
+        // 对于电压源，电流也存储在 extraVariable 中
+        else if (device.type === 'V') {
+          const currentIndex = this._extraVariableManager?.getIndex(device.name, ExtraVariableType.VOLTAGE_SOURCE_CURRENT);
+          if (currentIndex !== undefined && currentIndex >= 0) {
+            current = this._solutionVector.get(currentIndex);
+          }
+        }
+        // 对于电阻，计算通过的电流 I = (V1 - V2) / R
+        else if (device.type === 'R' && 'nodes' in device && 'resistance' in device) {
+          const nodes = device.nodes as readonly [string, string];
+          const n1 = this._nodeMapping.get(nodes[0]);
+          const n2 = this._nodeMapping.get(nodes[1]);
+          const v1 = (n1 !== undefined && n1 >= 0) ? this._solutionVector.get(n1) : 0;
+          const v2 = (n2 !== undefined && n2 >= 0) ? this._solutionVector.get(n2) : 0;
+          const resistance = (device as any).resistance;
+          current = (v1 - v2) / resistance;
+        }
+        // 对于电容，使用伴侣模型计算瞬时电流 I = C * dV/dt
+        // 这里简化处理，使用历史电压差除以时间步
+        else if (device.type === 'C' && 'nodes' in device) {
+          // 电容电流在瞬态中为 I = C * dV/dt
+          // 暂时设为 0，需要更复杂的实现
+          current = 0;
+        }
+        
+        (this._waveformData.deviceCurrents.get(deviceId) as number[]).push(current);
         (this._waveformData.deviceStates.get(deviceId) as string[]).push('normal');
       }
     }

@@ -75,12 +75,28 @@ export class Capacitor implements ComponentInterface {
 
     // --- 以下是瞬态分析部分 ---
 
-    // 从上一步的解中获取历史电压
-    const v1_prev = (n1 !== undefined && n1 >= 0) ? previousSolutionVector.get(n1) : 0;
-    const v2_prev = (n2 !== undefined && n2 >= 0) ? previousSolutionVector.get(n2) : 0;
-    const previousVoltage = v1_prev - v2_prev;
+    // 🔧 关键修复：使用零初始条件 (UIC - Use Initial Conditions)
+    // 在 t=0 时，假设电容电压为 0，无论 DC 工作点是什么
+    // 这模拟了 SPICE 的 .TRAN UIC 行为
+    let previousVoltage = 0;
     
-    // 等效电导 G_eq = C / Δt
+    // 调试：打印前几步的值（已禁用）
+    const DEBUG_FIRST_FEW = false;
+    if (DEBUG_FIRST_FEW && context.currentTime < 0.0001) {
+      const v1_prev = (n1 !== undefined && n1 >= 0) ? previousSolutionVector.get(n1) : 0;
+      const v2_prev = (n2 !== undefined && n2 >= 0) ? previousSolutionVector.get(n2) : 0;
+      console.log(`[Cap ${this.name}] t=${context.currentTime.toExponential(2)}, nodes=[${this.nodes[0]}, ${this.nodes[1]}], indices=[${n1}, ${n2}], V_prev=(${v1_prev.toFixed(4)}, ${v2_prev.toFixed(4)})`);
+    }
+    
+    if (context.currentTime > 1e-15) {  // 使用小的阈值而不是精确的 0
+      // 对于 t > 0，使用上一步的实际电压
+      const v1_prev = (n1 !== undefined && n1 >= 0) ? previousSolutionVector.get(n1) : 0;
+      const v2_prev = (n2 !== undefined && n2 >= 0) ? previousSolutionVector.get(n2) : 0;
+      previousVoltage = v1_prev - v2_prev;
+    }
+    // else: t=0 时，previousVoltage 保持为 0（零初始条件）
+    
+    // 等效电导 G_eq = C / Δt (Backward Euler)
     const geq = this._capacitance / dt;
     
     // 等效电流源 I_eq = G_eq * V_prev

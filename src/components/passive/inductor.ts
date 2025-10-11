@@ -68,7 +68,8 @@ export class Inductor implements ComponentInterface {
       if (!getExtraVariableIndex) {
         throw new Error(`电感 ${this.name} 需要 getExtraVariableIndex 但未在 context 中提供`);
       }
-      const index = getExtraVariableIndex(this.name, 'i');
+      // 🔧 关键修复：使用正确的变量类型 'inductor_current' 而不是 'i'
+      const index = getExtraVariableIndex(this.name, 'inductor_current');
       if (index === undefined) {
         throw new Error(`无法为电感 ${this.name} 获取电流支路索引`);
       }
@@ -115,6 +116,9 @@ export class Inductor implements ComponentInterface {
     matrix.add(iL_idx, iL_idx, -Req);
     
     // J 向量: 等效电压源
+    // 🧠 关键修复：Backward Euler 伴随模型
+    // V = Req * I - Veq  =>  V1 - V2 - Req * I_L = -Veq
+    // 因此 RHS 应该是 -Veq
     rhs.add(iL_idx, -Veq);
   }
 

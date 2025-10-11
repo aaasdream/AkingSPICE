@@ -265,9 +265,36 @@ export class SparseMatrix implements ISparseMatrix {
     const denseA = this.toDense();
     const denseB = b.toArray();
     
+    // 🐛 Debug: Check matrix and RHS for NaN
+    const hasNaNInMatrix = denseA.some(row => row.some(v => isNaN(v)));
+    const hasNaNInRHS = denseB.some(v => isNaN(v));
+    
+    if (hasNaNInMatrix) {
+      console.error('🔥 Matrix contains NaN before solve!');
+      throw new Error('Matrix contains NaN values');
+    }
+    if (hasNaNInRHS) {
+      console.error('🔥 RHS contains NaN before solve!');
+      throw new Error('RHS contains NaN values');
+    }
+    
     try {
       // 使用 numeric.solve 求解
       const solution = numeric.solve(denseA, denseB);
+      
+      // 檢查解是否包含 NaN 或 Infinity
+      const hasNaNInSolution = solution.some((v: number) => isNaN(v) || !isFinite(v));
+      if (hasNaNInSolution) {
+        console.error('🔥 Solution contains NaN/Infinity! Matrix may be singular.');
+        console.log('Matrix condition check needed...');
+        // 輸出矩陣診斷信息
+        const det = numeric.det(denseA);
+        console.log(`   Determinant: ${det}`);
+        if (Math.abs(det) < 1e-10) {
+          throw new Error(`Matrix is singular or near-singular (det=${det})`);
+        }
+        throw new Error('Solution contains NaN or Infinity');
+      }
       
       console.log('✅ numeric.js 求解成功');
       return Vector.from(solution);
